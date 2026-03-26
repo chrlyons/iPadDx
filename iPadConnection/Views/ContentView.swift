@@ -1,0 +1,66 @@
+import SwiftUI
+
+enum DetailView: Hashable {
+    case dashboard
+    case reports
+}
+
+struct ContentView: View {
+    @Environment(BonjourService.self) private var service
+    @State private var showNamePrompt = false
+    @State private var editingName = ""
+    @State private var detailSelection: DetailView = .dashboard
+
+    private var needsName: Bool {
+        UserDefaults.standard.string(forKey: "deviceName")?.isEmpty ?? true
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            DeviceListView(detailSelection: $detailSelection)
+        } detail: {
+            NavigationStack {
+                switch detailSelection {
+                case .dashboard:
+                    if let peer = service.connectedPeer {
+                        DiagnosticDashboardView(peer: peer)
+                    } else {
+                        VStack(spacing: 20) {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .font(.system(size: 60))
+                                .foregroundStyle(.secondary)
+                            Text("No Device Connected")
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
+                            Text("Start scanning and tap a discovered device to connect.")
+                                .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding()
+                    }
+                case .reports:
+                    ReportListView()
+                }
+            }
+        }
+        .onAppear {
+            if needsName {
+                showNamePrompt = true
+            } else {
+                service.startAll()
+            }
+        }
+        .alert("Set Device Name", isPresented: $showNamePrompt) {
+            TextField("e.g. Christian's iPad", text: $editingName)
+            Button("Save") {
+                let name = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty {
+                    UserDefaults.standard.set(name, forKey: "deviceName")
+                    service.startAll()
+                }
+            }
+        } message: {
+            Text("Choose a name for this device so the other iPad can identify it.")
+        }
+    }
+}

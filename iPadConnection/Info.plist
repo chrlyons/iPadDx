@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>This app discovers and connects to nearby iPads to run connection diagnostics.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_ipadconn._tcp</string>
+	</array>
+</dict>
+</plist>

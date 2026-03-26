@@ -1,0 +1,11 @@
+--indent 4
+--indentcase false
+--trimwhitespace always
+--importgrouping testable-bottom
+--semicolons never
+--header strip
+--wraparguments before-first
+--wrapcollections before-first
+--maxwidth 120
+--swiftversion 5.9
+--exclude .build,DerivedData,build,.venv

@@ -1,0 +1,28 @@
+excluded:
+  - .build
+  - DerivedData
+  - build
+
+disabled_rules:
+  - trailing_whitespace
+  - line_length
+  - type_body_length
+  - file_length
+  - function_body_length
+  - cyclomatic_complexity
+  - nesting
+  - identifier_name
+  - opening_brace
+  - statement_position
+  - large_tuple
+  - trailing_comma
+  - type_name
+  - for_where
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - force_unwrapping
+  - implicit_return
+  - modifier_order
+  - toggle_bool

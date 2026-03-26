@@ -1,0 +1,25 @@
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Python (existing venv)
+.venv/
+__pycache__/
+
+# JetBrains
+.idea/
+
+# CocoaPods
+Pods/
+
+# Swift Package Manager
+.build/
+Package.resolved
