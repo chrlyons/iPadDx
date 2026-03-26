@@ -1,4 +1,4 @@
-# iPadConnection
+# iPadDx
 
 A diagnostic tool for testing and troubleshooting Bonjour device-to-device connections between two iPads. Measures real-time latency, throughput, signal quality, and network path information.
 
@@ -21,7 +21,7 @@ A diagnostic tool for testing and troubleshooting Bonjour device-to-device conne
 
 ## Setup
 
-1. Open `iPadConnection.xcodeproj` in Xcode
+1. Open `iPadDx.xcodeproj` in Xcode
 2. Select your development team in **Signing & Capabilities**
 3. Connect an iPad, select it as the run destination, and press Cmd+R
 4. Repeat for the second iPad
@@ -40,8 +40,8 @@ A diagnostic tool for testing and troubleshooting Bonjour device-to-device conne
 Built with SwiftUI and Apple's Network framework (`NWBrowser`, `NWListener`, `NWConnection`).
 
 ```
-iPadConnection/
-├── iPadConnectionApp.swift           # App entry point
+iPadDx/
+├── iPadDxApp.swift           # App entry point
 ├── Models/
 │   ├── DiagnosticMessage.swift       # Wire protocol (ping/pong/throughput/peerInfo)
 │   ├── DiagnosticMetrics.swift       # Observable metric model
@@ -74,7 +74,7 @@ The app works without these entitlements when both iPads are on the same Wi-Fi n
 
 - [ ] Enable Multicast Networking on App ID in [Certificates, Identifiers & Profiles](https://developer.apple.com/account)
 - [ ] Enable User Assigned Device Name on App ID
-- [ ] Add entitlements back to `iPadConnection/iPadConnection.entitlements`
+- [ ] Add entitlements back to `iPadDx/iPadDx.entitlements`
 - [ ] Remove manual device name prompt fallback (optional)
 
 ## Protocol

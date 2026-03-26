@@ -1,11 +1,11 @@
 .PHONY: build clean lint format check test open help
 
 # Configuration
-PROJECT = iPadConnection.xcodeproj
-TARGET = iPadConnection
+PROJECT = iPadDx.xcodeproj
+TARGET = iPadDx
 SDK = iphoneos
-SCHEME = iPadConnection
-SWIFT_FILES = $(shell find iPadConnection -name "*.swift" -not -path "*/.*")
+SCHEME = iPadDx
+SWIFT_FILES = $(shell find iPadDx -name "*.swift" -not -path "*/.*")
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -31,21 +31,21 @@ typecheck: ## Type-check all Swift files
 
 lint: ## Run SwiftLint
 	@if command -v swiftlint >/dev/null 2>&1; then \
-		swiftlint lint --config .swiftlint.yml iPadConnection/; \
+		swiftlint lint --config .swiftlint.yml iPadDx/; \
 	else \
 		echo "SwiftLint not installed. Run: brew install swiftlint"; \
 	fi
 
 lint-fix: ## Run SwiftLint with auto-fix
 	@if command -v swiftlint >/dev/null 2>&1; then \
-		swiftlint lint --fix --config .swiftlint.yml iPadConnection/; \
+		swiftlint lint --fix --config .swiftlint.yml iPadDx/; \
 	else \
 		echo "SwiftLint not installed. Run: brew install swiftlint"; \
 	fi
 
 format: ## Format Swift files with SwiftFormat
 	@if command -v swiftformat >/dev/null 2>&1; then \
-		swiftformat iPadConnection/ --config .swiftformat; \
+		swiftformat iPadDx/ --config .swiftformat; \
 		echo "✓ Formatting complete"; \
 	else \
 		echo "SwiftFormat not installed. Run: brew install swiftformat"; \
@@ -53,7 +53,7 @@ format: ## Format Swift files with SwiftFormat
 
 format-check: ## Check formatting without modifying files
 	@if command -v swiftformat >/dev/null 2>&1; then \
-		swiftformat iPadConnection/ --config .swiftformat --lint && \
+		swiftformat iPadDx/ --config .swiftformat --lint && \
 		echo "✓ Formatting OK" || echo "✗ Formatting issues found"; \
 	else \
 		echo "SwiftFormat not installed. Run: brew install swiftformat"; \

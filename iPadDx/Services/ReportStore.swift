@@ -41,7 +41,7 @@ class ReportStore {
     func exportCSV(for report: TestReport) -> URL? {
         let r = report.results
         let csv = """
-        iPadConnection Test Report
+        iPadDx Test Report
         Date,\(ISO8601DateFormatter().string(from: report.date))
         Duration,\(String(format: "%.1f", report.durationSeconds))s
         Overall Grade,\(r.overallGrade)
@@ -94,7 +94,7 @@ class ReportStore {
         Thermal State,\(r.systemMetrics.thermalStateDuringTest)
         """
 
-        let fileName = "iPadConnection_Report_\(report.localDevice.chipFamily)_vs_\(report.remoteDevice.chipFamily)_\(report.id.uuidString.prefix(8)).csv"
+        let fileName = "iPadDx_Report_\(report.localDevice.chipFamily)_vs_\(report.remoteDevice.chipFamily)_\(report.id.uuidString.prefix(8)).csv"
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         try? csv.write(to: tempURL, atomically: true, encoding: .utf8)
         return tempURL

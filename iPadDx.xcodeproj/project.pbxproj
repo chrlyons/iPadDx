@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10001 /* iPadConnectionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001 /* iPadConnectionApp.swift */; };
+		A10001 /* iPadDxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001 /* iPadDxApp.swift */; };
 		A10002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002 /* ContentView.swift */; };
 		A10003 /* DeviceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003 /* DeviceListView.swift */; };
 		A10004 /* DiagnosticDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004 /* DiagnosticDashboardView.swift */; };
@@ -32,7 +32,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		B10001 /* iPadConnectionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadConnectionApp.swift; sourceTree = "<group>"; };
+		B10001 /* iPadDxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadDxApp.swift; sourceTree = "<group>"; };
 		B10002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B10003 /* DeviceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceListView.swift; sourceTree = "<group>"; };
 		B10004 /* DiagnosticDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticDashboardView.swift; sourceTree = "<group>"; };
@@ -47,8 +47,8 @@
 		B10013 /* DiagnosticEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticEngine.swift; sourceTree = "<group>"; };
 		B10014 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		B10016 /* iPadConnection.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iPadConnection.entitlements; sourceTree = "<group>"; };
-		C10001 /* iPadConnection.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iPadConnection.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10016 /* iPadDx.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iPadDx.entitlements; sourceTree = "<group>"; };
+		C10001 /* iPadDx.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iPadDx.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10017 /* TestReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestReport.swift; sourceTree = "<group>"; };
 		B10018 /* ReportStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStore.swift; sourceTree = "<group>"; };
 		B10019 /* TestSuiteRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSuiteRunner.swift; sourceTree = "<group>"; };
@@ -73,24 +73,24 @@
 		E10001 = {
 			isa = PBXGroup;
 			children = (
-				E10002 /* iPadConnection */,
+				E10002 /* iPadDx */,
 				E10006 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		E10002 /* iPadConnection */ = {
+		E10002 /* iPadDx */ = {
 			isa = PBXGroup;
 			children = (
-				B10001 /* iPadConnectionApp.swift */,
+				B10001 /* iPadDxApp.swift */,
 				B10015 /* Info.plist */,
-				B10016 /* iPadConnection.entitlements */,
+				B10016 /* iPadDx.entitlements */,
 				B10014 /* Assets.xcassets */,
 				E10003 /* Models */,
 				E10004 /* Networking */,
 				E10007 /* Services */,
 				E10005 /* Views */,
 			);
-			path = iPadConnection;
+			path = iPadDx;
 			sourceTree = "<group>";
 		};
 		E10003 /* Models */ = {
@@ -134,7 +134,7 @@
 		E10006 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C10001 /* iPadConnection.app */,
+				C10001 /* iPadDx.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -152,9 +152,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		F10001 /* iPadConnection */ = {
+		F10001 /* iPadDx */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = G10003 /* Build configuration list for PBXNativeTarget "iPadConnection" */;
+			buildConfigurationList = G10003 /* Build configuration list for PBXNativeTarget "iPadDx" */;
 			buildPhases = (
 				D10002 /* Sources */,
 				D10001 /* Frameworks */,
@@ -164,9 +164,9 @@
 			);
 			dependencies = (
 			);
-			name = iPadConnection;
-			productName = iPadConnection;
-			productReference = C10001 /* iPadConnection.app */;
+			name = iPadDx;
+			productName = iPadDx;
+			productReference = C10001 /* iPadDx.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -184,7 +184,7 @@
 					};
 				};
 			};
-			buildConfigurationList = G10001 /* Build configuration list for PBXProject "iPadConnection" */;
+			buildConfigurationList = G10001 /* Build configuration list for PBXProject "iPadDx" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -197,7 +197,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				F10001 /* iPadConnection */,
+				F10001 /* iPadDx */,
 			);
 		};
 /* End PBXProject section */
@@ -218,7 +218,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10001 /* iPadConnectionApp.swift in Sources */,
+				A10001 /* iPadDxApp.swift in Sources */,
 				A10002 /* ContentView.swift in Sources */,
 				A10003 /* DeviceListView.swift in Sources */,
 				A10004 /* DiagnosticDashboardView.swift in Sources */,
@@ -367,12 +367,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = iPadConnection/iPadConnection.entitlements;
+				CODE_SIGN_ENTITLEMENTS = iPadDx/iPadDx.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Z86ZAY4JRW;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = iPadConnection/Info.plist;
+				INFOPLIST_FILE = iPadDx/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -397,12 +397,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = iPadConnection/iPadConnection.entitlements;
+				CODE_SIGN_ENTITLEMENTS = iPadDx/iPadDx.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Z86ZAY4JRW;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = iPadConnection/Info.plist;
+				INFOPLIST_FILE = iPadDx/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -425,7 +425,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		G10001 /* Build configuration list for PBXProject "iPadConnection" */ = {
+		G10001 /* Build configuration list for PBXProject "iPadDx" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				G10002 /* Debug */,
@@ -434,7 +434,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		G10003 /* Build configuration list for PBXNativeTarget "iPadConnection" */ = {
+		G10003 /* Build configuration list for PBXNativeTarget "iPadDx" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				G10005 /* Debug */,

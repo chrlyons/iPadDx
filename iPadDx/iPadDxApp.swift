@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct iPadConnectionApp: App {
+struct iPadDxApp: App {
     @State private var bonjourService = BonjourService()
     @State private var reportStore = ReportStore()
 
