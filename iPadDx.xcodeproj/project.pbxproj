@@ -32,6 +32,13 @@
 		A10023 /* ReportEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10025 /* ReportEntity.swift */; };
 		A10024 /* DeviceIdentifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026 /* DeviceIdentifier.swift */; };
 		A10025 /* ReportAnalyticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027 /* ReportAnalyticsView.swift */; };
+		A10026 /* TestSuiteConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10028 /* TestSuiteConfig.swift */; };
+		A10027 /* DeviceConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10029 /* DeviceConnection.swift */; };
+		A10028 /* ConductorService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10030 /* ConductorService.swift */; };
+		A10029 /* AgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10031 /* AgentService.swift */; };
+		A10030 /* ConductorDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10032 /* ConductorDashboardView.swift */; };
+		A10031 /* AgentStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10033 /* AgentStatusView.swift */; };
+		A10032 /* FleetDeviceCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034 /* FleetDeviceCard.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -63,6 +70,13 @@
 		B10025 /* ReportEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportEntity.swift; sourceTree = "<group>"; };
 		B10026 /* DeviceIdentifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentifier.swift; sourceTree = "<group>"; };
 		B10027 /* ReportAnalyticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportAnalyticsView.swift; sourceTree = "<group>"; };
+		B10028 /* TestSuiteConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSuiteConfig.swift; sourceTree = "<group>"; };
+		B10029 /* DeviceConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceConnection.swift; sourceTree = "<group>"; };
+		B10030 /* ConductorService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorService.swift; sourceTree = "<group>"; };
+		B10031 /* AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentService.swift; sourceTree = "<group>"; };
+		B10032 /* ConductorDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorDashboardView.swift; sourceTree = "<group>"; };
+		B10033 /* AgentStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStatusView.swift; sourceTree = "<group>"; };
+		B10034 /* FleetDeviceCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetDeviceCard.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -107,6 +121,8 @@
 				B10010 /* DiagnosticMessage.swift */,
 				B10017 /* TestReport.swift */,
 				B10025 /* ReportEntity.swift */,
+				B10028 /* TestSuiteConfig.swift */,
+				B10029 /* DeviceConnection.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -135,6 +151,9 @@
 				B10022 /* ReportDetailView.swift */,
 				B10023 /* ReportComparisonView.swift */,
 				B10027 /* ReportAnalyticsView.swift */,
+				B10032 /* ConductorDashboardView.swift */,
+				B10033 /* AgentStatusView.swift */,
+				B10034 /* FleetDeviceCard.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -154,6 +173,8 @@
 				B10019 /* TestSuiteRunner.swift */,
 				B10024 /* SystemMonitor.swift */,
 				B10026 /* DeviceIdentifier.swift */,
+				B10030 /* ConductorService.swift */,
+				B10031 /* AgentService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -251,6 +272,13 @@
 				A10023 /* ReportEntity.swift in Sources */,
 				A10024 /* DeviceIdentifier.swift in Sources */,
 				A10025 /* ReportAnalyticsView.swift in Sources */,
+				A10026 /* TestSuiteConfig.swift in Sources */,
+				A10027 /* DeviceConnection.swift in Sources */,
+				A10028 /* ConductorService.swift in Sources */,
+				A10029 /* AgentService.swift in Sources */,
+				A10030 /* ConductorDashboardView.swift in Sources */,
+				A10031 /* AgentStatusView.swift in Sources */,
+				A10032 /* FleetDeviceCard.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -88,15 +88,18 @@ struct ReportDetailView: View {
 
     private var devicePairCard: some View {
         HStack {
-            deviceColumn("Local", report.localDevice)
+            deviceColumn("Sender (Controller)", report.localDevice)
             Spacer()
-            VStack {
-                Image(systemName: "arrow.left.arrow.right")
+            VStack(spacing: 4) {
+                Image(systemName: "arrow.right")
                     .font(.title3)
                     .foregroundStyle(.secondary)
+                Text("test direction")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
             Spacer()
-            deviceColumn("Remote", report.remoteDevice)
+            deviceColumn("Receiver (Responder)", report.remoteDevice)
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -184,9 +187,9 @@ struct ReportDetailView: View {
                 statItem("Baseline", String(format: "%.1fms", l.baselineAvg), .blue)
                 statItem("Under Load", String(format: "%.1fms", l.underLoadAvg), .orange)
                 statItem(
-                    "Degradation",
-                    String(format: "%.0f%%", l.degradationPercent),
-                    l.degradationPercent < 50 ? .green : l.degradationPercent < 100 ? .orange : .red
+                    "Impact",
+                    l.formattedDegradation,
+                    l.degradationPercent <= 0 ? .green : l.degradationPercent < 50 ? .orange : .red
                 )
                 statItem("Samples", "\(l.sampleCount)", .gray)
             }

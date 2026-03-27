@@ -11,6 +11,7 @@ class DiagnosticEngine {
     var onTestSuiteStatus: ((DiagnosticMessage) -> Void)?
     var onReportReceived: ((Data) -> Void)?
     var onRemoteDisconnect: (() -> Void)?
+    var onOrchestration: ((DiagnosticMessage) -> Void)?
     var testSuiteRunner: TestSuiteRunner?
 
     private var connectionManager: ConnectionManager
@@ -67,12 +68,15 @@ class DiagnosticEngine {
             metrics.pongsReceived += 1
             metrics.appendLatency(rtt, maxHistory: maxLatencyHistory)
 
-        case let .peerInfo(deviceName, osVersion, model, modelNumber):
+        case let .peerInfo(deviceName, osVersion, model, modelNumber, stableID):
             metrics.peerDeviceName = deviceName
             metrics.peerOSVersion = osVersion
             metrics.peerModel = model
             metrics.peerModelNumber = modelNumber
             peer?.name = deviceName
+            peer?.stableDeviceID = stableID
+            peer?.chipFamily = iPadCatalog.chipFamily(for: model, modelNumber: modelNumber)
+            peer?.model = model
             onPeerNameUpdated?(deviceName)
 
         case let .throughputStart(testID, byteCount):
@@ -114,6 +118,10 @@ class DiagnosticEngine {
 
         case .disconnect:
             onRemoteDisconnect?()
+
+        case .roleAssignment, .orchestrateTest, .orchestrationStatus,
+             .orchestrationReport, .orchestrationCancel:
+            onOrchestration?(message)
         }
 
         // Only update path/bytes periodically to avoid excessive re-renders during bursts
@@ -187,11 +195,13 @@ class DiagnosticEngine {
 
     func sendPeerInfo() {
         let info = DeviceIdentifier.localDeviceInfo()
+        let stableID = DeviceIdentifier.stableID
         connectionManager.send(.peerInfo(
             deviceName: info.name,
             osVersion: info.osVersion,
             model: info.model,
-            modelNumber: info.modelNumber
+            modelNumber: info.modelNumber,
+            stableID: stableID
         ))
     }
 

@@ -6,6 +6,19 @@ import UIKit
 #endif
 
 enum DeviceIdentifier {
+    // MARK: - Stable Device ID (persisted across launches)
+
+    static var stableID: UUID {
+        if let stored = UserDefaults.standard.string(forKey: "stableDeviceID"),
+           let uuid = UUID(uuidString: stored)
+        {
+            return uuid
+        }
+        let uuid = UUID()
+        UserDefaults.standard.set(uuid.uuidString, forKey: "stableDeviceID")
+        return uuid
+    }
+
     // MARK: - Hardware Identifier
 
     static var hardwareIdentifier: String {

@@ -148,8 +148,17 @@ struct TestSuiteResults: Codable {
 struct LatencyUnderLoadResult: Codable {
     let baselineAvg: Double
     let underLoadAvg: Double
-    let degradationPercent: Double
+    let degradationPercent: Double // negative = improvement under load
     let sampleCount: Int
+
+    var formattedDegradation: String {
+        if degradationPercent > 0 {
+            return String(format: "+%.1f%% (worse)", degradationPercent)
+        } else if degradationPercent < 0 {
+            return String(format: "%.1f%% (improved)", degradationPercent)
+        }
+        return "0% (no change)"
+    }
 }
 
 struct SystemMetricsResult: Codable {
@@ -191,6 +200,13 @@ struct JitterResult: Codable {
     let averageJitter: Double
     let maxJitter: Double
     let sampleCount: Int
+
+    var qualityLabel: String {
+        if averageJitter < 5 { return "Stable" }
+        if averageJitter < 15 { return "Moderate" }
+        if averageJitter < 30 { return "Unstable" }
+        return "Very Unstable"
+    }
 }
 
 struct PacketLossResult: Codable {

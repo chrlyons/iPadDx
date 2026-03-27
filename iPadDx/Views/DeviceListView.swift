@@ -133,6 +133,84 @@ struct DeviceListView: View {
             } header: {
                 Text("Reports")
             }
+
+            // Mode section
+            Section {
+                if service.appMode == .conductor {
+                    Button {
+                        detailSelection = .conductor
+                    } label: {
+                        HStack {
+                            Image(systemName: "music.note.tv")
+                                .foregroundStyle(.blue)
+                            Text("Conductor Dashboard")
+                            Spacer()
+                            if detailSelection == .conductor {
+                                Image(systemName: "checkmark").foregroundStyle(.blue)
+                            }
+                        }
+                    }
+                    Button {
+                        service.disableConductorMode()
+                        detailSelection = .dashboard
+                    } label: {
+                        HStack {
+                            Image(systemName: "xmark.circle")
+                                .foregroundStyle(.red)
+                            Text("Exit Conductor Mode")
+                        }
+                    }
+                } else if service.appMode == .agent {
+                    Button {
+                        detailSelection = .agent
+                    } label: {
+                        HStack {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .foregroundStyle(.orange)
+                            Text("Agent Status")
+                            Spacer()
+                            if detailSelection == .agent {
+                                Image(systemName: "checkmark").foregroundStyle(.blue)
+                            }
+                        }
+                    }
+                } else {
+                    Button {
+                        service.enableConductorMode()
+                        detailSelection = .conductor
+                    } label: {
+                        HStack {
+                            Image(systemName: "music.note.tv")
+                                .foregroundStyle(.blue)
+                            Text("Enable Conductor Mode")
+                        }
+                    }
+                }
+            } header: {
+                Text("Mode: \(service.appMode.rawValue)")
+            }
+
+            // Fleet section (conductor mode only)
+            if service.appMode == .conductor {
+                Section {
+                    ForEach(service.discoveredPeers) { peer in
+                        Button {
+                            service.connectAgentFromConductor(peer)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(peer.name).font(.subheadline)
+                                    Text("Tap to add to fleet").font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "plus.circle").foregroundStyle(.blue)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Nearby Devices")
+                }
+            }
         }
         .navigationTitle("Devices")
         .toolbar {

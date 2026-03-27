@@ -195,7 +195,7 @@ class DiagnosticMetrics {
     var batteryDrain: String {
         guard batteryAtConnectionStart >= 0, batteryLevel >= 0 else { return "N/A" }
         let drain = batteryAtConnectionStart - batteryLevel
-        if drain <= 0 { return "0%" }
+        if drain <= 0 { return "<1% (too short to measure)" }
         return String(format: "%.1f%%", drain * 100)
     }
 

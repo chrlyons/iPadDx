@@ -325,7 +325,7 @@ struct TestSuiteView: View {
             testResultCard("Latency Under Load", icon: "flame.fill", color: .orange) {
                 resultRow("Baseline", String(format: "%.2fms", report.results.latencyUnderLoad.baselineAvg))
                 resultRow("Under Load", String(format: "%.2fms", report.results.latencyUnderLoad.underLoadAvg))
-                resultRow("Degradation", String(format: "%.1f%%", report.results.latencyUnderLoad.degradationPercent))
+                resultRow("Impact", report.results.latencyUnderLoad.formattedDegradation)
             }
 
             testResultCard("System Metrics", icon: "cpu", color: .indigo) {

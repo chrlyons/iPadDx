@@ -1,6 +1,12 @@
 import Foundation
 import Network
 
+enum AppMode: String {
+    case standalone = "Standalone"
+    case conductor = "Conductor"
+    case agent = "Agent"
+}
+
 enum DeviceRole: String {
     case controller = "Controller"
     case responder = "Responder"
@@ -8,13 +14,24 @@ enum DeviceRole: String {
 }
 
 @Observable
-class PeerDevice: Identifiable {
+class PeerDevice: Identifiable, Hashable {
+    static func == (lhs: PeerDevice, rhs: PeerDevice) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
     let id: UUID
     var name: String
     let endpoint: NWEndpoint
     var connectionState: ConnectionState = .discovered
     var metrics: DiagnosticMetrics = .init()
     var role: DeviceRole = .none
+    var stableDeviceID: UUID? // exchanged via peerInfo, persisted per-device
+    var chipFamily: String?
+    var model: String?
 
     init(id: UUID = UUID(), name: String, endpoint: NWEndpoint) {
         self.id = id

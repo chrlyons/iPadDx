@@ -123,9 +123,9 @@ struct ReportComparisonView: View {
                     lowerIsBetter: true
                 )
                 comparisonRow(
-                    "Degradation",
-                    String(format: "%.0f%%", reportA.results.latencyUnderLoad.degradationPercent),
-                    String(format: "%.0f%%", reportB.results.latencyUnderLoad.degradationPercent),
+                    "Impact",
+                    reportA.results.latencyUnderLoad.formattedDegradation,
+                    reportB.results.latencyUnderLoad.formattedDegradation,
                     valueA: reportA.results.latencyUnderLoad.degradationPercent,
                     valueB: reportB.results.latencyUnderLoad.degradationPercent,
                     lowerIsBetter: true

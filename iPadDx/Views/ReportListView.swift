@@ -195,7 +195,7 @@ struct ReportListView: View {
                     .font(.caption).fontWeight(.semibold)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(.blue.opacity(0.1), in: Capsule())
-                Image(systemName: "arrow.left.arrow.right")
+                Image(systemName: "arrow.right")
                     .font(.caption2).foregroundStyle(.secondary)
                 Text(report.remoteDevice.chipFamily)
                     .font(.caption).fontWeight(.semibold)
@@ -207,10 +207,15 @@ struct ReportListView: View {
                     .foregroundStyle(gradeColor(report.results.overallGrade))
             }
 
-            HStack {
+            HStack(spacing: 4) {
                 Text(report.localDevice.displayModel)
-                Text("\u{2194}")
+                    .foregroundStyle(.primary)
+                Text("(sender)")
+                    .foregroundStyle(.tertiary)
+                Text("\u{2192}")
+                    .foregroundStyle(.secondary)
                 Text(report.remoteDevice.displayModel)
+                    .foregroundStyle(.primary)
             }
             .font(.caption)
 

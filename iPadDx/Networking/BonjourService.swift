@@ -13,6 +13,9 @@ class BonjourService {
     var localRole: DeviceRole = .none
     var remoteTestInProgress: Bool = false
     var onReportReceived: ((Data) -> Void)?
+    var appMode: AppMode = .standalone
+    var conductorService: ConductorService?
+    var agentService: AgentService?
 
     var localDeviceName: String {
         // Use user-set name if available, otherwise fall back to system name
@@ -179,6 +182,12 @@ class BonjourService {
         engine.onRemoteDisconnect = { [weak self] in
             self?.handleRemoteDisconnect()
         }
+        engine.onOrchestration = { [weak self, weak manager] message in
+            if case let .roleAssignment(role) = message, role == "agent", let manager {
+                self?.enterAgentMode(conductorName: peer.name, conductorConnection: manager)
+            }
+            self?.agentService?.handleOrchestration(message)
+        }
         diagnosticEngine = engine
 
         manager.connect(to: peer.endpoint) { [weak self] data in
@@ -239,11 +248,70 @@ class BonjourService {
         }
     }
 
+    // MARK: - Conductor Mode
+
+    func enableConductorMode() {
+        guard appMode == .standalone else { return }
+        // Disconnect any standalone connection first
+        if connectedPeer != nil { disconnect() }
+        appMode = .conductor
+        let cs = ConductorService()
+        cs.conductorBonjourName = localDeviceName
+        conductorService = cs
+        statusMessage = "Conductor Mode"
+    }
+
+    func disableConductorMode() {
+        conductorService?.disconnectAll()
+        conductorService = nil
+        appMode = .standalone
+        statusMessage = "Standalone Mode"
+    }
+
+    func connectAgentFromConductor(_ peer: PeerDevice) {
+        conductorService?.connectToDevice(peer)
+    }
+
+    // MARK: - Agent Mode
+
+    func enterAgentMode(conductorName: String, conductorConnection: ConnectionManager) {
+        // Don't call disconnect() — the conductorConnection IS the current connection.
+        // Just switch mode and keep the connection alive.
+        appMode = .agent
+        // Clear standalone state without tearing down the connection
+        connectedPeer = nil
+        localRole = .none
+        // Set up agent service using the existing connection
+        let agent = AgentService()
+        agent.configure(conductorConnection: conductorConnection, conductorName: conductorName)
+        agentService = agent
+        statusMessage = "Agent — Connected to \(conductorName)"
+    }
+
+    func leaveAgentMode() {
+        agentService?.reset()
+        agentService = nil
+        appMode = .standalone
+        statusMessage = "Standalone Mode"
+    }
+
+    // MARK: - Disconnect Handlers
+
     func handleRemoteDisconnect() {
+        guard appMode == .standalone else {
+            // In agent mode, a disconnect from conductor means leave agent mode
+            if appMode == .agent {
+                leaveAgentMode()
+            }
+            return
+        }
         cleanUp(status: "Remote device disconnected")
     }
 
     func handleConnectionLost() {
+        // Don't clean up if we're in agent/conductor mode — the connection
+        // is managed by the respective service, not BonjourService
+        guard appMode == .standalone else { return }
         cleanUp(status: "Connection lost")
     }
 
@@ -304,7 +372,13 @@ class BonjourService {
     }
 
     private func handleIncomingConnection(_ conn: NWConnection) {
-        guard connectedPeer == nil else {
+        // In agent mode, route incoming connections to the agent service
+        // (these are test partner connections from other agents)
+        if appMode == .agent, let agent = agentService, agent.status == .connecting {
+            agent.acceptTestPartnerConnection(conn)
+            return
+        }
+        guard connectedPeer == nil || appMode == .conductor else {
             conn.cancel()
             return
         }
@@ -349,6 +423,12 @@ class BonjourService {
         }
         engine.onRemoteDisconnect = { [weak self] in
             self?.handleRemoteDisconnect()
+        }
+        engine.onOrchestration = { [weak self, weak manager] message in
+            if case let .roleAssignment(role) = message, role == "agent", let manager {
+                self?.enterAgentMode(conductorName: "Conductor", conductorConnection: manager)
+            }
+            self?.agentService?.handleOrchestration(message)
         }
         diagnosticEngine = engine
 

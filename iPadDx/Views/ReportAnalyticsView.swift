@@ -84,7 +84,7 @@ struct ReportAnalyticsView: View {
         return zip(grades, colors).map { grade, color in
             (grade: grade, count: filteredReports.filter { $0.results.overallGrade == grade }.count, color: color)
         }
-        .filter { $0.count > 0 }
+        .filter { !$0.isEmpty }
     }
 
     var body: some View {

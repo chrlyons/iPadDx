@@ -181,7 +181,7 @@ class TestSuiteRunner {
         }
         let underLoad = loadResult
         phaseStatuses[.latencyUnderLoad] =
-            .completed("Degradation: \(String(format: "%.0f%%", underLoad.degradationPercent))")
+            .completed(underLoad.formattedDegradation)
         phaseIndex += 1
         progress = phaseIndex / totalPhases
         sampleSystem()
@@ -397,7 +397,7 @@ class TestSuiteRunner {
 
         let rtts = receivedTestPongs.sorted(by: { $0.sequence < $1.sequence }).map(\.rtt)
         let underLoadAvg = rtts.isEmpty ? 0 : rtts.reduce(0, +) / Double(rtts.count)
-        let degradation = baselineAvg > 0 ? max(0, ((underLoadAvg - baselineAvg) / baselineAvg) * 100) : 0
+        let degradation = baselineAvg > 0 ? ((underLoadAvg - baselineAvg) / baselineAvg) * 100 : 0
 
         return LatencyUnderLoadResult(
             baselineAvg: baselineAvg,
@@ -532,7 +532,9 @@ class TestSuiteRunner {
         else if jitter.averageJitter < 30 { score += 1 }
         if loss.lostPercent < 1 { score += 3 } else if loss.lostPercent < 5 { score += 2 }
         else if loss.lostPercent < 10 { score += 1 }
-        if underLoad.degradationPercent < 50 { score += 2 } else if underLoad.degradationPercent < 100 { score += 1 }
+        if underLoad.degradationPercent <= 0 { score += 3 } // improved or no change
+        else if underLoad.degradationPercent < 50 { score += 2 }
+        else if underLoad.degradationPercent < 100 { score += 1 }
 
         if score >= 9 { return .excellent }
         if score >= 6 { return .good }

@@ -4,6 +4,8 @@ enum DetailView: Hashable {
     case dashboard
     case reports
     case analytics
+    case conductor
+    case agent
 }
 
 struct ContentView: View {
@@ -43,6 +45,10 @@ struct ContentView: View {
                     ReportListView()
                 case .analytics:
                     ReportAnalyticsView()
+                case .conductor:
+                    ConductorDashboardView()
+                case .agent:
+                    AgentStatusView()
                 }
             }
         }
