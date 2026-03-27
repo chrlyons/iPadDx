@@ -39,6 +39,7 @@
 		A10030 /* ConductorDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10032 /* ConductorDashboardView.swift */; };
 		A10031 /* AgentStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10033 /* AgentStatusView.swift */; };
 		A10032 /* FleetDeviceCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034 /* FleetDeviceCard.swift */; };
+		A10033 /* AnalyticsReportRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10035 /* AnalyticsReportRenderer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -58,7 +59,6 @@
 		B10014 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10016 /* iPadDx.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iPadDx.entitlements; sourceTree = "<group>"; };
-		C10001 /* iPadDx.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iPadDx.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10017 /* TestReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestReport.swift; sourceTree = "<group>"; };
 		B10018 /* ReportStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStore.swift; sourceTree = "<group>"; };
 		B10019 /* TestSuiteRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSuiteRunner.swift; sourceTree = "<group>"; };
@@ -77,6 +77,8 @@
 		B10032 /* ConductorDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorDashboardView.swift; sourceTree = "<group>"; };
 		B10033 /* AgentStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStatusView.swift; sourceTree = "<group>"; };
 		B10034 /* FleetDeviceCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetDeviceCard.swift; sourceTree = "<group>"; };
+		B10035 /* AnalyticsReportRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsReportRenderer.swift; sourceTree = "<group>"; };
+		C10001 /* iPadDx.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iPadDx.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -175,6 +177,7 @@
 				B10026 /* DeviceIdentifier.swift */,
 				B10030 /* ConductorService.swift */,
 				B10031 /* AgentService.swift */,
+				B10035 /* AnalyticsReportRenderer.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -279,6 +282,7 @@
 				A10030 /* ConductorDashboardView.swift in Sources */,
 				A10031 /* AgentStatusView.swift in Sources */,
 				A10032 /* FleetDeviceCard.swift in Sources */,
+				A10033 /* AnalyticsReportRenderer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

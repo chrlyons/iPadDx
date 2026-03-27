@@ -51,6 +51,7 @@ struct ReportAnalyticsView: View {
     @State private var selectedPair: String = "All"
     @State private var dateRange: DateRange = .all
     @State private var selectedMetric: AnalyticsMetric = .latencyAvg
+    @State private var exportURLs: [URL]?
 
     private var uniquePairs: [String] {
         let pairs = store.reports.map { "\($0.localDevice.chipFamily) vs \($0.remoteDevice.chipFamily)" }
@@ -81,10 +82,15 @@ struct ReportAnalyticsView: View {
     private var gradeDistribution: [(grade: String, count: Int, color: Color)] {
         let grades = ["Excellent", "Good", "Fair", "Poor"]
         let colors: [Color] = [.green, .blue, .orange, .red]
-        return zip(grades, colors).map { grade, color in
-            (grade: grade, count: filteredReports.filter { $0.results.overallGrade == grade }.count, color: color)
+        let reports = filteredReports
+        var result: [(grade: String, count: Int, color: Color)] = []
+        for i in 0 ..< grades.count {
+            let gradeCount = reports.filter { $0.results.overallGrade == grades[i] }.count
+            if gradeCount > 0 {
+                result.append((grade: grades[i], count: gradeCount, color: colors[i]))
+            }
         }
-        .filter { !$0.isEmpty }
+        return result
     }
 
     var body: some View {
@@ -103,6 +109,41 @@ struct ReportAnalyticsView: View {
             }
         }
         .navigationTitle("Analytics")
+        .toolbar {
+            if !store.reports.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        exportAnalytics()
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { exportURLs != nil },
+            set: { if !$0 { exportURLs = nil } }
+        )) {
+            if let urls = exportURLs {
+                ShareSheet(activityItems: urls)
+                    .presentationDetents([.medium, .large])
+            }
+        }
+    }
+
+    private func exportAnalytics() {
+        var urls: [URL] = []
+        // PDF report
+        if let pdfURL = AnalyticsReportRenderer.renderPDF(reports: filteredReports) {
+            urls.append(pdfURL)
+        }
+        // CSV raw data as companion
+        if let summaryURL = store.exportSummaryCSV(for: filteredReports) {
+            urls.append(summaryURL)
+        }
+        if !urls.isEmpty {
+            exportURLs = urls
+        }
     }
 
     // MARK: - Empty State

@@ -173,6 +173,10 @@ class ReportStore {
         Avg CPU,\(String(format: "%.1f", r.systemMetrics.avgCpuUsage))%
         Peak Memory,\(String(format: "%.0f", r.systemMetrics.peakMemoryMB))MB
         Thermal State,\(r.systemMetrics.thermalStateDuringTest)
+        \(report.errors.map { errors in
+            "\nErrors (\(errors.count))\n" + errors.enumerated().map { "\($0.offset + 1),\($0.element)" }
+                .joined(separator: "\n")
+        } ?? "")
         """
 
         let fileName = "iPadDx_Report_\(report.localDevice.chipFamily)_vs_\(report.remoteDevice.chipFamily)_\(report.id.uuidString.prefix(8)).csv"
@@ -232,6 +236,7 @@ class ReportStore {
             "Avg CPU %",
             "Peak Memory (MB)",
             "Thermal State",
+            "Errors",
         ]
 
         var rows: [String] = [headers.joined(separator: ",")]
@@ -288,6 +293,7 @@ class ReportStore {
                 String(format: "%.1f", s.avgCpuUsage),
                 String(format: "%.0f", s.peakMemoryMB),
                 s.thermalStateDuringTest,
+                csvEscape(r.errors?.joined(separator: "; ") ?? ""),
             ]
             rows.append(row.joined(separator: ","))
         }
@@ -300,6 +306,142 @@ class ReportStore {
     }
 
     // swiftlint:enable function_body_length
+
+    // swiftlint:disable function_body_length
+    func exportAnalyticsCSV(for reports: [TestReport]) -> URL? {
+        guard !reports.isEmpty else { return nil }
+
+        var sections: [String] = []
+
+        // Section 1: Overview
+        let count = Double(reports.count)
+        let avgLatency = reports.map(\.results.latencyBurst.avg).reduce(0, +) / count
+        let avgP95 = reports.map(\.results.latencyBurst.p95).reduce(0, +) / count
+        let avgThroughput = reports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / count / 1_000_000
+        let avgJitter = reports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / count
+        let avgLoss = reports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / count
+        let avgDegradation = reports.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / count
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .short
+        dateFormatter.timeStyle = .short
+        let earliest = reports.map(\.date).min()!
+        let latest = reports.map(\.date).max()!
+
+        sections.append("""
+        iPadDx Analytics Report
+        Generated,\(dateFormatter.string(from: Date()))
+        Date Range,\(dateFormatter.string(from: earliest)) — \(dateFormatter.string(from: latest))
+        Total Reports,\(reports.count)
+
+        Summary
+        Metric,Average,Min,Max,Median
+        Latency Avg (ms),\(f(avgLatency)),\(f(reports.map(\.results.latencyBurst.avg).min() ?? 0)),\(f(reports
+                .map(\.results.latencyBurst.avg).max() ?? 0)),\(f(median(reports.map(\.results.latencyBurst.avg))))
+        Latency P95 (ms),\(f(avgP95)),\(f(reports.map(\.results.latencyBurst.p95).min() ?? 0)),\(f(reports
+                .map(\.results.latencyBurst.p95).max() ?? 0)),\(f(median(reports.map(\.results.latencyBurst.p95))))
+        Throughput (MB/s),\(f(avgThroughput)),\(f((reports.map(\.results.sustainedThroughput.bytesPerSecond)
+                .min() ?? 0) / 1_000_000)),\(f((reports.map(\.results.sustainedThroughput.bytesPerSecond).max() ?? 0) /
+                1_000_000)),\(f(median(reports.map { $0.results.sustainedThroughput.bytesPerSecond / 1_000_000 })))
+        Jitter Avg (ms),\(f(avgJitter)),\(f(reports.map(\.results.jitterMeasurement.averageJitter)
+                .min() ?? 0)),\(f(reports.map(\.results.jitterMeasurement.averageJitter)
+                .max() ?? 0)),\(f(median(reports.map(\.results.jitterMeasurement.averageJitter))))
+        Packet Loss (%),\(f(avgLoss)),\(f(reports.map(\.results.packetLossStress.lostPercent).min() ?? 0)),\(f(reports
+                .map(\.results.packetLossStress.lostPercent)
+                .max() ?? 0)),\(f(median(reports.map(\.results.packetLossStress.lostPercent))))
+        Load Degradation (%),\(f(avgDegradation)),\(f(reports.map(\.results.latencyUnderLoad.degradationPercent)
+                .min() ?? 0)),\(f(reports.map(\.results.latencyUnderLoad.degradationPercent)
+                .max() ?? 0)),\(f(median(reports.map(\.results.latencyUnderLoad.degradationPercent))))
+        """)
+
+        // Section 2: Grade distribution
+        let grades = ["Excellent", "Good", "Fair", "Poor"]
+        let gradeCounts = grades.map { grade in reports.filter { $0.results.overallGrade == grade }.count }
+        sections.append("""
+        Grade Distribution
+        Grade,Count,Percent
+        \(grades.enumerated()
+            .map { "\($0.element),\(gradeCounts[$0.offset]),\(f(Double(gradeCounts[$0.offset]) / count * 100))%" }
+            .joined(separator: "\n"))
+        """)
+
+        // Section 3: Per-pair breakdown
+        let grouped = Dictionary(grouping: reports) {
+            "\($0.localDevice.chipFamily) vs \($0.remoteDevice.chipFamily)"
+        }
+        var pairRows =
+            [
+                "Pair,Count,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),Excellent,Good,Fair,Poor",
+            ]
+        for (pair, pairReports) in grouped.sorted(by: { $0.key < $1.key }) {
+            let n = Double(pairReports.count)
+            let row = [
+                csvEscape(pair),
+                "\(pairReports.count)",
+                f(pairReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
+                f(pairReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
+                f(pairReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
+                f(pairReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
+                f(pairReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
+                f(pairReports.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                "\(pairReports.filter { $0.results.overallGrade == "Excellent" }.count)",
+                "\(pairReports.filter { $0.results.overallGrade == "Good" }.count)",
+                "\(pairReports.filter { $0.results.overallGrade == "Fair" }.count)",
+                "\(pairReports.filter { $0.results.overallGrade == "Poor" }.count)",
+            ]
+            pairRows.append(row.joined(separator: ","))
+        }
+        sections.append("Per-Pair Breakdown\n" + pairRows.joined(separator: "\n"))
+
+        // Section 4: Per-chip summary (as sender and receiver)
+        let chips = Set(reports.flatMap { [$0.localDevice.chipFamily, $0.remoteDevice.chipFamily] }).sorted()
+        var chipRows = ["Chip,As Sender (count),Sender Avg Latency (ms),As Receiver (count),Receiver Avg Latency (ms)"]
+        for chip in chips {
+            let asSender = reports.filter { $0.localDevice.chipFamily == chip }
+            let asReceiver = reports.filter { $0.remoteDevice.chipFamily == chip }
+            let senderAvg = asSender.isEmpty ? 0 : asSender.map(\.results.latencyBurst.avg)
+                .reduce(0, +) / Double(asSender.count)
+            let receiverAvg = asReceiver.isEmpty ? 0 : asReceiver.map(\.results.latencyBurst.avg)
+                .reduce(0, +) / Double(asReceiver.count)
+            chipRows.append("\(chip),\(asSender.count),\(f(senderAvg)),\(asReceiver.count),\(f(receiverAvg))")
+        }
+        sections.append("Per-Chip Summary\n" + chipRows.joined(separator: "\n"))
+
+        // Section 5: Failed tests
+        let failed = reports.filter { $0.results.latencyBurst.sampleCount == 0 }
+        if !failed.isEmpty {
+            var failRows = ["Date,Local,Remote,Grade,Errors"]
+            for r in failed {
+                failRows
+                    .append(
+                        "\(ISO8601DateFormatter().string(from: r.date)),\(csvEscape(r.localDevice.shortDescription)),\(csvEscape(r.remoteDevice.shortDescription)),\(r.results.overallGrade),\(csvEscape(r.errors?.joined(separator: "; ") ?? ""))"
+                    )
+            }
+            sections.append("Failed Tests (\(failed.count))\n" + failRows.joined(separator: "\n"))
+        }
+
+        let csv = sections.joined(separator: "\n\n")
+        let fileName = "iPadDx_Analytics_\(reports.count)_reports.csv"
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        try? csv.write(to: tempURL, atomically: true, encoding: .utf8)
+        return tempURL
+    }
+
+    // swiftlint:enable function_body_length
+
+    private func f(_ value: Double) -> String {
+        String(format: "%.2f", value)
+    }
+
+    private func median(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        if sorted.count.isMultiple(of: 2) {
+            return (sorted[mid - 1] + sorted[mid]) / 2
+        }
+        return sorted[mid]
+    }
 
     private func csvEscape(_ value: String) -> String {
         if value.contains(",") || value.contains("\"") || value.contains("\n") {

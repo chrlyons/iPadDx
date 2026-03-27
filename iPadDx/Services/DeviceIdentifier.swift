@@ -115,13 +115,8 @@ enum DeviceIdentifier {
             return chip
         }
 
-        // If we don't recognize the family, try to get general info
-        // Check performance core count to distinguish chip tiers
-        var perfCores: UInt32 = 0
-        var perfSize = MemoryLayout<UInt32>.size
-        sysctlbyname("hw.perflevel0.physicalcpu", &perfCores, &perfSize, nil, 0)
-
-        // Return hex value so we can add it to the map later
-        return "Unknown (0x\(String(cpuFamily, radix: 16, uppercase: true)))"
+        // Unrecognized CPU family — return nil so the catalog lookup
+        // (based on hardware model number) gets used as fallback
+        return nil
     }
 }

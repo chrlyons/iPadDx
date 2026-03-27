@@ -86,6 +86,7 @@ class TestSuiteRunner {
     private var peakMemoryMB: Double = 0
     private var batteryStart: Float = -1
     private var worstThermalState: String = "Nominal"
+    private var errorLog: [String] = []
 
     init(connectionManager: ConnectionManager, metrics: DiagnosticMetrics) {
         self.connectionManager = connectionManager
@@ -117,6 +118,7 @@ class TestSuiteRunner {
         cpuSamples.removeAll()
         peakMemoryMB = 0
         worstThermalState = "Nominal"
+        errorLog.removeAll()
         progress = 0
         state = .running
 
@@ -133,6 +135,11 @@ class TestSuiteRunner {
             await self.runLatencyBurst(count: 100, intervalMs: 50)
         }
         let latency = latencyResult
+        if latency.sampleCount == 0 {
+            errorLog.append("Latency Burst: 0/100 pongs received — remote may not be responding")
+        } else if latency.sampleCount < 50 {
+            errorLog.append("Latency Burst: only \(latency.sampleCount)/100 pongs received — significant packet loss")
+        }
         phaseStatuses[.latencyBurst] =
             .completed("Avg: \(String(format: "%.1fms", latency.avg)) | P95: \(String(format: "%.1fms", latency.p95))")
         phaseIndex += 1
@@ -154,6 +161,9 @@ class TestSuiteRunner {
             await self.runJitterTest(count: 150, intervalMs: 80)
         }
         let jitter = jitterResult
+        if jitter.sampleCount == 0 {
+            errorLog.append("Jitter: 0/150 pongs received — remote not responding to pings")
+        }
         phaseStatuses[.jitterMeasurement] =
             .completed(
                 "Avg: \(String(format: "%.1fms", jitter.averageJitter)) | Max: \(String(format: "%.1fms", jitter.maxJitter))"
@@ -167,6 +177,14 @@ class TestSuiteRunner {
             await self.runPacketLossStress(count: 500, intervalMs: 10)
         }
         let packetLoss = packetLossResult
+        if packetLoss.received == 0 {
+            errorLog.append("Packet Loss: 0/\(packetLoss.sent) received — connection may be dead")
+        } else if packetLoss.lostPercent > 50 {
+            errorLog
+                .append(
+                    "Packet Loss: \(String(format: "%.0f", packetLoss.lostPercent))% loss (\(packetLoss.received)/\(packetLoss.sent) received)"
+                )
+        }
         phaseStatuses[.packetLossStress] =
             .completed(
                 "Loss: \(String(format: "%.1f%%", packetLoss.lostPercent)) (\(packetLoss.received)/\(packetLoss.sent))"
@@ -216,13 +234,18 @@ class TestSuiteRunner {
             thermalStateDuringTest: worstThermalState
         )
 
+        let remoteInfo = buildRemoteDeviceInfo()
+        if remoteInfo.name == "Unknown" || remoteInfo.model == "Unknown" {
+            errorLog.append("Peer info exchange failed — remote device is Unknown (peer info never received)")
+        }
+
         let grade = computeGrade(latency: latency, jitter: jitter, loss: packetLoss, underLoad: underLoad)
 
         let report = TestReport(
             id: UUID(),
             date: Date(),
             localDevice: buildLocalDeviceInfo(),
-            remoteDevice: buildRemoteDeviceInfo(),
+            remoteDevice: remoteInfo,
             results: TestSuiteResults(
                 latencyBurst: latency,
                 sustainedThroughput: throughput,
@@ -232,7 +255,8 @@ class TestSuiteRunner {
                 systemMetrics: systemResult,
                 overallGrade: grade.rawValue
             ),
-            durationSeconds: Date().timeIntervalSince(suiteStartTime ?? Date())
+            durationSeconds: Date().timeIntervalSince(suiteStartTime ?? Date()),
+            errors: errorLog.isEmpty ? nil : errorLog
         )
 
         lastReport = report
@@ -525,6 +549,11 @@ class TestSuiteRunner {
         loss: PacketLossResult,
         underLoad: LatencyUnderLoadResult
     ) -> SignalQuality {
+        // No real data collected — test effectively failed
+        if latency.sampleCount == 0, jitter.sampleCount == 0 {
+            return .poor
+        }
+
         var score = 0
         if latency.avg < 10 { score += 3 } else if latency.avg < 30 { score += 2 }
         else if latency.avg < 100 { score += 1 }

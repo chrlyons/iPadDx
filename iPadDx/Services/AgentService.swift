@@ -28,7 +28,11 @@ class AgentService {
         case let .orchestrateTest(targetDeviceName, configJSON, role):
             let config = (try? JSONDecoder().decode(TestSuiteConfig.self, from: configJSON)) ?? .default
             if role == "responder" {
-                // Just prepare to accept incoming connection — don't initiate
+                // Clean up any previous partner connection
+                partnerConnection?.onConnectionLost = nil
+                partnerConnection?.disconnect()
+                partnerConnection = nil
+                // Prepare to accept incoming connection — don't initiate
                 status = .connecting
                 testPartnerName = targetDeviceName
                 sendStatus("preparing", detail: "Waiting for \(targetDeviceName) to connect")
@@ -46,16 +50,23 @@ class AgentService {
     }
 
     func cancelTest() {
+        partnerConnection?.onConnectionLost = nil
         partnerConnection?.disconnect()
         partnerConnection = nil
         testRunner = nil
         status = .idle
         testPartnerName = ""
+        testProgress = 0
         sendStatus("cancelled", detail: "Test cancelled by conductor")
     }
 
     /// Accept an incoming connection from a test partner (another agent)
     func acceptTestPartnerConnection(_ conn: NWConnection) {
+        // Clean up any previous partner connection
+        partnerConnection?.onConnectionLost = nil
+        partnerConnection?.disconnect()
+        partnerConnection = nil
+
         let manager = ConnectionManager()
         partnerConnection = manager
 
@@ -68,6 +79,24 @@ class AgentService {
             }
         }
 
+        // When the partner disconnects after test, notify conductor and reset
+        manager.onConnectionLost = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                let wasActive = self.status == .testing || self.status == .connecting
+                self.partnerConnection = nil
+                self.status = .idle
+                self.testPartnerName = ""
+                self.testProgress = 0
+                if wasActive {
+                    self.sendStatus("failed", detail: "Partner disconnected during test")
+                }
+            }
+        }
+
+        status = .testing
+        sendStatus("testing", detail: "Responding to \(testPartnerName)")
+
         Task {
             for _ in 0 ..< 100 {
                 try? await Task.sleep(nanoseconds: 100_000_000)
@@ -76,6 +105,12 @@ class AgentService {
                     return
                 }
             }
+            // Connection failed — notify conductor
+            partnerConnection?.disconnect()
+            partnerConnection = nil
+            status = .failed
+            testPartnerName = ""
+            sendStatus("failed", detail: "Partner connection timed out")
         }
     }
 
@@ -112,6 +147,18 @@ class AgentService {
         manager.connect(to: endpoint) { data in
             Task { @MainActor in
                 engine.handleMessage(data)
+            }
+        }
+
+        // Detect partner disconnect during test
+        manager.onConnectionLost = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.status == .testing else { return }
+                self.partnerConnection = nil
+                self.status = .failed
+                self.testPartnerName = ""
+                self.testProgress = 0
+                self.sendStatus("failed", detail: "Partner disconnected during test")
             }
         }
 
@@ -172,6 +219,7 @@ class AgentService {
         }
 
         // Clean up partner connection
+        manager.onConnectionLost = nil
         engine.stop()
         manager.disconnect()
         partnerConnection = nil
@@ -204,8 +252,8 @@ class AgentService {
 
             browser.start(queue: .main)
 
-            // Timeout after 10 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            // Timeout after 20 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
                 guard !found else { return }
                 found = true
                 browser.cancel()

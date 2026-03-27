@@ -61,8 +61,7 @@ class BonjourService {
         guard !isAdvertising else { return }
 
         do {
-            let params = NWParameters.tcp
-            params.includePeerToPeer = true
+            let params = ConnectionSecurity.tlsParameters()
             let listener = try NWListener(using: params)
             listener.service = NWListener.Service(
                 name: localDeviceName,
@@ -222,11 +221,12 @@ class BonjourService {
 
     func disconnect() {
         guard let manager = connectionManager else { return }
-        // Send disconnect message then delay TCP cancel so it can flush
-        manager.send(.disconnect)
         let engine = diagnosticEngine
 
-        // Clear all state and callbacks immediately
+        // Send disconnect message
+        manager.send(.disconnect)
+
+        // Clear all state and callbacks immediately so UI updates
         diagnosticEngine = nil
         connectionManager = nil
         connectedPeer?.connectionState = .disconnected
@@ -235,15 +235,17 @@ class BonjourService {
         remoteTestInProgress = false
         statusMessage = "Disconnected"
 
+        // Null callbacks so they can't re-trigger
         engine?.onRemoteDisconnect = nil
         engine?.onTestSuiteStatus = nil
         engine?.onReportReceived = nil
-        engine?.stop()
+        engine?.onOrchestration = nil
         manager.onConnectionLost = nil
 
-        // Delay TCP cancel so .disconnect message flushes
+        // Delay teardown so .disconnect message flushes
         Task {
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            engine?.stop()
             manager.disconnect()
         }
     }
@@ -275,12 +277,21 @@ class BonjourService {
     // MARK: - Agent Mode
 
     func enterAgentMode(conductorName: String, conductorConnection: ConnectionManager) {
-        // Don't call disconnect() — the conductorConnection IS the current connection.
-        // Just switch mode and keep the connection alive.
         appMode = .agent
-        // Clear standalone state without tearing down the connection
+
+        // Stop the standalone ping loop but keep the engine alive for message routing
+        diagnosticEngine?.stop() // stops ping timer only
+
+        // Clear standalone callbacks that would overwrite agent state
+        diagnosticEngine?.onPeerNameUpdated = nil
+        diagnosticEngine?.onTestSuiteStatus = nil
+        connectionManager?.onConnectionLost = nil
+
+        // Clear standalone UI state
         connectedPeer = nil
         localRole = .none
+        remoteTestInProgress = false
+
         // Set up agent service using the existing connection
         let agent = AgentService()
         agent.configure(conductorConnection: conductorConnection, conductorName: conductorName)
@@ -334,6 +345,7 @@ class BonjourService {
         engine?.onRemoteDisconnect = nil
         engine?.onTestSuiteStatus = nil
         engine?.onReportReceived = nil
+        engine?.onOrchestration = nil
         engine?.stop()
         manager?.onConnectionLost = nil
         manager?.disconnect()
@@ -360,10 +372,12 @@ class BonjourService {
                 // Skip our own service
                 if name == localDeviceName { continue }
                 let peer = PeerDevice(name: name, endpoint: result.endpoint)
+                peer.bonjourName = name
                 // Preserve state if we already knew about this peer
-                if let existing = discoveredPeers.first(where: { $0.name == name }) {
+                if let existing = discoveredPeers.first(where: { $0.bonjourName == name || $0.name == name }) {
                     peer.connectionState = existing.connectionState
                     peer.metrics = existing.metrics
+                    peer.bonjourName = existing.bonjourName
                 }
                 newPeers.append(peer)
             }
@@ -372,13 +386,35 @@ class BonjourService {
     }
 
     private func handleIncomingConnection(_ conn: NWConnection) {
-        // In agent mode, route incoming connections to the agent service
-        // (these are test partner connections from other agents)
-        if appMode == .agent, let agent = agentService, agent.status == .connecting {
+        // In agent mode, ALL incoming connections are test partner connections
+        if appMode == .agent, let agent = agentService {
             agent.acceptTestPartnerConnection(conn)
             return
         }
-        guard connectedPeer == nil || appMode == .conductor else {
+        // In conductor mode, accept connections for reverse tests
+        // (agent connecting back to test the conductor)
+        if appMode == .conductor {
+            // Set up a temporary connection for the test
+            let manager = ConnectionManager()
+            let metrics = DiagnosticMetrics()
+            let engine = DiagnosticEngine(connectionManager: manager, metrics: metrics)
+            manager.accept(conn) { data in
+                Task { @MainActor in
+                    engine.handleMessage(data)
+                }
+            }
+            Task {
+                for _ in 0 ..< 100 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    if manager.isConnected {
+                        engine.start()
+                        return
+                    }
+                }
+            }
+            return
+        }
+        guard connectedPeer == nil else {
             conn.cancel()
             return
         }
@@ -442,6 +478,18 @@ class BonjourService {
             for _ in 0 ..< 100 {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 if manager.isConnected {
+                    // Send peer info immediately so the remote side gets our chip/model
+                    engine.sendPeerInfo()
+
+                    // Wait briefly for a potential roleAssignment from a conductor.
+                    // This prevents the standalone dashboard from flashing before
+                    // the device transitions to agent mode.
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+
+                    // If we transitioned to agent mode during the wait, we're done —
+                    // peer info was already sent above
+                    guard appMode == .standalone else { return }
+
                     peer.connectionState = .connected
                     peer.role = .controller // remote is controller
                     localRole = .responder // we accepted, we're the responder
@@ -451,6 +499,8 @@ class BonjourService {
                     return
                 }
             }
+            // Only report failure if we're still in standalone mode
+            guard appMode == .standalone else { return }
             peer.connectionState = .failed
             statusMessage = "Incoming connection timed out"
         }

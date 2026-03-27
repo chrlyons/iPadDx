@@ -6,6 +6,8 @@ struct ConductorDashboardView: View {
     @State private var showPairPicker = false
     @State private var pairDeviceA: PeerDevice?
     @State private var pairDeviceB: PeerDevice?
+    @State private var resultsExpanded = true
+    @State private var eventLogExpanded = false
 
     private var conductor: ConductorService? {
         service.conductorService
@@ -26,6 +28,11 @@ struct ConductorDashboardView: View {
                 // Completed reports
                 if let conductor, !conductor.completedReports.isEmpty {
                     recentResultsSection
+                }
+
+                // Event log
+                if let conductor, !conductor.eventLog.isEmpty {
+                    eventLogSection
                 }
             }
             .padding()
@@ -48,17 +55,26 @@ struct ConductorDashboardView: View {
                     .font(.headline)
                 Spacer()
                 if let conductor {
-                    Text("\(conductor.connectedAgents.count) connected")
+                    let selfCount = conductor.includeSelf ? 1 : 0
+                    Text("\(conductor.connectedAgents.count + selfCount) devices")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            if let conductor, !conductor.fleet.isEmpty {
+            if let conductor, !conductor.fleet.isEmpty || conductor.includeSelf {
                 LazyVGrid(
                     columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
                     spacing: 12
                 ) {
+                    // Self device card
+                    if conductor.includeSelf {
+                        SelfDeviceCard(
+                            info: DeviceIdentifier.localDeviceInfo(),
+                            isTesting: conductor.queueStatus != .idle && conductor.queueStatus != .completed
+                        )
+                    }
+
                     ForEach(conductor.fleet) { connection in
                         FleetDeviceCard(connection: connection) {
                             conductor.disconnectDevice(connection)
@@ -130,16 +146,26 @@ struct ConductorDashboardView: View {
                         }
                     }
 
-                case let .running(index, total):
+                case let .running(completed, total):
                     VStack(spacing: 8) {
-                        ProgressView(value: Double(index), total: Double(total)) {
-                            Text("Running pair \(index + 1) of \(total)")
+                        ProgressView(value: Double(completed), total: Double(total)) {
+                            Text("\(completed)/\(total) completed")
                                 .font(.caption)
                         }
                         .tint(.blue)
-                        Text(conductor.currentPairLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        if !conductor.runningPairs.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Running now:")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                ForEach(conductor.runningPairs, id: \.self) { label in
+                                    HStack(spacing: 6) {
+                                        ProgressView().scaleEffect(0.6)
+                                        Text(label).font(.caption)
+                                    }
+                                }
+                            }
+                        }
                     }
 
                 case .completed:
@@ -169,65 +195,111 @@ struct ConductorDashboardView: View {
     // MARK: - Controls
 
     private var controlsSection: some View {
-        HStack(spacing: 12) {
+        VStack(spacing: 12) {
             if let conductor {
-                Button {
-                    showPairPicker = true
-                } label: {
-                    Label("Add Pair", systemImage: "plus.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(conductor.connectedAgents.count < 2 || conductor.queueStatus != .idle)
-
-                Button {
-                    let selfInfo = DeviceIdentifier.localDeviceInfo()
-                    let selfPeer = PeerDevice(
-                        id: DeviceIdentifier.stableID,
-                        name: selfInfo.name,
-                        endpoint: .hostPort(host: .ipv4(.loopback), port: 0)
-                    )
-                    selfPeer.chipFamily = DeviceIdentifier.chipFamily
-                    conductor.generateAllPairs(includingSelf: selfPeer)
-                } label: {
-                    Label("All Pairs", systemImage: "square.grid.2x2")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(conductor.connectedAgents.count < 2 || conductor.queueStatus != .idle)
-
-                Button {
-                    Task {
-                        await conductor.runQueue(reportStore: reportStore)
-                        // Save completed reports
-                        for report in conductor.completedReports {
-                            reportStore.save(report, source: "conductor")
+                // Include self toggle
+                Toggle(isOn: Binding(
+                    get: { conductor.includeSelf },
+                    set: { conductor.includeSelf = $0 }
+                )) {
+                    HStack {
+                        Image(systemName: "ipad")
+                            .foregroundStyle(.blue)
+                        VStack(alignment: .leading) {
+                            Text("Include This Device")
+                                .font(.subheadline)
+                            Text(DeviceIdentifier.localDeviceInfo().name + " (" + DeviceIdentifier.chipFamily + ")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                } label: {
-                    Label("Run Queue", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(conductor.testQueue.isEmpty || conductor.queueStatus != .idle)
+                .padding(.horizontal)
+                .disabled(conductor.queueStatus != .idle)
+
+                HStack(spacing: 12) {
+                    Button {
+                        showPairPicker = true
+                    } label: {
+                        Label("Add Pair", systemImage: "plus.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(conductor.queueStatus != .idle)
+
+                    Button {
+                        conductor.generateAllPairs()
+                    } label: {
+                        Label("All Pairs", systemImage: "square.grid.2x2")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(conductor.connectedAgents.isEmpty || conductor.queueStatus != .idle)
+
+                    Button {
+                        Task {
+                            await conductor.runQueue(reportStore: reportStore)
+                            for report in conductor.completedReports {
+                                reportStore.save(report, source: "conductor")
+                            }
+                        }
+                    } label: {
+                        Label("Run Queue", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(conductor.testQueue.isEmpty || conductor.queueStatus != .idle)
+                }
             }
         }
     }
 
-    // MARK: - Results
+    // MARK: - Results (collapsible)
 
     private var recentResultsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "doc.text.fill")
-                    .font(.title2)
-                    .foregroundStyle(.green)
-                Text("Recent Results")
-                    .font(.headline)
-                Spacer()
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    resultsExpanded.toggle()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "doc.text.fill")
+                        .font(.title2)
+                        .foregroundStyle(.green)
+                    Text("Recent Results")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    if let conductor {
+                        Text("(\(conductor.completedReports.count))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(resultsExpanded ? 90 : 0))
+                }
             }
+            .buttonStyle(.plain)
 
-            if let conductor {
+            if resultsExpanded, let conductor {
+                let failedReports = conductor.completedReports
+                    .filter { $0.results.overallGrade == "Poor" && $0.results.latencyBurst.sampleCount == 0 }
+
+                if !failedReports.isEmpty, conductor.queueStatus == .idle || conductor.queueStatus == .completed {
+                    Button {
+                        rerunFailedTests(failedReports)
+                    } label: {
+                        Label("Re-run \(failedReports.count) Failed", systemImage: "arrow.counterclockwise")
+                            .font(.caption)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                }
+
                 ForEach(conductor.completedReports) { report in
                     NavigationLink(destination: ReportDetailView(report: report)) {
                         HStack {
@@ -310,16 +382,139 @@ struct ConductorDashboardView: View {
     }
 
     private func allSelectableDevices(_ agents: [DeviceConnection]) -> [PeerDevice] {
-        // Include the conductor (this device) as a selectable option
-        let selfInfo = DeviceIdentifier.localDeviceInfo()
-        let selfPeer = PeerDevice(
-            id: DeviceIdentifier.stableID,
-            name: selfInfo.name + " (this device)",
-            endpoint: .hostPort(host: .ipv4(.loopback), port: 0)
-        )
-        selfPeer.chipFamily = DeviceIdentifier.chipFamily
-        selfPeer.model = selfInfo.model
-        return [selfPeer] + agents.map(\.peer)
+        var devices = agents.map(\.peer)
+        if let sp = conductor?.selfPeer {
+            devices.insert(sp, at: 0)
+        }
+        return devices
+    }
+
+    // MARK: - Event Log (collapsible)
+
+    private var eventLogSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    eventLogExpanded.toggle()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.title2)
+                        .foregroundStyle(.gray)
+                    Text("Event Log")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    if let conductor {
+                        Text("(\(conductor.eventLog.count))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if let conductor, eventLogExpanded {
+                        Button("Clear") {
+                            conductor.eventLog.removeAll()
+                        }
+                        .font(.caption)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(eventLogExpanded ? 90 : 0))
+                }
+            }
+            .buttonStyle(.plain)
+
+            if eventLogExpanded, let conductor {
+                ForEach(conductor.eventLog) { event in
+                    HStack(spacing: 8) {
+                        Image(systemName: eventIcon(event.level))
+                            .font(.caption2)
+                            .foregroundStyle(eventColor(event.level))
+                            .frame(width: 14)
+                        Text(event.timestamp, style: .time)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 65, alignment: .leading)
+                        Text(event.message)
+                            .font(.caption)
+                            .foregroundStyle(event.level == .error ? .red : .primary)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Re-run Failed
+
+    private func rerunFailedTests(_ failedReports: [TestReport]) {
+        guard let conductor else { return }
+
+        // Build lookup of all available devices (fleet + self)
+        var allDevices: [PeerDevice] = conductor.connectedAgents.map(\.peer)
+        if let sp = conductor.selfPeer {
+            allDevices.insert(sp, at: 0)
+        }
+
+        for report in failedReports {
+            // Match local device (the controller) — name should be reliable
+            let deviceA = allDevices.first { peer in
+                peer.name == report.localDevice.name
+                    || (peer.chipFamily == report.localDevice.chipFamily
+                        && peer.model == report.localDevice.model)
+            }
+
+            // Match remote device — might be "Unknown", so match by chip + model,
+            // or fall back to any device with matching chip that isn't deviceA
+            var deviceB: PeerDevice?
+            if report.remoteDevice.name != "Unknown" {
+                deviceB = allDevices.first { peer in
+                    peer.id != deviceA?.id && peer.name == report.remoteDevice.name
+                }
+            }
+            if deviceB == nil, report.remoteDevice.chipFamily != "Unknown" {
+                deviceB = allDevices.first { peer in
+                    peer.id != deviceA?.id && peer.chipFamily == report.remoteDevice.chipFamily
+                }
+            }
+
+            if let a = deviceA, let b = deviceB {
+                conductor.addPair(a, b)
+            }
+        }
+
+        // Reset status so queue can run, then auto-start
+        if !conductor.testQueue.isEmpty {
+            conductor.queueStatus = .idle
+            Task {
+                await conductor.runQueue(reportStore: reportStore)
+                for report in conductor.completedReports {
+                    reportStore.save(report, source: "conductor")
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func eventIcon(_ level: ConductorEvent.EventLevel) -> String {
+        switch level {
+        case .info: "info.circle"
+        case .warning: "exclamationmark.triangle"
+        case .error: "xmark.circle.fill"
+        case .success: "checkmark.circle.fill"
+        }
+    }
+
+    private func eventColor(_ level: ConductorEvent.EventLevel) -> Color {
+        switch level {
+        case .info: .blue
+        case .warning: .orange
+        case .error: .red
+        case .success: .green
+        }
     }
 
     private func gradeColor(_ grade: String) -> Color {

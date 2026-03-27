@@ -22,6 +22,7 @@ struct ReportListView: View {
         case none
         case compare
         case export
+        case delete
     }
 
     var body: some View {
@@ -103,6 +104,13 @@ struct ReportListView: View {
                                 Label("Export Selected", systemImage: "square.and.arrow.up")
                             }
 
+                            Button(role: .destructive) {
+                                selectionMode = .delete
+                                selectedReports.removeAll()
+                            } label: {
+                                Label("Delete Selected", systemImage: "trash")
+                            }
+
                             Divider()
 
                             Button {
@@ -149,6 +157,27 @@ struct ReportListView: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                        }
+                        if selectionMode == .delete, !selectedReports.isEmpty {
+                            Button(role: .destructive) {
+                                deleteSelected()
+                            } label: {
+                                Label("Delete (\(selectedReports.count))", systemImage: "trash")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.red)
+                            .controlSize(.large)
+                        }
+                        if selectionMode == .delete || selectionMode == .export {
+                            Button {
+                                selectAll()
+                            } label: {
+                                Text(selectedReports.count == store.reports.count ? "Deselect All" : "Select All")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
                             .controlSize(.large)
                         }
                         Button {
@@ -237,6 +266,7 @@ struct ReportListView: View {
         case .none: ""
         case .compare: "Select 2 reports to compare (\(selectedReports.count)/2)"
         case .export: "Select reports to export (\(selectedReports.count) selected)"
+        case .delete: "Select reports to delete (\(selectedReports.count) selected)"
         }
     }
 
@@ -258,6 +288,22 @@ struct ReportListView: View {
         let selected = store.reports.filter { selectedReports.contains($0.id) }
         guard selected.count == 2 else { return nil }
         return (selected[0], selected[1])
+    }
+
+    private func selectAll() {
+        if selectedReports.count == store.reports.count {
+            selectedReports.removeAll()
+        } else {
+            selectedReports = Set(store.reports.map(\.id))
+        }
+    }
+
+    private func deleteSelected() {
+        let toDelete = store.reports.filter { selectedReports.contains($0.id) }
+        for report in toDelete {
+            store.delete(report)
+        }
+        exitSelectionMode()
     }
 
     // MARK: - Export

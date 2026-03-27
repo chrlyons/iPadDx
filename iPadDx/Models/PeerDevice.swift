@@ -29,7 +29,8 @@ class PeerDevice: Identifiable, Hashable {
     var connectionState: ConnectionState = .discovered
     var metrics: DiagnosticMetrics = .init()
     var role: DeviceRole = .none
-    var stableDeviceID: UUID? // exchanged via peerInfo, persisted per-device
+    var stableDeviceID: UUID?
+    var bonjourName: String? // the actual Bonjour service name (may differ from display name)
     var chipFamily: String?
     var model: String?
 

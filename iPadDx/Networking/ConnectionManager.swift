@@ -1,6 +1,46 @@
 import Foundation
 import Network
 
+/// Shared TLS-PSK configuration matching the Pearson Q-Interactive Assess connection model
+enum ConnectionSecurity {
+    /// Create TLS-PSK parameters for Network.framework connections
+    static func tlsParameters() -> NWParameters {
+        let tlsOptions = NWProtocolTLS.Options()
+        let secOptions = tlsOptions.securityProtocolOptions
+
+        // Configure PSK ciphersuite
+        sec_protocol_options_append_tls_ciphersuite(
+            secOptions,
+            tls_ciphersuite_t(rawValue: UInt16(TLS_PSK_WITH_AES_128_GCM_SHA256))!
+        )
+
+        // Add the pre-shared key and identity
+        let pskBytes = Array("iPadDx-2026-diagnostic-psk".utf8)
+        let identityBytes = Array("iPadDx".utf8)
+
+        pskBytes.withUnsafeBufferPointer { pskPtr in
+            identityBytes.withUnsafeBufferPointer { idPtr in
+                let pskDD = pskPtr.baseAddress!.withMemoryRebound(to: UInt8.self, capacity: pskPtr.count) { ptr in
+                    DispatchData(bytes: UnsafeBufferPointer(start: ptr, count: pskPtr.count))
+                }
+                let idDD = idPtr.baseAddress!.withMemoryRebound(to: UInt8.self, capacity: idPtr.count) { ptr in
+                    DispatchData(bytes: UnsafeBufferPointer(start: ptr, count: idPtr.count))
+                }
+                sec_protocol_options_add_pre_shared_key(
+                    secOptions,
+                    pskDD as __DispatchData,
+                    idDD as __DispatchData
+                )
+            }
+        }
+
+        let tcpOptions = NWProtocolTCP.Options()
+        let params = NWParameters(tls: tlsOptions, tcp: tcpOptions)
+        params.includePeerToPeer = true
+        return params
+    }
+}
+
 @Observable
 class ConnectionManager {
     var connection: NWConnection?
@@ -17,8 +57,7 @@ class ConnectionManager {
 
     func connect(to endpoint: NWEndpoint, handler: @escaping (Data) -> Void) {
         receiveHandler = handler
-        let params = NWParameters.tcp
-        params.includePeerToPeer = true
+        let params = ConnectionSecurity.tlsParameters()
         let conn = NWConnection(to: endpoint, using: params)
         connection = conn
         setupConnection(conn)

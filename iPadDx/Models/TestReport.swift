@@ -7,6 +7,37 @@ struct TestReport: Codable, Identifiable {
     let remoteDevice: DeviceInfo
     let results: TestSuiteResults
     let durationSeconds: TimeInterval
+    let errors: [String]?
+
+    /// Support decoding reports that don't have errors yet
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        date = try container.decode(Date.self, forKey: .date)
+        localDevice = try container.decode(DeviceInfo.self, forKey: .localDevice)
+        remoteDevice = try container.decode(DeviceInfo.self, forKey: .remoteDevice)
+        results = try container.decode(TestSuiteResults.self, forKey: .results)
+        durationSeconds = try container.decode(TimeInterval.self, forKey: .durationSeconds)
+        errors = try container.decodeIfPresent([String].self, forKey: .errors)
+    }
+
+    init(
+        id: UUID,
+        date: Date,
+        localDevice: DeviceInfo,
+        remoteDevice: DeviceInfo,
+        results: TestSuiteResults,
+        durationSeconds: TimeInterval,
+        errors: [String]? = nil
+    ) {
+        self.id = id
+        self.date = date
+        self.localDevice = localDevice
+        self.remoteDevice = remoteDevice
+        self.results = results
+        self.durationSeconds = durationSeconds
+        self.errors = errors
+    }
 }
 
 struct DeviceInfo: Codable {
