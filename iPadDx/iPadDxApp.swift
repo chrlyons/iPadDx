@@ -10,6 +10,14 @@ struct iPadDxApp: App {
             ContentView()
                 .environment(bonjourService)
                 .environment(reportStore)
+                .onAppear {
+                    bonjourService.onReportReceived = { [weak reportStore] data in
+                        guard let store = reportStore,
+                              let report = store.decodeFromSync(data)
+                        else { return }
+                        store.importRemoteReport(report)
+                    }
+                }
         }
     }
 }

@@ -12,6 +12,7 @@ class BonjourService {
     var statusMessage: String = "Idle"
     var localRole: DeviceRole = .none
     var remoteTestInProgress: Bool = false
+    var onReportReceived: ((Data) -> Void)?
 
     var localDeviceName: String {
         // Use user-set name if available, otherwise fall back to system name
@@ -157,6 +158,9 @@ class BonjourService {
         statusMessage = "Connecting to \(peer.name)..."
 
         let manager = ConnectionManager()
+        manager.onConnectionLost = { [weak self] in
+            self?.handleConnectionLost()
+        }
         connectionManager = manager
 
         let engine = DiagnosticEngine(connectionManager: manager, metrics: peer.metrics)
@@ -168,6 +172,12 @@ class BonjourService {
             if case let .testSuiteStatus(running, _) = msg {
                 self?.remoteTestInProgress = running
             }
+        }
+        engine.onReportReceived = { [weak self] data in
+            self?.onReportReceived?(data)
+        }
+        engine.onRemoteDisconnect = { [weak self] in
+            self?.handleRemoteDisconnect()
         }
         diagnosticEngine = engine
 
@@ -197,16 +207,68 @@ class BonjourService {
         }
     }
 
+    func sendReport(_ reportData: Data) {
+        connectionManager?.send(.reportSync(reportJSON: reportData))
+    }
+
     func disconnect() {
-        diagnosticEngine?.stop()
+        guard let manager = connectionManager else { return }
+        // Send disconnect message then delay TCP cancel so it can flush
+        manager.send(.disconnect)
+        let engine = diagnosticEngine
+
+        // Clear all state and callbacks immediately
         diagnosticEngine = nil
-        connectionManager?.disconnect()
         connectionManager = nil
         connectedPeer?.connectionState = .disconnected
         connectedPeer = nil
         localRole = .none
         remoteTestInProgress = false
         statusMessage = "Disconnected"
+
+        engine?.onRemoteDisconnect = nil
+        engine?.onTestSuiteStatus = nil
+        engine?.onReportReceived = nil
+        engine?.stop()
+        manager.onConnectionLost = nil
+
+        // Delay TCP cancel so .disconnect message flushes
+        Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            manager.disconnect()
+        }
+    }
+
+    func handleRemoteDisconnect() {
+        cleanUp(status: "Remote device disconnected")
+    }
+
+    func handleConnectionLost() {
+        cleanUp(status: "Connection lost")
+    }
+
+    private func cleanUp(status: String) {
+        guard diagnosticEngine != nil || connectionManager != nil else { return }
+
+        let engine = diagnosticEngine
+        let manager = connectionManager
+
+        // Clear all references first so callbacks can't re-trigger
+        diagnosticEngine = nil
+        connectionManager = nil
+        connectedPeer?.connectionState = .disconnected
+        connectedPeer = nil
+        localRole = .none
+        remoteTestInProgress = false
+        statusMessage = status
+
+        // Now safely tear down the old objects
+        engine?.onRemoteDisconnect = nil
+        engine?.onTestSuiteStatus = nil
+        engine?.onReportReceived = nil
+        engine?.stop()
+        manager?.onConnectionLost = nil
+        manager?.disconnect()
     }
 
     func startAll() {
@@ -260,6 +322,9 @@ class BonjourService {
         statusMessage = "Incoming connection..."
 
         let manager = ConnectionManager()
+        manager.onConnectionLost = { [weak self] in
+            self?.handleConnectionLost()
+        }
         connectionManager = manager
 
         let engine = DiagnosticEngine(connectionManager: manager, metrics: peer.metrics)
@@ -278,6 +343,12 @@ class BonjourService {
                     }
                 }
             }
+        }
+        engine.onReportReceived = { [weak self] data in
+            self?.onReportReceived?(data)
+        }
+        engine.onRemoteDisconnect = { [weak self] in
+            self?.handleRemoteDisconnect()
         }
         diagnosticEngine = engine
 

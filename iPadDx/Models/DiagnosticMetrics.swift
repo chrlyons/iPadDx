@@ -71,6 +71,7 @@ class DiagnosticMetrics {
     var peerDeviceName: String?
     var peerOSVersion: String?
     var peerModel: String?
+    var peerModelNumber: String?
 
     // System
     var batteryLevel: Float = -1 // 0.0–1.0, -1 = unknown

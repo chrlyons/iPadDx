@@ -6,10 +6,12 @@ enum DiagnosticMessage: Codable {
     case throughputStart(testID: UUID, byteCount: Int)
     case throughputData(testID: UUID)
     case throughputAck(testID: UUID, bytesReceived: Int, duration: TimeInterval)
-    case peerInfo(deviceName: String, osVersion: String, model: String)
+    case peerInfo(deviceName: String, osVersion: String, model: String, modelNumber: String)
     case testPing(id: UUID, sequence: Int, timestamp: TimeInterval)
     case testPong(id: UUID, sequence: Int, originalTimestamp: TimeInterval)
     case testSuiteStatus(running: Bool, phase: String)
+    case reportSync(reportJSON: Data)
+    case disconnect
 
     // MARK: - Serialization
 

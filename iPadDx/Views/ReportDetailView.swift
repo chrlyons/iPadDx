@@ -47,7 +47,7 @@ struct ReportDetailView: View {
                     Task.detached {
                         let url = await store.exportCSV(for: report)
                         await MainActor.run {
-                            if let url { exportItem = ExportItem(url: url) }
+                            if let url { exportItem = ExportItem(urls: [url]) }
                         }
                     }
                 } label: {
@@ -56,7 +56,7 @@ struct ReportDetailView: View {
             }
         }
         .sheet(item: $exportItem) { item in
-            ShareSheet(activityItems: [item.url])
+            ShareSheet(activityItems: item.urls)
         }
     }
 
@@ -223,7 +223,11 @@ struct ReportDetailView: View {
         VStack(spacing: 4) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
             Text(info.name).font(.subheadline).fontWeight(.medium)
-            Text(info.model).font(.caption).foregroundStyle(.secondary)
+            Text(info.displayModel).font(.caption).foregroundStyle(.secondary)
+            if !info.modelNumber.isEmpty {
+                Text(info.modelNumber).font(.caption2).foregroundStyle(.tertiary)
+            }
+            Text(info.osVersion).font(.caption2).foregroundStyle(.tertiary)
             Text(info.chipFamily)
                 .font(.caption).fontWeight(.bold)
                 .padding(.horizontal, 8).padding(.vertical, 2)

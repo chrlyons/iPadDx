@@ -49,7 +49,7 @@ struct DeviceListView: View {
                                 HStack(spacing: 4) {
                                     Text(connected.connectionState.rawValue)
                                     Text("·")
-                                    Text("You: \(service.localRole.rawValue)")
+                                    Text(service.localRole.rawValue)
                                         .foregroundStyle(service.localRole == .controller ? .blue : .orange)
                                 }
                                 .font(.caption)

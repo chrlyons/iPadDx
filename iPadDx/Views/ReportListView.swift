@@ -1,11 +1,28 @@
 import SwiftUI
 
+enum ActiveSheet: Identifiable {
+    case export(urls: [URL])
+    case compare(reportA: TestReport, reportB: TestReport)
+
+    var id: String {
+        switch self {
+        case .export: "export"
+        case .compare: "compare"
+        }
+    }
+}
+
 struct ReportListView: View {
     @Environment(ReportStore.self) private var store
-    @State private var selectedForCompare: Set<UUID> = []
-    @State private var compareMode = false
-    @State private var showComparison = false
-    @State private var exportItem: ExportItem?
+    @State private var selectedReports: Set<UUID> = []
+    @State private var selectionMode: SelectionMode = .none
+    @State private var activeSheet: ActiveSheet?
+
+    enum SelectionMode {
+        case none
+        case compare
+        case export
+    }
 
     var body: some View {
         List {
@@ -27,38 +44,39 @@ struct ReportListView: View {
                 .listRowBackground(Color.clear)
             } else {
                 ForEach(store.reports) { report in
-                    NavigationLink(destination: ReportDetailView(report: report)) {
-                        reportRow(report)
-                    }
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            store.delete(report)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                    .swipeActions(edge: .leading) {
+                    if selectionMode != .none {
                         Button {
-                            Task.detached {
-                                let url = await store.exportCSV(for: report)
-                                await MainActor.run {
-                                    if let url { exportItem = ExportItem(url: url) }
-                                }
-                            }
+                            toggleSelection(report.id)
                         } label: {
-                            Label("Export", systemImage: "square.and.arrow.up")
+                            HStack(spacing: 12) {
+                                Image(systemName: selectedReports.contains(report.id)
+                                    ? "checkmark.circle.fill" : "circle")
+                                    .font(.title3)
+                                    .foregroundStyle(selectedReports.contains(report.id) ? .blue : .secondary)
+                                reportRow(report)
+                            }
                         }
-                        .tint(.blue)
-                    }
-                    .overlay(alignment: .topTrailing) {
-                        if compareMode {
-                            Image(systemName: selectedForCompare
-                                .contains(report.id) ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(selectedForCompare.contains(report.id) ? .blue : .secondary)
-                                .padding(8)
-                                .onTapGesture {
-                                    toggleCompareSelection(report.id)
-                                }
+                        .listRowBackground(
+                            selectedReports.contains(report.id) ? Color.blue.opacity(0.08) : nil
+                        )
+                    } else {
+                        NavigationLink(destination: ReportDetailView(report: report)) {
+                            reportRow(report)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                store.delete(report)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                exportSingle(report)
+                            } label: {
+                                Label("Export", systemImage: "square.and.arrow.up")
+                            }
+                            .tint(.blue)
                         }
                     }
                 }
@@ -66,41 +84,100 @@ struct ReportListView: View {
         }
         .navigationTitle("Saved Reports")
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                if store.reports.count >= 2 {
-                    Button(compareMode ? "Done" : "Compare") {
-                        compareMode.toggle()
-                        if !compareMode {
-                            selectedForCompare.removeAll()
+            ToolbarItemGroup(placement: .primaryAction) {
+                if !store.reports.isEmpty {
+                    Menu {
+                        if selectionMode == .none {
+                            Button {
+                                selectionMode = .compare
+                                selectedReports.removeAll()
+                            } label: {
+                                Label("Compare Two", systemImage: "arrow.left.arrow.right")
+                            }
+                            .disabled(store.reports.count < 2)
+
+                            Button {
+                                selectionMode = .export
+                                selectedReports.removeAll()
+                            } label: {
+                                Label("Export Selected", systemImage: "square.and.arrow.up")
+                            }
+
+                            Divider()
+
+                            Button {
+                                exportAll()
+                            } label: {
+                                Label("Export All (\(store.reports.count))", systemImage: "doc.on.doc")
+                            }
+                        } else {
+                            Button("Done") {
+                                exitSelectionMode()
+                            }
                         }
-                    }
-                }
-            }
-            ToolbarItem(placement: .bottomBar) {
-                if compareMode, selectedForCompare.count == 2 {
-                    Button {
-                        showComparison = true
                     } label: {
-                        Label("Compare Selected", systemImage: "arrow.left.arrow.right")
+                        Image(systemName: selectionMode != .none ? "xmark.circle.fill" : "ellipsis.circle")
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             }
         }
-        .sheet(item: $exportItem) { item in
-            ShareSheet(activityItems: [item.url])
-                .presentationDetents([.medium, .large])
+        .safeAreaInset(edge: .bottom) {
+            if selectionMode != .none {
+                VStack(spacing: 8) {
+                    Text(selectionModeLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 12) {
+                        if selectionMode == .compare, selectedReports.count == 2 {
+                            Button {
+                                if let pair = getSelectedReports() {
+                                    activeSheet = .compare(reportA: pair.0, reportB: pair.1)
+                                }
+                            } label: {
+                                Label("Compare", systemImage: "arrow.left.arrow.right")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                        }
+                        if selectionMode == .export, !selectedReports.isEmpty {
+                            Button {
+                                exportSelected()
+                            } label: {
+                                Label("Export (\(selectedReports.count))", systemImage: "square.and.arrow.up")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                        }
+                        Button {
+                            exitSelectionMode()
+                        } label: {
+                            Text("Cancel")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                    }
+                }
+                .padding()
+                .background(.ultraThinMaterial)
+            }
         }
-        .sheet(isPresented: $showComparison) {
-            if let reports = getSelectedReports() {
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case let .export(urls):
+                ShareSheet(activityItems: urls)
+                    .presentationDetents([.medium, .large])
+            case let .compare(reportA, reportB):
                 NavigationStack {
-                    ReportComparisonView(reportA: reports.0, reportB: reports.1)
+                    ReportComparisonView(reportA: reportA, reportB: reportB)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") {
-                                    showComparison = false
-                                    compareMode = false
-                                    selectedForCompare.removeAll()
+                                    activeSheet = nil
+                                    exitSelectionMode()
                                 }
                             }
                         }
@@ -109,33 +186,33 @@ struct ReportListView: View {
         }
     }
 
+    // MARK: - Row
+
     private func reportRow(_ report: TestReport) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(report.localDevice.chipFamily)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
+                    .font(.caption).fontWeight(.semibold)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(.blue.opacity(0.1), in: Capsule())
                 Image(systemName: "arrow.left.arrow.right")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(.secondary)
                 Text(report.remoteDevice.chipFamily)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
+                    .font(.caption).fontWeight(.semibold)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(.purple.opacity(0.1), in: Capsule())
                 Spacer()
                 Text(report.results.overallGrade)
-                    .font(.subheadline)
-                    .fontWeight(.bold)
+                    .font(.subheadline).fontWeight(.bold)
                     .foregroundStyle(gradeColor(report.results.overallGrade))
             }
 
-            Text("\(report.localDevice.name) \u{2194} \(report.remoteDevice.name)")
-                .font(.subheadline)
+            HStack {
+                Text(report.localDevice.displayModel)
+                Text("\u{2194}")
+                Text(report.remoteDevice.displayModel)
+            }
+            .font(.caption)
 
             HStack {
                 Text(report.date, style: .date)
@@ -143,24 +220,75 @@ struct ReportListView: View {
                 Spacer()
                 Text(String(format: "%.1fs", report.durationSeconds))
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
     }
 
-    private func toggleCompareSelection(_ id: UUID) {
-        if selectedForCompare.contains(id) {
-            selectedForCompare.remove(id)
-        } else if selectedForCompare.count < 2 {
-            selectedForCompare.insert(id)
+    // MARK: - Selection
+
+    private var selectionModeLabel: String {
+        switch selectionMode {
+        case .none: ""
+        case .compare: "Select 2 reports to compare (\(selectedReports.count)/2)"
+        case .export: "Select reports to export (\(selectedReports.count) selected)"
         }
     }
 
+    private func toggleSelection(_ id: UUID) {
+        if selectedReports.contains(id) {
+            selectedReports.remove(id)
+        } else {
+            if selectionMode == .compare, selectedReports.count >= 2 { return }
+            selectedReports.insert(id)
+        }
+    }
+
+    private func exitSelectionMode() {
+        selectionMode = .none
+        selectedReports.removeAll()
+    }
+
     private func getSelectedReports() -> (TestReport, TestReport)? {
-        let selected = store.reports.filter { selectedForCompare.contains($0.id) }
+        let selected = store.reports.filter { selectedReports.contains($0.id) }
         guard selected.count == 2 else { return nil }
         return (selected[0], selected[1])
+    }
+
+    // MARK: - Export
+
+    private func exportSingle(_ report: TestReport) {
+        Task {
+            if let url = store.exportCSV(for: report) {
+                activeSheet = .export(urls: [url])
+            }
+        }
+    }
+
+    private func exportSelected() {
+        let selected = store.reports.filter { selectedReports.contains($0.id) }
+        exportReports(selected)
+    }
+
+    private func exportAll() {
+        exportReports(store.reports)
+    }
+
+    private func exportReports(_ reports: [TestReport]) {
+        Task {
+            var collectedURLs: [URL] = []
+            for report in reports {
+                if let url = store.exportCSV(for: report) {
+                    collectedURLs.append(url)
+                }
+            }
+            if reports.count > 1, let summaryURL = store.exportSummaryCSV(for: reports) {
+                collectedURLs.insert(summaryURL, at: 0)
+            }
+            if !collectedURLs.isEmpty {
+                activeSheet = .export(urls: collectedURLs)
+            }
+        }
     }
 
     private func gradeColor(_ grade: String) -> Color {
@@ -175,7 +303,7 @@ struct ReportListView: View {
 
 struct ExportItem: Identifiable {
     let id = UUID()
-    let url: URL
+    let urls: [URL]
 }
 
 struct ShareSheet: UIViewControllerRepresentable {

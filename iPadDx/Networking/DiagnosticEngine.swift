@@ -9,6 +9,8 @@ class DiagnosticEngine {
     weak var peer: PeerDevice?
     var onPeerNameUpdated: ((String) -> Void)?
     var onTestSuiteStatus: ((DiagnosticMessage) -> Void)?
+    var onReportReceived: ((Data) -> Void)?
+    var onRemoteDisconnect: (() -> Void)?
     var testSuiteRunner: TestSuiteRunner?
 
     private var connectionManager: ConnectionManager
@@ -65,11 +67,11 @@ class DiagnosticEngine {
             metrics.pongsReceived += 1
             metrics.appendLatency(rtt, maxHistory: maxLatencyHistory)
 
-        case let .peerInfo(deviceName, osVersion, model):
+        case let .peerInfo(deviceName, osVersion, model, modelNumber):
             metrics.peerDeviceName = deviceName
             metrics.peerOSVersion = osVersion
             metrics.peerModel = model
-            // Update the peer's display name with the real device name
+            metrics.peerModelNumber = modelNumber
             peer?.name = deviceName
             onPeerNameUpdated?(deviceName)
 
@@ -105,8 +107,13 @@ class DiagnosticEngine {
             testSuiteRunner?.handleTestMessage(message)
 
         case .testSuiteStatus:
-            // Forwarded to BonjourService via callback
             onTestSuiteStatus?(message)
+
+        case let .reportSync(reportJSON):
+            onReportReceived?(reportJSON)
+
+        case .disconnect:
+            onRemoteDisconnect?()
         }
 
         // Only update path/bytes periodically to avoid excessive re-renders during bursts
@@ -179,68 +186,13 @@ class DiagnosticEngine {
     }
 
     func sendPeerInfo() {
-        let device = UIDevice.current
-        let name: String = if let custom = UserDefaults.standard.string(forKey: "deviceName"), !custom.isEmpty {
-            custom
-        } else {
-            device.name
-        }
+        let info = DeviceIdentifier.localDeviceInfo()
         connectionManager.send(.peerInfo(
-            deviceName: name,
-            osVersion: "\(device.systemName) \(device.systemVersion)",
-            model: Self.deviceModelIdentifier()
+            deviceName: info.name,
+            osVersion: info.osVersion,
+            model: info.model,
+            modelNumber: info.modelNumber
         ))
-    }
-
-    private static func deviceModelIdentifier() -> String {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let identifier = withUnsafePointer(to: &systemInfo.machine) {
-            $0.withMemoryRebound(to: CChar.self, capacity: 1) {
-                String(validatingUTF8: $0) ?? "Unknown"
-            }
-        }
-        return Self.mapModelName(identifier)
-    }
-
-    static func modelName(for identifier: String) -> String {
-        mapModelName(identifier)
-    }
-
-    private static func mapModelName(_ identifier: String) -> String {
-        let mapping: [String: String] = [
-            "iPad14,1": "iPad mini (6th gen)",
-            "iPad14,2": "iPad mini (6th gen)",
-            "iPad14,3": "iPad Pro 11-inch (4th gen)",
-            "iPad14,4": "iPad Pro 11-inch (4th gen)",
-            "iPad14,5": "iPad Pro 12.9-inch (6th gen)",
-            "iPad14,6": "iPad Pro 12.9-inch (6th gen)",
-            "iPad14,8": "iPad Air (M2, 11-inch)",
-            "iPad14,9": "iPad Air (M2, 11-inch)",
-            "iPad14,10": "iPad Air (M2, 13-inch)",
-            "iPad14,11": "iPad Air (M2, 13-inch)",
-            "iPad13,1": "iPad Air (4th gen)",
-            "iPad13,2": "iPad Air (4th gen)",
-            "iPad13,4": "iPad Pro 11-inch (3rd gen)",
-            "iPad13,5": "iPad Pro 11-inch (3rd gen)",
-            "iPad13,6": "iPad Pro 11-inch (3rd gen)",
-            "iPad13,7": "iPad Pro 11-inch (3rd gen)",
-            "iPad13,8": "iPad Pro 12.9-inch (5th gen)",
-            "iPad13,9": "iPad Pro 12.9-inch (5th gen)",
-            "iPad13,10": "iPad Pro 12.9-inch (5th gen)",
-            "iPad13,11": "iPad Pro 12.9-inch (5th gen)",
-            "iPad13,16": "iPad Air (5th gen)",
-            "iPad13,17": "iPad Air (5th gen)",
-            "iPad13,18": "iPad (10th gen)",
-            "iPad13,19": "iPad (10th gen)",
-            "iPad16,1": "iPad Pro 11-inch (M4)",
-            "iPad16,2": "iPad Pro 11-inch (M4)",
-            "iPad16,3": "iPad Pro 13-inch (M4)",
-            "iPad16,4": "iPad Pro 13-inch (M4)",
-            "iPad16,5": "iPad Air 11-inch (M3)",
-            "iPad16,6": "iPad Air 13-inch (M3)",
-        ]
-        return mapping[identifier] ?? identifier
     }
 
     private func updatePathInfo() {

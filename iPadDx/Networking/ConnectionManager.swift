@@ -11,6 +11,7 @@ class ConnectionManager {
         _totalBytesReceived
     }
 
+    var onConnectionLost: (() -> Void)?
     private var receiveHandler: ((Data) -> Void)?
     private let queue = DispatchQueue(label: "com.ipadconnection.connection")
 
@@ -67,7 +68,10 @@ class ConnectionManager {
                 case .ready:
                     self?.isConnected = true
                 case .failed, .cancelled:
-                    self?.isConnected = false
+                    if self?.isConnected == true {
+                        self?.isConnected = false
+                        self?.onConnectionLost?()
+                    }
                 default:
                     break
                 }

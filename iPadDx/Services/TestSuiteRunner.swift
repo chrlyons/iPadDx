@@ -78,7 +78,7 @@ class TestSuiteRunner {
     var livePingCount: Int = 0
 
     private let connectionManager: ConnectionManager
-    private let remoteDeviceInfo: DeviceInfo
+    private let metrics: DiagnosticMetrics
     private var pendingTestPongs: [UUID: (sequence: Int, timestamp: TimeInterval)] = [:]
     private var receivedTestPongs: [(sequence: Int, rtt: Double)] = []
     private var suiteStartTime: Date?
@@ -89,11 +89,7 @@ class TestSuiteRunner {
 
     init(connectionManager: ConnectionManager, metrics: DiagnosticMetrics) {
         self.connectionManager = connectionManager
-        remoteDeviceInfo = DeviceInfo(
-            name: metrics.peerDeviceName ?? "Unknown",
-            model: metrics.peerModel ?? "Unknown",
-            osVersion: metrics.peerOSVersion ?? "Unknown"
-        )
+        self.metrics = metrics
     }
 
     func handleTestMessage(_ message: DiagnosticMessage) {
@@ -226,7 +222,7 @@ class TestSuiteRunner {
             id: UUID(),
             date: Date(),
             localDevice: buildLocalDeviceInfo(),
-            remoteDevice: remoteDeviceInfo,
+            remoteDevice: buildRemoteDeviceInfo(),
             results: TestSuiteResults(
                 latencyBurst: latency,
                 sustainedThroughput: throughput,
@@ -510,23 +506,17 @@ class TestSuiteRunner {
         )
     }
 
-    private func buildLocalDeviceInfo() -> DeviceInfo {
-        let device = UIDevice.current
-        let name: String = if let custom = UserDefaults.standard.string(forKey: "deviceName"), !custom.isEmpty {
-            custom
-        } else {
-            device.name
-        }
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let identifier = withUnsafePointer(to: &systemInfo.machine) {
-            $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(validatingUTF8: $0) ?? "Unknown" }
-        }
-        return DeviceInfo(
-            name: name,
-            model: DiagnosticEngine.modelName(for: identifier),
-            osVersion: "\(device.systemName) \(device.systemVersion)"
+    private func buildRemoteDeviceInfo() -> DeviceInfo {
+        DeviceInfo(
+            name: metrics.peerDeviceName ?? "Unknown",
+            model: metrics.peerModel ?? "Unknown",
+            modelNumber: metrics.peerModelNumber ?? "",
+            osVersion: metrics.peerOSVersion ?? "Unknown"
         )
+    }
+
+    private func buildLocalDeviceInfo() -> DeviceInfo {
+        DeviceIdentifier.localDeviceInfo()
     }
 
     private func computeGrade(

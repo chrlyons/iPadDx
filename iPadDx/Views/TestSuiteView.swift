@@ -213,10 +213,14 @@ struct TestSuiteView: View {
                 Button {
                     if let report = runner.lastReport {
                         reportStore.save(report)
+                        // Auto-sync to the connected peer
+                        if let data = reportStore.encodeForSync(report) {
+                            service.sendReport(data)
+                        }
                         showSavedAlert = true
                     }
                 } label: {
-                    Label("Save Report", systemImage: "square.and.arrow.down")
+                    Label("Save & Sync", systemImage: "square.and.arrow.down")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -371,7 +375,11 @@ struct TestSuiteView: View {
         VStack(spacing: 4) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
             Text(info.name).font(.subheadline).fontWeight(.medium)
-            Text(info.model).font(.caption).foregroundStyle(.secondary)
+            Text(info.displayModel).font(.caption).foregroundStyle(.secondary)
+            if !info.modelNumber.isEmpty {
+                Text(info.modelNumber).font(.caption2).foregroundStyle(.tertiary)
+            }
+            Text(info.osVersion).font(.caption2).foregroundStyle(.tertiary)
             Text(info.chipFamily).font(.caption).fontWeight(.semibold).foregroundStyle(.blue)
         }
     }

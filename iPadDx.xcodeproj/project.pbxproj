@@ -29,6 +29,8 @@
 		A10020 /* ReportDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022 /* ReportDetailView.swift */; };
 		A10021 /* ReportComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10023 /* ReportComparisonView.swift */; };
 		A10022 /* SystemMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10024 /* SystemMonitor.swift */; };
+		A10023 /* ReportEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10025 /* ReportEntity.swift */; };
+		A10024 /* DeviceIdentifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026 /* DeviceIdentifier.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -57,6 +59,8 @@
 		B10022 /* ReportDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportDetailView.swift; sourceTree = "<group>"; };
 		B10023 /* ReportComparisonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportComparisonView.swift; sourceTree = "<group>"; };
 		B10024 /* SystemMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemMonitor.swift; sourceTree = "<group>"; };
+		B10025 /* ReportEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportEntity.swift; sourceTree = "<group>"; };
+		B10026 /* DeviceIdentifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentifier.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +104,7 @@
 				B10009 /* DiagnosticMetrics.swift */,
 				B10010 /* DiagnosticMessage.swift */,
 				B10017 /* TestReport.swift */,
+				B10025 /* ReportEntity.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -145,6 +150,7 @@
 				B10018 /* ReportStore.swift */,
 				B10019 /* TestSuiteRunner.swift */,
 				B10024 /* SystemMonitor.swift */,
+				B10026 /* DeviceIdentifier.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -239,6 +245,8 @@
 				A10020 /* ReportDetailView.swift in Sources */,
 				A10021 /* ReportComparisonView.swift in Sources */,
 				A10022 /* SystemMonitor.swift in Sources */,
+				A10023 /* ReportEntity.swift in Sources */,
+				A10024 /* DeviceIdentifier.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -84,7 +84,9 @@ enum SystemMonitor {
             vm_size_t(Int(threadCount) * MemoryLayout<thread_t>.stride)
         )
 
-        return totalUsage
+        // Normalize to 0-100% by dividing by number of active CPU cores
+        let coreCount = Double(ProcessInfo.processInfo.activeProcessorCount)
+        return min(totalUsage / max(coreCount, 1), 100)
     }
 
     // MARK: - Memory Usage via Mach kernel
