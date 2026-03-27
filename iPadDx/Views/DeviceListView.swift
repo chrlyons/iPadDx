@@ -116,6 +116,20 @@ struct DeviceListView: View {
                         }
                     }
                 }
+                Button {
+                    detailSelection = .analytics
+                } label: {
+                    HStack {
+                        Image(systemName: "chart.bar.xaxis")
+                            .foregroundStyle(.purple)
+                        Text("Analytics")
+                        Spacer()
+                        if detailSelection == .analytics {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
             } header: {
                 Text("Reports")
             }

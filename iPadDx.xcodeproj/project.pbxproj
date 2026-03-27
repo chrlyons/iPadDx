@@ -31,6 +31,7 @@
 		A10022 /* SystemMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10024 /* SystemMonitor.swift */; };
 		A10023 /* ReportEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10025 /* ReportEntity.swift */; };
 		A10024 /* DeviceIdentifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026 /* DeviceIdentifier.swift */; };
+		A10025 /* ReportAnalyticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027 /* ReportAnalyticsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -61,6 +62,7 @@
 		B10024 /* SystemMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemMonitor.swift; sourceTree = "<group>"; };
 		B10025 /* ReportEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportEntity.swift; sourceTree = "<group>"; };
 		B10026 /* DeviceIdentifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentifier.swift; sourceTree = "<group>"; };
+		B10027 /* ReportAnalyticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportAnalyticsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -132,6 +134,7 @@
 				B10021 /* ReportListView.swift */,
 				B10022 /* ReportDetailView.swift */,
 				B10023 /* ReportComparisonView.swift */,
+				B10027 /* ReportAnalyticsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -247,6 +250,7 @@
 				A10022 /* SystemMonitor.swift in Sources */,
 				A10023 /* ReportEntity.swift in Sources */,
 				A10024 /* DeviceIdentifier.swift in Sources */,
+				A10025 /* ReportAnalyticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

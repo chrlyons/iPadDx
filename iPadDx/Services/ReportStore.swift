@@ -128,14 +128,14 @@ class ReportStore {
         Local Device
         Name,\(report.localDevice.name)
         Model,\(report.localDevice.displayModel)
-        Model #,\(report.localDevice.modelNumber)
+        Model #,"\(report.localDevice.modelNumber)"
         Chip,\(report.localDevice.chipFamily)
         OS,\(report.localDevice.osVersion)
 
         Remote Device
         Name,\(report.remoteDevice.name)
         Model,\(report.remoteDevice.displayModel)
-        Model #,\(report.remoteDevice.modelNumber)
+        Model #,"\(report.remoteDevice.modelNumber)"
         Chip,\(report.remoteDevice.chipFamily)
         OS,\(report.remoteDevice.osVersion)
 
@@ -244,12 +244,12 @@ class ReportStore {
                 ISO8601DateFormatter().string(from: r.date),
                 csvEscape(r.localDevice.name),
                 csvEscape(r.localDevice.displayModel),
-                r.localDevice.modelNumber,
+                csvEscape(r.localDevice.modelNumber),
                 r.localDevice.chipFamily,
                 r.localDevice.osVersion,
                 csvEscape(r.remoteDevice.name),
                 csvEscape(r.remoteDevice.displayModel),
-                r.remoteDevice.modelNumber,
+                csvEscape(r.remoteDevice.modelNumber),
                 r.remoteDevice.chipFamily,
                 r.remoteDevice.osVersion,
                 // Overall

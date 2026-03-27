@@ -3,6 +3,7 @@ import SwiftUI
 enum DetailView: Hashable {
     case dashboard
     case reports
+    case analytics
 }
 
 struct ContentView: View {
@@ -40,6 +41,8 @@ struct ContentView: View {
                     }
                 case .reports:
                     ReportListView()
+                case .analytics:
+                    ReportAnalyticsView()
                 }
             }
         }
