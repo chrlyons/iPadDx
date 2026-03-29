@@ -16,6 +16,7 @@ class BonjourService {
     var appMode: AppMode = .standalone
     var conductorService: ConductorService?
     var agentService: AgentService?
+    private var browseRefreshTimer: Timer?
 
     var localDeviceName: String {
         // Use user-set name if available, otherwise fall back to system name
@@ -61,7 +62,7 @@ class BonjourService {
         guard !isAdvertising else { return }
 
         do {
-            let params = ConnectionSecurity.tlsParameters()
+            let params = ConnectionSecurity.tlsParameters(peerToPeer: true)
             let listener = try NWListener(using: params)
             listener.service = NWListener.Service(
                 name: localDeviceName,
@@ -107,6 +108,14 @@ class BonjourService {
     }
 
     // MARK: - Browsing
+
+    func restartBrowsing() {
+        browser?.cancel()
+        browser = nil
+        isBrowsing = false
+        discoveredPeers.removeAll()
+        startBrowsing()
+    }
 
     func startBrowsing() {
         guard !isBrowsing else { return }
@@ -159,7 +168,7 @@ class BonjourService {
         peer.connectionState = .connecting
         statusMessage = "Connecting to \(peer.name)..."
 
-        let manager = ConnectionManager()
+        let manager = ConnectionManager(label: "standalone->\(peer.name)")
         manager.onConnectionLost = { [weak self] in
             self?.handleConnectionLost()
         }
@@ -195,23 +204,20 @@ class BonjourService {
             }
         }
 
-        // Monitor connection state
+        // Wait for connection
         Task {
-            // Poll for connection ready state
-            for _ in 0 ..< 100 {
-                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-                if manager.isConnected {
-                    peer.connectionState = .connected
-                    peer.role = .responder // remote is responder
-                    localRole = .controller // we initiated, we're the controller
-                    connectedPeer = peer
-                    statusMessage = "Connected to \(peer.name) (Controller)"
-                    engine.start()
-                    return
-                }
+            let ready = await manager.waitForReady(timeout: 15)
+            guard ready else {
+                peer.connectionState = .failed
+                statusMessage = "Connection to \(peer.name) timed out"
+                return
             }
-            peer.connectionState = .failed
-            statusMessage = "Connection to \(peer.name) timed out"
+            peer.connectionState = .connected
+            peer.role = .responder // remote is responder
+            localRole = .controller // we initiated, we're the controller
+            connectedPeer = peer
+            statusMessage = "Connected to \(peer.name) (Controller)"
+            engine.start()
         }
     }
 
@@ -261,13 +267,25 @@ class BonjourService {
         cs.conductorBonjourName = localDeviceName
         conductorService = cs
         statusMessage = "Conductor Mode"
+        UIApplication.shared.isIdleTimerDisabled = true
+        // Restart browsing to clear stale mDNS entries
+        restartBrowsing()
+        // Periodically refresh browser to prune stale mDNS cache
+        browseRefreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.restartBrowsing()
+            }
+        }
     }
 
     func disableConductorMode() {
+        browseRefreshTimer?.invalidate()
+        browseRefreshTimer = nil
         conductorService?.disconnectAll()
         conductorService = nil
         appMode = .standalone
         statusMessage = "Standalone Mode"
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 
     func connectAgentFromConductor(_ peer: PeerDevice) {
@@ -278,6 +296,7 @@ class BonjourService {
 
     func enterAgentMode(conductorName: String, conductorConnection: ConnectionManager) {
         appMode = .agent
+        UIApplication.shared.isIdleTimerDisabled = true
 
         // Stop the standalone ping loop but keep the engine alive for message routing
         diagnosticEngine?.stop() // stops ping timer only
@@ -304,6 +323,7 @@ class BonjourService {
         agentService = nil
         appMode = .standalone
         statusMessage = "Standalone Mode"
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 
     // MARK: - Disconnect Handlers
@@ -395,7 +415,7 @@ class BonjourService {
         // (agent connecting back to test the conductor)
         if appMode == .conductor {
             // Set up a temporary connection for the test
-            let manager = ConnectionManager()
+            let manager = ConnectionManager(label: "conductor-reverse-test")
             let metrics = DiagnosticMetrics()
             let engine = DiagnosticEngine(connectionManager: manager, metrics: metrics)
             manager.accept(conn) { data in
@@ -404,13 +424,8 @@ class BonjourService {
                 }
             }
             Task {
-                for _ in 0 ..< 100 {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    if manager.isConnected {
-                        engine.start()
-                        return
-                    }
-                }
+                let ready = await manager.waitForReady(timeout: 15)
+                if ready { engine.start() }
             }
             return
         }
@@ -431,7 +446,7 @@ class BonjourService {
         peer.connectionState = .connecting
         statusMessage = "Incoming connection..."
 
-        let manager = ConnectionManager()
+        let manager = ConnectionManager(label: "incoming-\(initialName)")
         manager.onConnectionLost = { [weak self] in
             self?.handleConnectionLost()
         }
@@ -475,34 +490,32 @@ class BonjourService {
         }
 
         Task {
-            for _ in 0 ..< 100 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                if manager.isConnected {
-                    // Send peer info immediately so the remote side gets our chip/model
-                    engine.sendPeerInfo()
-
-                    // Wait briefly for a potential roleAssignment from a conductor.
-                    // This prevents the standalone dashboard from flashing before
-                    // the device transitions to agent mode.
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-
-                    // If we transitioned to agent mode during the wait, we're done —
-                    // peer info was already sent above
-                    guard appMode == .standalone else { return }
-
-                    peer.connectionState = .connected
-                    peer.role = .controller // remote is controller
-                    localRole = .responder // we accepted, we're the responder
-                    connectedPeer = peer
-                    statusMessage = "Connected to \(peer.name) (Responder)"
-                    engine.start()
-                    return
-                }
+            let ready = await manager.waitForReady(timeout: 15)
+            guard ready else {
+                guard appMode == .standalone else { return }
+                peer.connectionState = .failed
+                statusMessage = "Incoming connection timed out"
+                return
             }
-            // Only report failure if we're still in standalone mode
+
+            // Send peer info immediately so the remote side gets our chip/model
+            engine.sendPeerInfo()
+
+            // Wait briefly for a potential roleAssignment from a conductor.
+            // This prevents the standalone dashboard from flashing before
+            // the device transitions to agent mode.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+
+            // If we transitioned to agent mode during the wait, we're done —
+            // peer info was already sent above
             guard appMode == .standalone else { return }
-            peer.connectionState = .failed
-            statusMessage = "Incoming connection timed out"
+
+            peer.connectionState = .connected
+            peer.role = .controller // remote is controller
+            localRole = .responder // we accepted, we're the responder
+            connectedPeer = peer
+            statusMessage = "Connected to \(peer.name) (Responder)"
+            engine.start()
         }
     }
 }

@@ -326,18 +326,19 @@ struct ReportListView: View {
     }
 
     private func exportReports(_ reports: [TestReport]) {
-        Task {
-            var collectedURLs: [URL] = []
-            for report in reports {
-                if let url = store.exportCSV(for: report) {
-                    collectedURLs.append(url)
+        Task.detached {
+            var urls: [URL] = []
+            if reports.count > 1, let summaryURL = await MainActor.run(body: { store.exportSummaryCSV(for: reports) }) {
+                urls.append(summaryURL)
+            } else if let report = reports.first,
+                      let url = await MainActor.run(body: { store.exportCSV(for: report) })
+            {
+                urls.append(url)
+            }
+            await MainActor.run {
+                if !urls.isEmpty {
+                    activeSheet = .export(urls: urls)
                 }
-            }
-            if reports.count > 1, let summaryURL = store.exportSummaryCSV(for: reports) {
-                collectedURLs.insert(summaryURL, at: 0)
-            }
-            if !collectedURLs.isEmpty {
-                activeSheet = .export(urls: collectedURLs)
             }
         }
     }

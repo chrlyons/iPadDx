@@ -12,14 +12,14 @@ class ReportEntity {
     // Local device
     var localName: String
     var localModel: String
-    var localModelNumber: String
+    var localModelNumber: String?
     var localOS: String
     var localChip: String
 
     // Remote device
     var remoteName: String
     var remoteModel: String
-    var remoteModelNumber: String
+    var remoteModelNumber: String?
     var remoteOS: String
     var remoteChip: String
 

@@ -6,7 +6,15 @@ enum DiagnosticMessage: Codable {
     case throughputStart(testID: UUID, byteCount: Int)
     case throughputData(testID: UUID)
     case throughputAck(testID: UUID, bytesReceived: Int, duration: TimeInterval)
-    case peerInfo(deviceName: String, osVersion: String, model: String, modelNumber: String, stableID: UUID)
+    case peerInfo(
+        deviceName: String,
+        osVersion: String,
+        model: String,
+        modelNumber: String,
+        stableID: UUID,
+        ssid: String? = nil,
+        bssid: String? = nil
+    )
     case testPing(id: UUID, sequence: Int, timestamp: TimeInterval)
     case testPong(id: UUID, sequence: Int, originalTimestamp: TimeInterval)
     case testSuiteStatus(running: Bool, phase: String)

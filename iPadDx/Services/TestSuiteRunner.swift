@@ -113,6 +113,11 @@ class TestSuiteRunner {
         guard state == .idle || state == .completed else { return nil }
 
         SystemMonitor.enableBatteryMonitoring()
+        // Request sustained execution to prevent CPU throttling during tests
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled],
+            reason: "iPadDx test suite running"
+        )
         suiteStartTime = Date()
         batteryStart = SystemMonitor.batteryLevel()
         cpuSamples.removeAll()
@@ -263,6 +268,7 @@ class TestSuiteRunner {
         state = .completed
         currentPhase = nil
         connectionManager.send(.testSuiteStatus(running: false, phase: ""))
+        ProcessInfo.processInfo.endActivity(activity)
         return report
     }
 

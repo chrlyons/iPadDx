@@ -193,17 +193,25 @@ struct DeviceListView: View {
             // Fleet section (conductor mode only)
             if service.appMode == .conductor {
                 Section {
-                    ForEach(service.discoveredPeers) { peer in
-                        Button {
-                            service.connectAgentFromConductor(peer)
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(peer.name).font(.subheadline)
-                                    Text("Tap to add to fleet").font(.caption2).foregroundStyle(.secondary)
+                    let fleetNames = Set(service.conductorService?.fleet.map(\.peer.name) ?? [])
+                    let available = service.discoveredPeers.filter { !fleetNames.contains($0.name) }
+                    if available.isEmpty {
+                        Text("No new devices found")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(available) { peer in
+                            Button {
+                                service.connectAgentFromConductor(peer)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(peer.name).font(.subheadline)
+                                        Text("Tap to add to fleet").font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "plus.circle").foregroundStyle(.blue)
                                 }
-                                Spacer()
-                                Image(systemName: "plus.circle").foregroundStyle(.blue)
                             }
                         }
                     }

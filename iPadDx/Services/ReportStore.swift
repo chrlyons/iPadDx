@@ -21,12 +21,21 @@ class ReportStore {
             )
             modelContext = modelContainer.map { ModelContext($0) }
         } catch {
-            print("SwiftData init failed: \(error), attempting fresh database")
-            // If migration fails, try fresh (this only happens on major schema changes)
+            print("SwiftData init failed: \(error), deleting old store and retrying")
+            // Delete ALL store files so we can start fresh
+            if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                let fm = FileManager.default
+                let files = (try? fm.contentsOfDirectory(at: appSupport, includingPropertiesForKeys: nil)) ?? []
+                for file in files where file.lastPathComponent.hasPrefix("iPadDxReports") {
+                    print("Deleting: \(file.lastPathComponent)")
+                    try? fm.removeItem(at: file)
+                }
+            }
             do {
                 let config = ModelConfiguration("iPadDxReports", isStoredInMemoryOnly: false)
                 modelContainer = try ModelContainer(for: ReportEntity.self, configurations: config)
                 modelContext = modelContainer.map { ModelContext($0) }
+                print("Fresh database created successfully")
             } catch {
                 print("SwiftData fallback also failed: \(error)")
             }

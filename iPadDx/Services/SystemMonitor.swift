@@ -1,5 +1,12 @@
+import CoreLocation
 import Foundation
+import NetworkExtension
 import UIKit
+
+struct WiFiInfo {
+    let ssid: String
+    let bssid: String
+}
 
 struct SystemSnapshot {
     let batteryLevel: Float // 0.0 - 1.0
@@ -47,6 +54,20 @@ enum SystemMonitor {
         case .charging: return "Charging"
         case .full: return "Full"
         @unknown default: return "Unknown"
+        }
+    }
+
+    // MARK: - Wi-Fi Info
+
+    static func currentWiFi() async -> WiFiInfo? {
+        await withCheckedContinuation { continuation in
+            NEHotspotNetwork.fetchCurrent { network in
+                if let network {
+                    continuation.resume(returning: WiFiInfo(ssid: network.ssid, bssid: network.bssid))
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
         }
     }
 

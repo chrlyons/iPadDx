@@ -1,3 +1,4 @@
+import CoreLocation
 import SwiftUI
 
 enum DetailView: Hashable {
@@ -6,6 +7,18 @@ enum DetailView: Hashable {
     case analytics
     case conductor
     case agent
+}
+
+/// Requests location permission needed for WiFi info (SSID/BSSID)
+private class LocationDelegate: NSObject, CLLocationManagerDelegate {
+    static let shared = LocationDelegate()
+    private let manager = CLLocationManager()
+    func requestIfNeeded() {
+        manager.delegate = self
+        if manager.authorizationStatus == .notDetermined {
+            manager.requestWhenInUseAuthorization()
+        }
+    }
 }
 
 struct ContentView: View {
@@ -53,6 +66,7 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            LocationDelegate.shared.requestIfNeeded()
             if needsName {
                 showNamePrompt = true
             } else {

@@ -54,6 +54,7 @@ class ConductorService {
     var queueStatus: QueueStatus = .idle
     var completedCount: Int = 0
     var completedReports: [TestReport] = []
+    var failedPairs: [TestPair] = []
     var runningPairs: [String] = []
     var eventLog: [ConductorEvent] = []
 
@@ -85,10 +86,13 @@ class ConductorService {
     // MARK: - Fleet Management
 
     func connectToDevice(_ peer: PeerDevice) {
-        // Check if already connected
+        // Check if already in fleet (connected or connecting)
         guard !fleet.contains(where: { $0.peer.name == peer.name }) else { return }
 
-        let manager = ConnectionManager()
+        // Reset stale state from a previous failed attempt
+        peer.connectionState = .connecting
+
+        let manager = ConnectionManager(label: "conductor->\(peer.name)")
         let connection = DeviceConnection(peer: peer, connectionManager: manager)
 
         let engine = DiagnosticEngine(connectionManager: manager, metrics: peer.metrics)
@@ -120,22 +124,32 @@ class ConductorService {
 
         fleet.append(connection)
 
-        // Wait for connection then assign agent role
+        // Wait for connection then assign agent role, with one retry
         Task {
-            for _ in 0 ..< 100 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                if manager.isConnected {
-                    peer.connectionState = .connected
-                    engine.start()
-                    manager.send(.roleAssignment(role: "agent"))
-                    connection.agentStatus = .idle
-                    log("Connected to \(peer.name)", level: .success)
-                    return
+            var ready = await manager.waitForReady(timeout: 20)
+            if !ready {
+                // Retry once — the first attempt may have been congested
+                log("Retrying connection to \(peer.name)...", level: .warning)
+                manager.disconnect()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                manager.connect(to: peer.endpoint) { data in
+                    Task { @MainActor in
+                        engine.handleMessage(data)
+                    }
                 }
+                ready = await manager.waitForReady(timeout: 20)
             }
-            peer.connectionState = .failed
-            log("Failed to connect to \(peer.name)", level: .error)
-            removeFromFleet(connection)
+            guard ready else {
+                peer.connectionState = .failed
+                log("Failed to connect to \(peer.name)", level: .error)
+                removeFromFleet(connection)
+                return
+            }
+            peer.connectionState = .connected
+            engine.start()
+            manager.send(.roleAssignment(role: "agent"))
+            connection.agentStatus = .idle
+            log("Connected to \(peer.name)", level: .success)
         }
     }
 
@@ -211,6 +225,7 @@ class ConductorService {
         let total = testQueue.count
         queueStatus = .running(pairIndex: 0, total: total)
         completedReports.removeAll()
+        failedPairs.removeAll()
         completedCount = 0
         runningPairs.removeAll()
 
@@ -356,6 +371,7 @@ class ConductorService {
                 log("Self pair completed: \(direction) — \(report.results.overallGrade)", level: .success)
             } else {
                 log("Self pair failed: \(direction) — no report generated", level: .error)
+                failedPairs.append(pair)
             }
             if let engine = conn.diagnosticEngine { engine.testSuiteRunner = nil }
         } else {
@@ -371,6 +387,7 @@ class ConductorService {
                 } else {
                     let reason = conn.connectionManager.isConnected ? "timed out" : "device disconnected"
                     log("Self pair failed: \(direction) — \(reason)", level: .error)
+                    failedPairs.append(pair)
                     if conn.connectionManager.isConnected {
                         conn.connectionManager.send(.orchestrationCancel)
                     }
@@ -424,6 +441,7 @@ class ConductorService {
         } else {
             let reason = connA.connectionManager.isConnected ? "timed out" : "device disconnected"
             log("Remote pair failed: \(label) — \(reason)", level: .error)
+            failedPairs.append(pair)
         }
 
         // Release both devices — use idle if still connected, leave failed if disconnected

@@ -83,7 +83,7 @@ struct ConductorDashboardView: View {
                 }
             } else {
                 VStack(spacing: 8) {
-                    Image(systemName: "ipad.badge.plus")
+                    Image(systemName: "plus.rectangle.on.rectangle")
                         .font(.title)
                         .foregroundStyle(.secondary)
                     Text("No agents connected")
@@ -285,14 +285,13 @@ struct ConductorDashboardView: View {
             .buttonStyle(.plain)
 
             if resultsExpanded, let conductor {
-                let failedReports = conductor.completedReports
-                    .filter { $0.results.overallGrade == "Poor" && $0.results.latencyBurst.sampleCount == 0 }
-
-                if !failedReports.isEmpty, conductor.queueStatus == .idle || conductor.queueStatus == .completed {
+                if !conductor.failedPairs.isEmpty,
+                   conductor.queueStatus == .idle || conductor.queueStatus == .completed
+                {
                     Button {
-                        rerunFailedTests(failedReports)
+                        rerunFailedPairs()
                     } label: {
-                        Label("Re-run \(failedReports.count) Failed", systemImage: "arrow.counterclockwise")
+                        Label("Re-run \(conductor.failedPairs.count) Failed", systemImage: "arrow.counterclockwise")
                             .font(.caption)
                             .frame(maxWidth: .infinity)
                     }
@@ -449,50 +448,23 @@ struct ConductorDashboardView: View {
 
     // MARK: - Re-run Failed
 
-    private func rerunFailedTests(_ failedReports: [TestReport]) {
+    private func rerunFailedPairs() {
         guard let conductor else { return }
 
-        // Build lookup of all available devices (fleet + self)
-        var allDevices: [PeerDevice] = conductor.connectedAgents.map(\.peer)
-        if let sp = conductor.selfPeer {
-            allDevices.insert(sp, at: 0)
+        // Re-queue the exact pairs that failed — no report matching needed
+        for pair in conductor.failedPairs {
+            conductor.addPair(pair.deviceA, pair.deviceB)
         }
+        conductor.failedPairs.removeAll()
 
-        for report in failedReports {
-            // Match local device (the controller) — name should be reliable
-            let deviceA = allDevices.first { peer in
-                peer.name == report.localDevice.name
-                    || (peer.chipFamily == report.localDevice.chipFamily
-                        && peer.model == report.localDevice.model)
-            }
-
-            // Match remote device — might be "Unknown", so match by chip + model,
-            // or fall back to any device with matching chip that isn't deviceA
-            var deviceB: PeerDevice?
-            if report.remoteDevice.name != "Unknown" {
-                deviceB = allDevices.first { peer in
-                    peer.id != deviceA?.id && peer.name == report.remoteDevice.name
-                }
-            }
-            if deviceB == nil, report.remoteDevice.chipFamily != "Unknown" {
-                deviceB = allDevices.first { peer in
-                    peer.id != deviceA?.id && peer.chipFamily == report.remoteDevice.chipFamily
-                }
-            }
-
-            if let a = deviceA, let b = deviceB {
-                conductor.addPair(a, b)
-            }
-        }
-
-        // Reset status so queue can run, then auto-start
-        if !conductor.testQueue.isEmpty {
-            conductor.queueStatus = .idle
-            Task {
-                await conductor.runQueue(reportStore: reportStore)
-                for report in conductor.completedReports {
-                    reportStore.save(report, source: "conductor")
-                }
+        guard !conductor.testQueue.isEmpty else { return }
+        conductor.queueStatus = .idle
+        Task {
+            // Let agents settle after previous cancel before starting new tests
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await conductor.runQueue(reportStore: reportStore)
+            for report in conductor.completedReports {
+                reportStore.save(report, source: "conductor")
             }
         }
     }

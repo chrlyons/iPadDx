@@ -16,6 +16,7 @@ class AgentService {
     private var partnerConnection: ConnectionManager?
     private var testRunner: TestSuiteRunner?
     private let serviceType = "_ipadconn._tcp"
+    private var testGeneration: Int = 0
 
     func configure(conductorConnection: ConnectionManager, conductorName: String) {
         self.conductorConnection = conductorConnection
@@ -50,6 +51,7 @@ class AgentService {
     }
 
     func cancelTest() {
+        testGeneration += 1 // invalidate any pending async work
         partnerConnection?.onConnectionLost = nil
         partnerConnection?.disconnect()
         partnerConnection = nil
@@ -67,7 +69,7 @@ class AgentService {
         partnerConnection?.disconnect()
         partnerConnection = nil
 
-        let manager = ConnectionManager()
+        let manager = ConnectionManager(label: "agent-responder")
         partnerConnection = manager
 
         let metrics = DiagnosticMetrics()
@@ -94,23 +96,25 @@ class AgentService {
             }
         }
 
+        testGeneration += 1
+        let myGeneration = testGeneration
+
         status = .testing
         sendStatus("testing", detail: "Responding to \(testPartnerName)")
 
         Task {
-            for _ in 0 ..< 100 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                if manager.isConnected {
-                    engine.start()
-                    return
-                }
+            let ready = await manager.waitForReady(timeout: 15)
+            // If a cancel or new test arrived while waiting, bail out
+            guard myGeneration == testGeneration else { return }
+            guard ready else {
+                partnerConnection?.disconnect()
+                partnerConnection = nil
+                status = .failed
+                testPartnerName = ""
+                sendStatus("failed", detail: "Partner connection timed out")
+                return
             }
-            // Connection failed — notify conductor
-            partnerConnection?.disconnect()
-            partnerConnection = nil
-            status = .failed
-            testPartnerName = ""
-            sendStatus("failed", detail: "Partner connection timed out")
+            engine.start()
         }
     }
 
@@ -124,26 +128,26 @@ class AgentService {
     // MARK: - Test Execution
 
     private func executeTest(targetName: String, config _: TestSuiteConfig) async {
+        testGeneration += 1
+        let myGeneration = testGeneration
+
         testPartnerName = targetName
         status = .connecting
 
         sendStatus("connecting", detail: "Connecting to \(targetName)")
 
-        // Browse for the target device
-        guard let endpoint = await findDevice(named: targetName) else {
-            status = .failed
-            sendStatus("failed", detail: "Could not find \(targetName)")
-            return
-        }
+        // Connect directly using the Bonjour service name — no browse needed,
+        // Network.framework resolves the name internally
+        let endpoint = NWEndpoint.service(
+            name: targetName, type: serviceType, domain: "local.", interface: nil
+        )
 
-        // Connect to the target
-        let manager = ConnectionManager()
+        let manager = ConnectionManager(label: "agent-controller->\(targetName)")
         partnerConnection = manager
 
         let metrics = DiagnosticMetrics()
         let engine = DiagnosticEngine(connectionManager: manager, metrics: metrics)
 
-        var connected = false
         manager.connect(to: endpoint) { data in
             Task { @MainActor in
                 engine.handleMessage(data)
@@ -163,13 +167,8 @@ class AgentService {
         }
 
         // Wait for connection
-        for _ in 0 ..< 100 {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            if manager.isConnected {
-                connected = true
-                break
-            }
-        }
+        let connected = await manager.waitForReady(timeout: 15)
+        guard myGeneration == testGeneration else { return }
 
         guard connected else {
             status = .failed
@@ -227,39 +226,6 @@ class AgentService {
         status = .idle
         testPartnerName = ""
         testProgress = 0
-    }
-
-    // MARK: - Device Discovery
-
-    private func findDevice(named name: String) async -> NWEndpoint? {
-        await withCheckedContinuation { continuation in
-            let params = NWParameters()
-            params.includePeerToPeer = true
-            let browser = NWBrowser(for: .bonjour(type: serviceType, domain: nil), using: params)
-            var found = false
-
-            browser.browseResultsChangedHandler = { results, _ in
-                guard !found else { return }
-                for result in results {
-                    if case let .service(serviceName, _, _, _) = result.endpoint, serviceName == name {
-                        found = true
-                        browser.cancel()
-                        continuation.resume(returning: result.endpoint)
-                        return
-                    }
-                }
-            }
-
-            browser.start(queue: .main)
-
-            // Timeout after 20 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
-                guard !found else { return }
-                found = true
-                browser.cancel()
-                continuation.resume(returning: nil)
-            }
-        }
     }
 
     // MARK: - Conductor Communication

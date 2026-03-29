@@ -8,5 +8,7 @@
 	<array>
 		<string>_ipadconn._tcp</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location access is needed to read Wi-Fi network information (SSID/BSSID) for connection diagnostics.</string>
 </dict>
 </plist>

@@ -68,11 +68,13 @@ class DiagnosticEngine {
             metrics.pongsReceived += 1
             metrics.appendLatency(rtt, maxHistory: maxLatencyHistory)
 
-        case let .peerInfo(deviceName, osVersion, model, modelNumber, stableID):
+        case let .peerInfo(deviceName, osVersion, model, modelNumber, stableID, ssid, bssid):
             metrics.peerDeviceName = deviceName
             metrics.peerOSVersion = osVersion
             metrics.peerModel = model
             metrics.peerModelNumber = modelNumber
+            metrics.peerSSID = ssid
+            metrics.peerBSSID = bssid
             peer?.name = deviceName
             peer?.stableDeviceID = stableID
             peer?.chipFamily = iPadCatalog.chipFamily(for: model, modelNumber: modelNumber)
@@ -196,17 +198,23 @@ class DiagnosticEngine {
     func sendPeerInfo() {
         let info = DeviceIdentifier.localDeviceInfo()
         let stableID = DeviceIdentifier.stableID
-        connectionManager.send(.peerInfo(
-            deviceName: info.name,
-            osVersion: info.osVersion,
-            model: info.model,
-            modelNumber: info.modelNumber,
-            stableID: stableID
-        ))
+        // Fetch WiFi info asynchronously, send peer info with whatever we have
+        Task {
+            let wifi = await SystemMonitor.currentWiFi()
+            connectionManager.send(.peerInfo(
+                deviceName: info.name,
+                osVersion: info.osVersion,
+                model: info.model,
+                modelNumber: info.modelNumber,
+                stableID: stableID,
+                ssid: wifi?.ssid,
+                bssid: wifi?.bssid
+            ))
+        }
     }
 
     private func updatePathInfo() {
-        guard let path = connectionManager.currentPath else { return }
+        guard connectionManager.isConnected, let path = connectionManager.currentPath else { return }
         metrics.pathStatus = path.status
         metrics.isExpensive = path.isExpensive
         metrics.isConstrained = path.isConstrained

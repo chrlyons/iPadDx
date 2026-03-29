@@ -4,7 +4,9 @@ import Network
 /// Shared TLS-PSK configuration matching the Pearson Q-Interactive Assess connection model
 enum ConnectionSecurity {
     /// Create TLS-PSK parameters for Network.framework connections
-    static func tlsParameters() -> NWParameters {
+    /// - Parameter peerToPeer: Include AWDL/peer-to-peer. Use true for listeners (accept from any interface),
+    ///   false for outgoing connections (force WiFi to avoid AWDL "Connection refused" failures).
+    static func tlsParameters(peerToPeer: Bool = false) -> NWParameters {
         let tlsOptions = NWProtocolTLS.Options()
         let secOptions = tlsOptions.securityProtocolOptions
 
@@ -36,7 +38,7 @@ enum ConnectionSecurity {
 
         let tcpOptions = NWProtocolTCP.Options()
         let params = NWParameters(tls: tlsOptions, tcp: tcpOptions)
-        params.includePeerToPeer = true
+        params.includePeerToPeer = peerToPeer
         return params
     }
 }
@@ -54,12 +56,19 @@ class ConnectionManager {
     var onConnectionLost: (() -> Void)?
     private var receiveHandler: ((Data) -> Void)?
     private let queue = DispatchQueue(label: "com.ipadconnection.connection")
+    private var readyContinuation: CheckedContinuation<Bool, Never>?
+    let label: String
+
+    init(label: String = "unnamed") {
+        self.label = label
+    }
 
     func connect(to endpoint: NWEndpoint, handler: @escaping (Data) -> Void) {
         receiveHandler = handler
         let params = ConnectionSecurity.tlsParameters()
         let conn = NWConnection(to: endpoint, using: params)
         connection = conn
+        print("[CM:\(label)] connect to \(endpoint)")
         setupConnection(conn)
         conn.start(queue: queue)
     }
@@ -67,6 +76,7 @@ class ConnectionManager {
     func accept(_ conn: NWConnection, handler: @escaping (Data) -> Void) {
         receiveHandler = handler
         connection = conn
+        print("[CM:\(label)] accept \(conn.endpoint)")
         setupConnection(conn)
         conn.start(queue: queue)
     }
@@ -87,11 +97,39 @@ class ConnectionManager {
     }
 
     func disconnect() {
+        print("[CM:\(label)] disconnect called")
         connection?.cancel()
         connection = nil
         Task { @MainActor in
             isConnected = false
         }
+    }
+
+    /// Wait for the connection to reach .ready state, or timeout.
+    /// Returns true if connected, false if failed/timed out.
+    func waitForReady(timeout: TimeInterval = 15) async -> Bool {
+        if isConnected {
+            print("[CM:\(label)] waitForReady: already connected")
+            return true
+        }
+        print("[CM:\(label)] waitForReady: waiting up to \(timeout)s")
+        let start = Date()
+        let result = await withCheckedContinuation { continuation in
+            readyContinuation = continuation
+
+            // Timeout — resolve as failure if still waiting
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if let pending = readyContinuation {
+                    readyContinuation = nil
+                    print("[CM:\(label)] waitForReady: TIMEOUT after \(timeout)s")
+                    pending.resume(returning: false)
+                }
+            }
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        print("[CM:\(label)] waitForReady: \(result ? "READY" : "FAILED") in \(String(format: "%.1f", elapsed))s")
+        return result
     }
 
     var currentPath: NWPath? {
@@ -103,22 +141,51 @@ class ConnectionManager {
     private func setupConnection(_ conn: NWConnection) {
         conn.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
+                guard let self else { return }
                 switch state {
+                case .setup:
+                    print("[CM:\(self.label)] state: setup")
+                case .preparing:
+                    print("[CM:\(self.label)] state: preparing")
                 case .ready:
-                    self?.isConnected = true
-                case .failed, .cancelled:
-                    if self?.isConnected == true {
-                        self?.isConnected = false
-                        self?.onConnectionLost?()
+                    print("[CM:\(self.label)] state: READY")
+                    self.isConnected = true
+                    if let continuation = self.readyContinuation {
+                        self.readyContinuation = nil
+                        continuation.resume(returning: true)
                     }
-                default:
-                    break
+                case let .failed(error):
+                    print("[CM:\(self.label)] state: FAILED — \(error)")
+                    if let continuation = self.readyContinuation {
+                        self.readyContinuation = nil
+                        continuation.resume(returning: false)
+                    }
+                    if self.isConnected {
+                        self.isConnected = false
+                        self.onConnectionLost?()
+                    }
+                case .cancelled:
+                    print("[CM:\(self.label)] state: cancelled")
+                    if let continuation = self.readyContinuation {
+                        self.readyContinuation = nil
+                        continuation.resume(returning: false)
+                    }
+                    if self.isConnected {
+                        self.isConnected = false
+                        self.onConnectionLost?()
+                    }
+                case let .waiting(error):
+                    print("[CM:\(self.label)] state: waiting — \(error)")
+                @unknown default:
+                    print("[CM:\(self.label)] state: unknown")
                 }
             }
         }
 
-        conn.pathUpdateHandler = { path in
-            print("Path updated: \(path.status), expensive: \(path.isExpensive)")
+        conn.pathUpdateHandler = { [weak self] path in
+            print(
+                "[CM:\(self?.label ?? "?")] path: \(path.status), ifaces: \(path.availableInterfaces.map { "\($0.type)" })"
+            )
         }
 
         startReceiving(conn)

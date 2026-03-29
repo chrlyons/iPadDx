@@ -4,5 +4,11 @@
 <dict>
 	<key>com.apple.developer.networking.multicast</key>
 	<true/>
+	<key>com.apple.developer.networking.wifi-info</key>
+	<true/>
+	<key>com.apple.developer.sustained-execution</key>
+	<true/>
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
 </dict>
 </plist>
