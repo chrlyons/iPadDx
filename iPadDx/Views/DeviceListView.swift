@@ -103,6 +103,25 @@ struct DeviceListView: View {
 
             Section {
                 Button {
+                    detailSelection = .tests
+                } label: {
+                    HStack {
+                        Image(systemName: "testtube.2")
+                            .foregroundStyle(.blue)
+                        Text("Test Suite Info")
+                        Spacer()
+                        if detailSelection == .tests {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+            } header: {
+                Text("Tests")
+            }
+
+            Section {
+                Button {
                     detailSelection = .reports
                 } label: {
                     HStack {

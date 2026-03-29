@@ -8,8 +8,9 @@ struct TestReport: Codable, Identifiable {
     let results: TestSuiteResults
     let durationSeconds: TimeInterval
     let errors: [String]?
+    let skippedPhases: [String]?
 
-    /// Support decoding reports that don't have errors yet
+    /// Support decoding reports that don't have errors/skippedPhases yet
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -19,6 +20,7 @@ struct TestReport: Codable, Identifiable {
         results = try container.decode(TestSuiteResults.self, forKey: .results)
         durationSeconds = try container.decode(TimeInterval.self, forKey: .durationSeconds)
         errors = try container.decodeIfPresent([String].self, forKey: .errors)
+        skippedPhases = try container.decodeIfPresent([String].self, forKey: .skippedPhases)
     }
 
     init(
@@ -28,7 +30,8 @@ struct TestReport: Codable, Identifiable {
         remoteDevice: DeviceInfo,
         results: TestSuiteResults,
         durationSeconds: TimeInterval,
-        errors: [String]? = nil
+        errors: [String]? = nil,
+        skippedPhases: [String]? = nil
     ) {
         self.id = id
         self.date = date
@@ -37,6 +40,7 @@ struct TestReport: Codable, Identifiable {
         self.results = results
         self.durationSeconds = durationSeconds
         self.errors = errors
+        self.skippedPhases = skippedPhases
     }
 }
 

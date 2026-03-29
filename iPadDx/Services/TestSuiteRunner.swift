@@ -31,14 +31,59 @@ enum TestPhase: String, CaseIterable {
         }
     }
 
-    var description: String {
+    var shortDescription: String {
         switch self {
-        case .latencyBurst: "Sending 100 rapid pings to measure round-trip time"
-        case .sustainedThroughput: "Pushing 10 MB of data to measure transfer speed"
-        case .jitterMeasurement: "Measuring latency variation over 150 samples"
-        case .packetLossStress: "Firing 500 aggressive pings at 10ms intervals"
-        case .latencyUnderLoad: "Measuring latency while saturating the connection"
-        case .heavyLoad: "Maximum stress: concurrent data + pings for 15 seconds"
+        case .latencyBurst: "100 rapid pings to measure round-trip time"
+        case .sustainedThroughput: "10 MB data transfer to measure speed"
+        case .jitterMeasurement: "150 samples measuring latency variation"
+        case .packetLossStress: "500 aggressive pings at 10ms intervals"
+        case .latencyUnderLoad: "Latency while saturating the connection"
+        case .heavyLoad: "Concurrent data + pings for 15 seconds"
+        }
+    }
+
+    var detailedDescription: String {
+        switch self {
+        case .latencyBurst:
+            "Sends 100 ping-pong messages at 50ms intervals and measures the round-trip time for each. Reports min, max, average, median, and P95 latency. This is the baseline measurement of how fast data travels between the two devices over the local Wi-Fi network."
+        case .sustainedThroughput:
+            "Pushes 10 MB of data in 32 KB chunks and measures total transfer time. This tests the raw bandwidth capacity of the connection — how much data can flow between the devices per second. Important for apps that sync large files or stream content."
+        case .jitterMeasurement:
+            "Sends 150 ping-pong messages at 80ms intervals and measures how much the latency varies between consecutive samples. Low jitter means consistent, predictable performance. High jitter can cause lag spikes in real-time apps even when average latency is acceptable."
+        case .packetLossStress:
+            "Fires 500 pings at 10ms intervals — intentionally aggressive to stress the connection. Counts how many responses come back. Any packet loss indicates the network is being pushed beyond its reliable capacity, which can cause data retransmissions and timeouts."
+        case .latencyUnderLoad:
+            "Simultaneously sends heavy data traffic (800 throughput chunks) while measuring latency with 50 pings. Compares the under-load latency to the baseline from Phase 1. Shows how much real-world multitasking degrades connection responsiveness."
+        case .heavyLoad:
+            "Maximum stress test: 3 concurrent data generators plus 75 latency probes for 15 seconds. Simulates worst-case usage where multiple operations compete for bandwidth. Measures latency, throughput, and packet loss under extreme conditions."
+        }
+    }
+
+    var whyItMatters: String {
+        switch self {
+        case .latencyBurst:
+            "Directly affects how responsive device-to-device interactions feel."
+        case .sustainedThroughput:
+            "Determines how quickly large payloads (test content, media, results) can be transferred."
+        case .jitterMeasurement:
+            "High jitter causes unpredictable delays — even if average latency looks fine, spikes can disrupt timed operations."
+        case .packetLossStress:
+            "Lost packets must be retransmitted, adding latency and potentially causing timeouts. Even 1% loss degrades the experience."
+        case .latencyUnderLoad:
+            "Real-world connections are rarely idle. This shows whether the connection stays responsive when other data is flowing."
+        case .heavyLoad:
+            "Reveals the connection's breaking point. If this passes, the connection can handle anything the app throws at it."
+        }
+    }
+
+    func isEnabled(in config: TestSuiteConfig) -> Bool {
+        switch self {
+        case .latencyBurst: config.runLatencyBurst
+        case .sustainedThroughput: config.runThroughput
+        case .jitterMeasurement: config.runJitter
+        case .packetLossStress: config.runPacketLoss
+        case .latencyUnderLoad: config.runLatencyUnderLoad
+        case .heavyLoad: config.runHeavyLoad
         }
     }
 }
@@ -47,6 +92,7 @@ enum PhaseStatus: Equatable {
     case pending
     case running
     case completed(String) // summary text
+    case skipped
     case failed
 }
 
@@ -76,6 +122,8 @@ class TestSuiteRunner {
     var phaseStatuses: [TestPhase: PhaseStatus] = [:]
     var liveLatency: Double = 0
     var livePingCount: Int = 0
+    var isWarmingUp: Bool = false
+    var config: TestSuiteConfig = .default
 
     private let connectionManager: ConnectionManager
     private let metrics: DiagnosticMetrics
@@ -112,8 +160,10 @@ class TestSuiteRunner {
     func runFullSuite() async -> TestReport? {
         guard state == .idle || state == .completed else { return nil }
 
+        let cfg = config
+        guard cfg.enabledPhaseCount > 0 else { return nil }
+
         SystemMonitor.enableBatteryMonitoring()
-        // Request sustained execution to prevent CPU throttling during tests
         let activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .idleSystemSleepDisabled],
             reason: "iPadDx test suite running"
@@ -126,101 +176,139 @@ class TestSuiteRunner {
         errorLog.removeAll()
         progress = 0
         state = .running
+        isWarmingUp = false
 
-        // Initialize all phases as pending
+        // Initialize phase statuses
         for phase in TestPhase.allCases {
-            phaseStatuses[phase] = .pending
+            phaseStatuses[phase] = phase.isEnabled(in: cfg) ? .pending : .skipped
         }
 
-        let totalPhases = Double(TestPhase.allCases.count)
+        // Warm-up: settle the connection before real measurements
+        if cfg.runWarmUp {
+            isWarmingUp = true
+            connectionManager.send(.testSuiteStatus(running: true, phase: "Warm-Up"))
+            await runWarmUp(count: cfg.warmUpPingCount, intervalMs: cfg.warmUpIntervalMs)
+            isWarmingUp = false
+        }
+
+        let enabledPhases = TestPhase.allCases.filter { $0.isEnabled(in: cfg) }
+        let totalPhases = Double(enabledPhases.count)
         var phaseIndex = 0.0
 
-        // Phase 1: Latency Burst — 100 pings at 50ms
-        let latencyResult = await runPhase(.latencyBurst) {
-            await self.runLatencyBurst(count: 100, intervalMs: 50)
-        }
-        let latency = latencyResult
-        if latency.sampleCount == 0 {
-            errorLog.append("Latency Burst: 0/100 pongs received — remote may not be responding")
-        } else if latency.sampleCount < 50 {
-            errorLog.append("Latency Burst: only \(latency.sampleCount)/100 pongs received — significant packet loss")
-        }
-        phaseStatuses[.latencyBurst] =
-            .completed("Avg: \(String(format: "%.1fms", latency.avg)) | P95: \(String(format: "%.1fms", latency.p95))")
-        phaseIndex += 1
-        progress = phaseIndex / totalPhases
-        sampleSystem()
-
-        // Phase 2: Sustained Throughput — 10 MB
-        let throughputResult = await runPhase(.sustainedThroughput) {
-            await self.runThroughputTest(bytes: 10_000_000)
-        }
-        let throughput = throughputResult
-        phaseStatuses[.sustainedThroughput] = .completed(throughput.formattedSpeed)
-        phaseIndex += 1
-        progress = phaseIndex / totalPhases
-        sampleSystem()
-
-        // Phase 3: Jitter — 150 samples at 80ms
-        let jitterResult = await runPhase(.jitterMeasurement) {
-            await self.runJitterTest(count: 150, intervalMs: 80)
-        }
-        let jitter = jitterResult
-        if jitter.sampleCount == 0 {
-            errorLog.append("Jitter: 0/150 pongs received — remote not responding to pings")
-        }
-        phaseStatuses[.jitterMeasurement] =
-            .completed(
-                "Avg: \(String(format: "%.1fms", jitter.averageJitter)) | Max: \(String(format: "%.1fms", jitter.maxJitter))"
-            )
-        phaseIndex += 1
-        progress = phaseIndex / totalPhases
-        sampleSystem()
-
-        // Phase 4: Packet Loss Stress — 500 pings at 10ms
-        let packetLossResult = await runPhase(.packetLossStress) {
-            await self.runPacketLossStress(count: 500, intervalMs: 10)
-        }
-        let packetLoss = packetLossResult
-        if packetLoss.received == 0 {
-            errorLog.append("Packet Loss: 0/\(packetLoss.sent) received — connection may be dead")
-        } else if packetLoss.lostPercent > 50 {
-            errorLog
-                .append(
-                    "Packet Loss: \(String(format: "%.0f", packetLoss.lostPercent))% loss (\(packetLoss.received)/\(packetLoss.sent) received)"
+        // Phase 1: Latency Burst
+        let latency: LatencyBurstResult
+        if cfg.runLatencyBurst {
+            latency = await runPhase(.latencyBurst) {
+                await self.runLatencyBurst(count: cfg.latencyBurstCount, intervalMs: cfg.latencyBurstIntervalMs)
+            }
+            if latency.sampleCount == 0 {
+                errorLog
+                    .append("Latency Burst: 0/\(cfg.latencyBurstCount) pongs received — remote may not be responding")
+            } else if latency.sampleCount < cfg.latencyBurstCount / 2 {
+                errorLog
+                    .append(
+                        "Latency Burst: only \(latency.sampleCount)/\(cfg.latencyBurstCount) pongs received — significant packet loss"
+                    )
+            }
+            phaseStatuses[.latencyBurst] =
+                .completed(
+                    "Avg: \(String(format: "%.1fms", latency.avg)) | P95: \(String(format: "%.1fms", latency.p95))"
                 )
+            phaseIndex += 1
+            progress = phaseIndex / totalPhases
+            sampleSystem()
+        } else {
+            latency = LatencyBurstResult(min: 0, max: 0, avg: 0, median: 0, p95: 0, sampleCount: 0, samples: [])
         }
-        phaseStatuses[.packetLossStress] =
-            .completed(
-                "Loss: \(String(format: "%.1f%%", packetLoss.lostPercent)) (\(packetLoss.received)/\(packetLoss.sent))"
-            )
-        phaseIndex += 1
-        progress = phaseIndex / totalPhases
-        sampleSystem()
+
+        // Phase 2: Sustained Throughput
+        let throughput: ThroughputResult
+        if cfg.runThroughput {
+            throughput = await runPhase(.sustainedThroughput) {
+                await self.runThroughputTest(bytes: cfg.throughputBytes)
+            }
+            phaseStatuses[.sustainedThroughput] = .completed(throughput.formattedSpeed)
+            phaseIndex += 1
+            progress = phaseIndex / totalPhases
+            sampleSystem()
+        } else {
+            throughput = ThroughputResult(bytesPerSecond: 0, totalBytes: 0, durationSeconds: 0)
+        }
+
+        // Phase 3: Jitter
+        let jitter: JitterResult
+        if cfg.runJitter {
+            jitter = await runPhase(.jitterMeasurement) {
+                await self.runJitterTest(count: cfg.jitterSampleCount, intervalMs: cfg.jitterIntervalMs)
+            }
+            if jitter.sampleCount == 0 {
+                errorLog.append("Jitter: 0/\(cfg.jitterSampleCount) pongs received — remote not responding to pings")
+            }
+            phaseStatuses[.jitterMeasurement] =
+                .completed(
+                    "Avg: \(String(format: "%.1fms", jitter.averageJitter)) | Max: \(String(format: "%.1fms", jitter.maxJitter))"
+                )
+            phaseIndex += 1
+            progress = phaseIndex / totalPhases
+            sampleSystem()
+        } else {
+            jitter = JitterResult(averageJitter: 0, maxJitter: 0, sampleCount: 0)
+        }
+
+        // Phase 4: Packet Loss Stress
+        let packetLoss: PacketLossResult
+        if cfg.runPacketLoss {
+            packetLoss = await runPhase(.packetLossStress) {
+                await self.runPacketLossStress(count: cfg.packetLossCount, intervalMs: cfg.packetLossIntervalMs)
+            }
+            if packetLoss.received == 0 {
+                errorLog.append("Packet Loss: 0/\(packetLoss.sent) received — connection may be dead")
+            } else if packetLoss.lostPercent > 50 {
+                errorLog
+                    .append(
+                        "Packet Loss: \(String(format: "%.0f", packetLoss.lostPercent))% loss (\(packetLoss.received)/\(packetLoss.sent) received)"
+                    )
+            }
+            phaseStatuses[.packetLossStress] =
+                .completed(
+                    "Loss: \(String(format: "%.1f%%", packetLoss.lostPercent)) (\(packetLoss.received)/\(packetLoss.sent))"
+                )
+            phaseIndex += 1
+            progress = phaseIndex / totalPhases
+            sampleSystem()
+        } else {
+            packetLoss = PacketLossResult(sent: 0, received: 0, lostPercent: 0, durationSeconds: 0)
+        }
 
         // Phase 5: Latency Under Load
-        let loadResult = await runPhase(.latencyUnderLoad) {
-            await self.runLatencyUnderLoad(baselineAvg: latency.avg)
+        let underLoad: LatencyUnderLoadResult
+        if cfg.runLatencyUnderLoad {
+            underLoad = await runPhase(.latencyUnderLoad) {
+                await self.runLatencyUnderLoad(baselineAvg: latency.avg)
+            }
+            phaseStatuses[.latencyUnderLoad] =
+                .completed(underLoad.formattedDegradation)
+            phaseIndex += 1
+            progress = phaseIndex / totalPhases
+            sampleSystem()
+        } else {
+            underLoad = LatencyUnderLoadResult(baselineAvg: 0, underLoadAvg: 0, degradationPercent: 0, sampleCount: 0)
         }
-        let underLoad = loadResult
-        phaseStatuses[.latencyUnderLoad] =
-            .completed(underLoad.formattedDegradation)
-        phaseIndex += 1
-        progress = phaseIndex / totalPhases
-        sampleSystem()
 
-        // Phase 6: Heavy Load Stress — everything at once for 15 seconds
-        let heavyResult = await runPhase(.heavyLoad) {
-            await self.runHeavyLoadStress()
+        // Phase 6: Heavy Load Stress
+        if cfg.runHeavyLoad {
+            let heavy = await runPhase(.heavyLoad) {
+                await self.runHeavyLoadStress()
+            }
+            phaseStatuses[.heavyLoad] =
+                .completed(
+                    "Avg: \(String(format: "%.1fms", heavy.avgLatency)) | Loss: \(String(format: "%.1f%%", heavy.packetLoss))"
+                )
+            phaseIndex += 1
+            sampleSystem()
         }
-        let heavy = heavyResult
-        phaseStatuses[.heavyLoad] =
-            .completed(
-                "Avg: \(String(format: "%.1fms", heavy.avgLatency)) | Loss: \(String(format: "%.1f%%", heavy.packetLoss))"
-            )
-        phaseIndex += 1
+
         progress = 1.0
-        sampleSystem()
 
         // Build report
         let batteryEnd = SystemMonitor.batteryLevel()
@@ -244,6 +332,7 @@ class TestSuiteRunner {
             errorLog.append("Peer info exchange failed — remote device is Unknown (peer info never received)")
         }
 
+        let skipped = TestPhase.allCases.filter { !$0.isEnabled(in: cfg) }.map(\.rawValue)
         let grade = computeGrade(latency: latency, jitter: jitter, loss: packetLoss, underLoad: underLoad)
 
         let report = TestReport(
@@ -261,7 +350,8 @@ class TestSuiteRunner {
                 overallGrade: grade.rawValue
             ),
             durationSeconds: Date().timeIntervalSince(suiteStartTime ?? Date()),
-            errors: errorLog.isEmpty ? nil : errorLog
+            errors: errorLog.isEmpty ? nil : errorLog,
+            skippedPhases: skipped.isEmpty ? nil : skipped
         )
 
         lastReport = report
@@ -294,6 +384,28 @@ class TestSuiteRunner {
         // Notify the responder what phase we're running
         connectionManager.send(.testSuiteStatus(running: true, phase: phase.rawValue))
         return await test()
+    }
+
+    // MARK: - Warm-Up
+
+    private func runWarmUp(count: Int, intervalMs: Int) async {
+        receivedTestPongs.removeAll()
+        pendingTestPongs.removeAll()
+
+        for i in 0 ..< count {
+            let id = UUID()
+            let timestamp = ProcessInfo.processInfo.systemUptime
+            pendingTestPongs[id] = (sequence: i, timestamp: timestamp)
+            connectionManager.send(.testPing(id: id, sequence: i, timestamp: timestamp))
+            try? await Task.sleep(nanoseconds: UInt64(intervalMs) * 1_000_000)
+        }
+
+        // Brief wait for remaining responses
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+        // Discard warm-up data
+        receivedTestPongs.removeAll()
+        pendingTestPongs.removeAll()
     }
 
     // MARK: - Test Phases

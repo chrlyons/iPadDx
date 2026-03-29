@@ -127,7 +127,7 @@ class AgentService {
 
     // MARK: - Test Execution
 
-    private func executeTest(targetName: String, config _: TestSuiteConfig) async {
+    private func executeTest(targetName: String, config: TestSuiteConfig) async {
         testGeneration += 1
         let myGeneration = testGeneration
 
@@ -186,6 +186,7 @@ class AgentService {
         try? await Task.sleep(nanoseconds: 1_000_000_000)
 
         let runner = TestSuiteRunner(connectionManager: manager, metrics: metrics)
+        runner.config = config
         engine.testSuiteRunner = runner
         testRunner = runner
 

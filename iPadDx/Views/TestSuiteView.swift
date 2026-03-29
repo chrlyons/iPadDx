@@ -6,6 +6,8 @@ struct TestSuiteView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var runner: TestSuiteRunner?
     @State private var showSavedAlert = false
+    @State private var config: TestSuiteConfig = .default
+    @State private var showPhaseInfo: TestPhase?
 
     var body: some View {
         ScrollView {
@@ -46,6 +48,9 @@ struct TestSuiteView: View {
         } message: {
             Text("View and compare reports from the Saved Reports section in the sidebar.")
         }
+        .sheet(item: $showPhaseInfo) { phase in
+            PhaseInfoSheet(phase: phase)
+        }
     }
 
     // MARK: - State Cards
@@ -60,31 +65,82 @@ struct TestSuiteView: View {
                 .font(.title2)
                 .fontWeight(.bold)
 
-            Text("Run 6 standardized tests to thoroughly measure connection quality between these devices.")
+            Text("Measures connection quality between these devices using standardized diagnostic tests.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(TestPhase.allCases, id: \.rawValue) { phase in
-                    HStack(spacing: 10) {
-                        Image(systemName: phase.icon)
-                            .frame(width: 20)
-                            .foregroundStyle(phaseColor(phase))
-                        Text(phase.rawValue)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        Spacer()
-                        Text(phaseDetail(phase))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+            // Warm-up toggle
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: "flame")
+                        .foregroundStyle(.orange)
+                    Text("Connection Warm-Up")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    Spacer()
+                    Toggle("", isOn: $config.runWarmUp)
+                        .labelsHidden()
                 }
+                Text(
+                    "Sends \(config.warmUpPingCount) warm-up pings before testing to settle the connection, ARP cache, and TLS session. Improves accuracy of first-phase measurements."
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
             .padding()
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
 
+            // Phase toggles
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Test Phases")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Text("\(config.enabledPhaseCount) of \(TestPhase.allCases.count) enabled")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+                ForEach(TestPhase.allCases, id: \.rawValue) { phase in
+                    phaseToggleRow(phase)
+                    if phase != TestPhase.allCases.last {
+                        Divider().padding(.leading, 52)
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+
+            // Preset buttons
+            HStack(spacing: 12) {
+                Button {
+                    withAnimation { config = .default }
+                } label: {
+                    Text("Full Suite")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    withAnimation { config = .quick }
+                } label: {
+                    Text("Quick Test")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+
             Button {
+                runner.config = config
                 Task { await runner.runFullSuite() }
             } label: {
                 Label("Start Test Suite", systemImage: "play.fill")
@@ -93,13 +149,79 @@ struct TestSuiteView: View {
                     .padding(.vertical, 12)
             }
             .buttonStyle(.borderedProminent)
+            .disabled(config.enabledPhaseCount == 0)
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private func phaseToggleRow(_ phase: TestPhase) -> some View {
+        let binding = phaseBinding(phase)
+        return HStack(spacing: 10) {
+            Image(systemName: phase.icon)
+                .frame(width: 24)
+                .foregroundStyle(binding.wrappedValue ? phaseColor(phase) : .gray)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(phase.rawValue)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundStyle(binding.wrappedValue ? .primary : .secondary)
+                Text(phase.shortDescription)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button {
+                showPhaseInfo = phase
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
+            .buttonStyle(.plain)
+
+            Toggle("", isOn: binding)
+                .labelsHidden()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+    }
+
+    private func phaseBinding(_ phase: TestPhase) -> Binding<Bool> {
+        switch phase {
+        case .latencyBurst: $config.runLatencyBurst
+        case .sustainedThroughput: $config.runThroughput
+        case .jitterMeasurement: $config.runJitter
+        case .packetLossStress: $config.runPacketLoss
+        case .latencyUnderLoad: $config.runLatencyUnderLoad
+        case .heavyLoad: $config.runHeavyLoad
+        }
+    }
+
     private func runningView(_ runner: TestSuiteRunner) -> some View {
         VStack(spacing: 16) {
+            // Warm-up indicator
+            if runner.isWarmingUp {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Warming Up Connection")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Text("Settling connection, ARP cache, and TLS session...")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding()
+                .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+
             // Overall progress
             VStack(spacing: 8) {
                 ProgressView(value: runner.progress) {
@@ -117,9 +239,12 @@ struct TestSuiteView: View {
             .padding()
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
 
-            // Phase cards
+            // Phase cards (only show enabled phases)
             ForEach(TestPhase.allCases, id: \.rawValue) { phase in
-                phaseCard(phase, runner: runner)
+                let status = runner.phaseStatuses[phase] ?? .pending
+                if status != .skipped {
+                    phaseCard(phase, runner: runner)
+                }
             }
         }
     }
@@ -148,6 +273,10 @@ struct TestSuiteView: View {
                         .font(.caption)
                         .fontWeight(.bold)
                         .foregroundStyle(.white)
+                case .skipped:
+                    Image(systemName: "forward.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 case .failed:
                     Image(systemName: "xmark")
                         .font(.caption)
@@ -159,7 +288,7 @@ struct TestSuiteView: View {
                 Text(phase.rawValue)
                     .font(.subheadline)
                     .fontWeight(isActive ? .bold : .medium)
-                    .foregroundStyle(status == .pending ? .secondary : .primary)
+                    .foregroundStyle(status == .pending || status == .skipped ? .secondary : .primary)
 
                 switch status {
                 case .running:
@@ -175,9 +304,13 @@ struct TestSuiteView: View {
                         .font(.caption)
                         .foregroundStyle(.green)
                 case .pending:
-                    Text(phase.description)
+                    Text(phase.shortDescription)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                case .skipped:
+                    Text("Skipped")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 case .failed:
                     Text("Failed")
                         .font(.caption)
@@ -353,10 +486,10 @@ struct TestSuiteView: View {
 
     private func phaseDetail(_ phase: TestPhase) -> String {
         switch phase {
-        case .latencyBurst: "100 pings"
-        case .sustainedThroughput: "10 MB"
-        case .jitterMeasurement: "150 samples"
-        case .packetLossStress: "500 pings"
+        case .latencyBurst: "\(config.latencyBurstCount) pings"
+        case .sustainedThroughput: formatBytes(config.throughputBytes)
+        case .jitterMeasurement: "\(config.jitterSampleCount) samples"
+        case .packetLossStress: "\(config.packetLossCount) pings"
         case .latencyUnderLoad: "~10s"
         case .heavyLoad: "~15s"
         }
@@ -367,6 +500,7 @@ struct TestSuiteView: View {
         case .pending: .gray.opacity(0.2)
         case .running: .blue.opacity(0.2)
         case .completed: .green
+        case .skipped: .gray.opacity(0.3)
         case .failed: .red
         }
     }
@@ -423,5 +557,142 @@ struct TestSuiteView: View {
         if bytes >= 1_000_000 { return String(format: "%.1f MB", Double(bytes) / 1_000_000) }
         if bytes >= 1000 { return String(format: "%.1f KB", Double(bytes) / 1000) }
         return "\(bytes) B"
+    }
+}
+
+// MARK: - Phase Info Sheet
+
+extension TestPhase: Identifiable {
+    var id: String {
+        rawValue
+    }
+}
+
+struct PhaseInfoSheet: View {
+    let phase: TestPhase
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Header
+                    HStack(spacing: 14) {
+                        ZStack {
+                            Circle()
+                                .fill(phaseColor.opacity(0.15))
+                                .frame(width: 56, height: 56)
+                            Image(systemName: phase.icon)
+                                .font(.title2)
+                                .foregroundStyle(phaseColor)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(phase.rawValue)
+                                .font(.title2)
+                                .fontWeight(.bold)
+                            Text(phase.shortDescription)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    // What it does
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("What it does", systemImage: "gear")
+                            .font(.headline)
+                        Text(phase.detailedDescription)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    // Why it matters
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Why it matters", systemImage: "lightbulb")
+                            .font(.headline)
+                        Text(phase.whyItMatters)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    // Technical details
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Parameters", systemImage: "slider.horizontal.3")
+                            .font(.headline)
+                        parametersView
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Test Info")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var parametersView: some View {
+        let config = TestSuiteConfig.default
+        VStack(spacing: 6) {
+            switch phase {
+            case .latencyBurst:
+                paramRow("Ping count", "\(config.latencyBurstCount)")
+                paramRow("Interval", "\(config.latencyBurstIntervalMs) ms")
+                paramRow("Wait for responses", "2 s")
+                paramRow("Measures", "Min, Max, Avg, Median, P95 RTT")
+            case .sustainedThroughput:
+                paramRow("Data size", "\(config.throughputBytes / 1_000_000) MB")
+                paramRow("Chunk size", "32 KB")
+                paramRow("Measures", "Bytes/sec, total time")
+            case .jitterMeasurement:
+                paramRow("Sample count", "\(config.jitterSampleCount)")
+                paramRow("Interval", "\(config.jitterIntervalMs) ms")
+                paramRow("Wait for responses", "2 s")
+                paramRow("Measures", "Avg jitter, Max jitter (ms between consecutive samples)")
+            case .packetLossStress:
+                paramRow("Ping count", "\(config.packetLossCount)")
+                paramRow("Interval", "\(config.packetLossIntervalMs) ms")
+                paramRow("Wait for responses", "3 s")
+                paramRow("Measures", "Sent, Received, Loss %")
+            case .latencyUnderLoad:
+                paramRow("Load chunks", "800")
+                paramRow("Latency probes", "50")
+                paramRow("Probe interval", "200 ms")
+                paramRow("Measures", "Baseline vs under-load avg, degradation %")
+            case .heavyLoad:
+                paramRow("Concurrent load streams", "3")
+                paramRow("Duration", "~15 s")
+                paramRow("Latency probes", "75")
+                paramRow("Measures", "Avg/Max latency, throughput, packet loss under max stress")
+            }
+        }
+    }
+
+    private func paramRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.caption)
+                .fontWeight(.medium)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var phaseColor: Color {
+        switch phase.color {
+        case "blue": .blue
+        case "purple": .purple
+        case "orange": .orange
+        case "red": .red
+        default: .blue
+        }
     }
 }

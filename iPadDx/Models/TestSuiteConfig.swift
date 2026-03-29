@@ -1,6 +1,20 @@
 import Foundation
 
 struct TestSuiteConfig: Codable {
+    // Phase enable/disable
+    var runLatencyBurst: Bool = true
+    var runThroughput: Bool = true
+    var runJitter: Bool = true
+    var runPacketLoss: Bool = true
+    var runLatencyUnderLoad: Bool = true
+    var runHeavyLoad: Bool = true
+
+    // Warm-up
+    var runWarmUp: Bool = true
+    var warmUpPingCount: Int = 10
+    var warmUpIntervalMs: Int = 100
+
+    // Phase parameters
     var latencyBurstCount: Int = 100
     var latencyBurstIntervalMs: Int = 50
     var throughputBytes: Int = 10_000_000
@@ -8,20 +22,24 @@ struct TestSuiteConfig: Codable {
     var jitterIntervalMs: Int = 80
     var packetLossCount: Int = 500
     var packetLossIntervalMs: Int = 10
-    var runLatencyUnderLoad: Bool = true
-    var runHeavyLoad: Bool = true
+
+    var enabledPhaseCount: Int {
+        [runLatencyBurst, runThroughput, runJitter, runPacketLoss, runLatencyUnderLoad, runHeavyLoad]
+            .filter(\.self).count
+    }
 
     static let `default` = TestSuiteConfig()
 
     static let quick = TestSuiteConfig(
+        runLatencyUnderLoad: false,
+        runHeavyLoad: false,
+        runWarmUp: true,
         latencyBurstCount: 30,
         latencyBurstIntervalMs: 80,
         throughputBytes: 2_000_000,
         jitterSampleCount: 50,
         jitterIntervalMs: 100,
         packetLossCount: 100,
-        packetLossIntervalMs: 25,
-        runLatencyUnderLoad: false,
-        runHeavyLoad: false
+        packetLossIntervalMs: 25
     )
 }
