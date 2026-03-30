@@ -167,4 +167,4 @@ Tests are scored on a 12-point scale across 4 dimensions:
 
 ## License
 
-Private project.
+This project is licensed under the [MIT License](LICENSE).
