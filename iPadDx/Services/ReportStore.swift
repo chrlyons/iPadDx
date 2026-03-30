@@ -21,13 +21,13 @@ class ReportStore {
             )
             modelContext = modelContainer.map { ModelContext($0) }
         } catch {
-            print("SwiftData init failed: \(error), deleting old store and retrying")
+            AppLog("SwiftData init failed: \(error), deleting old store and retrying", level: .error, category: "Store")
             // Delete ALL store files so we can start fresh
             if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
                 let fm = FileManager.default
                 let files = (try? fm.contentsOfDirectory(at: appSupport, includingPropertiesForKeys: nil)) ?? []
                 for file in files where file.lastPathComponent.hasPrefix("iPadDxReports") {
-                    print("Deleting: \(file.lastPathComponent)")
+                    AppLog("Deleting: \(file.lastPathComponent)", level: .warning, category: "Store")
                     try? fm.removeItem(at: file)
                 }
             }
@@ -35,9 +35,9 @@ class ReportStore {
                 let config = ModelConfiguration("iPadDxReports", isStoredInMemoryOnly: false)
                 modelContainer = try ModelContainer(for: ReportEntity.self, configurations: config)
                 modelContext = modelContainer.map { ModelContext($0) }
-                print("Fresh database created successfully")
+                AppLog("Fresh database created successfully", category: "Store")
             } catch {
-                print("SwiftData fallback also failed: \(error)")
+                AppLog("SwiftData fallback also failed: \(error)", level: .error, category: "Store")
             }
         }
         loadAll()
@@ -245,6 +245,12 @@ class ReportStore {
             "Avg CPU %",
             "Peak Memory (MB)",
             "Thermal State",
+            // Responder System
+            "Resp Peak CPU %",
+            "Resp Avg CPU %",
+            "Resp Peak Memory (MB)",
+            "Resp Thermal State",
+            "Resp Battery Drain %",
             "Errors",
         ]
 
@@ -302,6 +308,12 @@ class ReportStore {
                 String(format: "%.1f", s.avgCpuUsage),
                 String(format: "%.0f", s.peakMemoryMB),
                 s.thermalStateDuringTest,
+                // Responder System
+                t.responderMetrics.map { String(format: "%.1f", $0.peakCpuUsage) } ?? "",
+                t.responderMetrics.map { String(format: "%.1f", $0.avgCpuUsage) } ?? "",
+                t.responderMetrics.map { String(format: "%.0f", $0.peakMemoryMB) } ?? "",
+                t.responderMetrics?.thermalStateDuringTest ?? "",
+                t.responderMetrics.map { String(format: "%.2f", $0.batteryDrainPercent) } ?? "",
                 csvEscape(r.errors?.joined(separator: "; ") ?? ""),
             ]
             rows.append(row.joined(separator: ","))

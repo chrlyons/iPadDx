@@ -178,6 +178,48 @@ struct TestSuiteResults: Codable {
     let latencyUnderLoad: LatencyUnderLoadResult
     let systemMetrics: SystemMetricsResult
     let overallGrade: String
+    let responderMetrics: ResponderMetricsResult?
+
+    init(
+        latencyBurst: LatencyBurstResult,
+        sustainedThroughput: ThroughputResult,
+        jitterMeasurement: JitterResult,
+        packetLossStress: PacketLossResult,
+        latencyUnderLoad: LatencyUnderLoadResult,
+        systemMetrics: SystemMetricsResult,
+        overallGrade: String,
+        responderMetrics: ResponderMetricsResult? = nil
+    ) {
+        self.latencyBurst = latencyBurst
+        self.sustainedThroughput = sustainedThroughput
+        self.jitterMeasurement = jitterMeasurement
+        self.packetLossStress = packetLossStress
+        self.latencyUnderLoad = latencyUnderLoad
+        self.systemMetrics = systemMetrics
+        self.overallGrade = overallGrade
+        self.responderMetrics = responderMetrics
+    }
+
+    /// Support decoding reports that don't have responderMetrics yet
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        latencyBurst = try container.decode(LatencyBurstResult.self, forKey: .latencyBurst)
+        sustainedThroughput = try container.decode(ThroughputResult.self, forKey: .sustainedThroughput)
+        jitterMeasurement = try container.decode(JitterResult.self, forKey: .jitterMeasurement)
+        packetLossStress = try container.decode(PacketLossResult.self, forKey: .packetLossStress)
+        latencyUnderLoad = try container.decode(LatencyUnderLoadResult.self, forKey: .latencyUnderLoad)
+        systemMetrics = try container.decode(SystemMetricsResult.self, forKey: .systemMetrics)
+        overallGrade = try container.decode(String.self, forKey: .overallGrade)
+        responderMetrics = try container.decodeIfPresent(ResponderMetricsResult.self, forKey: .responderMetrics)
+    }
+}
+
+struct ResponderMetricsResult: Codable {
+    let peakCpuUsage: Double
+    let avgCpuUsage: Double
+    let peakMemoryMB: Double
+    let thermalStateDuringTest: String
+    let batteryDrainPercent: Double
 }
 
 struct LatencyUnderLoadResult: Codable {

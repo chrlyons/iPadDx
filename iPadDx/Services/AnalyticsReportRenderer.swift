@@ -67,6 +67,22 @@ enum AnalyticsReportRenderer {
             drawChipTable(reports: reports, cursor: &cursor, width: contentWidth)
             cursor.y += 20
 
+            // Per-OS version
+            cursor.drawSectionHeader("Performance by iPadOS Version", width: contentWidth)
+            drawOSVersionTable(reports: reports, cursor: &cursor, width: contentWidth)
+            cursor.y += 20
+
+            // Responder vs Controller system metrics comparison
+            let withResponder = reports.filter { $0.results.responderMetrics != nil }
+            if !withResponder.isEmpty {
+                cursor.drawSectionHeader(
+                    "Controller vs Responder System Metrics (\(withResponder.count) reports)",
+                    width: contentWidth
+                )
+                drawResponderComparisonTable(reports: withResponder, cursor: &cursor, width: contentWidth)
+                cursor.y += 20
+            }
+
             // Failed tests
             let failed = reports.filter { $0.results.latencyBurst.sampleCount == 0 }
             if !failed.isEmpty {
@@ -193,12 +209,98 @@ enum AnalyticsReportRenderer {
         }
     }
 
+    // MARK: - Responder Comparison
+
+    private static func drawResponderComparisonTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
+        let cols: [CGFloat] = [0.18, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.10]
+        cursor.drawTableRow(
+            [
+                "Device (Resp)",
+                "#",
+                "Ctrl CPU %",
+                "Resp CPU %",
+                "Ctrl Mem MB",
+                "Resp Mem MB",
+                "Resp Thermal",
+                "Resp Drain %",
+            ],
+            columnWidths: cols, totalWidth: width, isHeader: true
+        )
+
+        // Group by responder device
+        let grouped = Dictionary(grouping: reports) { $0.remoteDevice.shortDescription }
+        for (device, devReports) in grouped.sorted(by: { $0.key < $1.key }) {
+            let n = Double(devReports.count)
+            let ctrlCpu = devReports.map(\.results.systemMetrics.peakCpuUsage).reduce(0, +) / n
+            let respCpu = devReports.compactMap(\.results.responderMetrics?.peakCpuUsage).reduce(0, +) / n
+            let ctrlMem = devReports.map(\.results.systemMetrics.peakMemoryMB).reduce(0, +) / n
+            let respMem = devReports.compactMap(\.results.responderMetrics?.peakMemoryMB).reduce(0, +) / n
+            let respDrain = devReports.compactMap(\.results.responderMetrics?.batteryDrainPercent).reduce(0, +) / n
+            // Worst thermal across responder reports
+            let thermalOrder = ["Nominal", "Fair", "Serious", "Critical"]
+            let worstThermal = devReports.compactMap(\.results.responderMetrics?.thermalStateDuringTest)
+                .max(by: { (thermalOrder.firstIndex(of: $0) ?? 0) < (thermalOrder.firstIndex(of: $1) ?? 0) }) ?? "—"
+
+            cursor.drawTableRow(
+                [
+                    device,
+                    "\(devReports.count)",
+                    f(ctrlCpu),
+                    f(respCpu),
+                    f(ctrlMem),
+                    f(respMem),
+                    worstThermal,
+                    f(respDrain),
+                ],
+                columnWidths: cols, totalWidth: width, isHeader: false
+            )
+        }
+    }
+
+    // MARK: - OS Version
+
+    private static func drawOSVersionTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
+        let cols: [CGFloat] = [0.18, 0.08, 0.12, 0.12, 0.12, 0.12, 0.12, 0.14]
+        cursor.drawTableRow(
+            ["iPadOS", "#", "Lat (ms)", "P95 (ms)", "Thru (MB/s)", "Jitter (ms)", "Loss (%)", "Fail Rate (%)"],
+            columnWidths: cols, totalWidth: width, isHeader: true
+        )
+
+        // Group by OS version (a report counts toward both local and remote OS)
+        var map: [String: [TestReport]] = [:]
+        for report in reports {
+            map[report.localDevice.osVersion, default: []].append(report)
+            if report.remoteDevice.osVersion != report.localDevice.osVersion {
+                map[report.remoteDevice.osVersion, default: []].append(report)
+            }
+        }
+
+        for (version, vReports) in map.sorted(by: { $0.key < $1.key }) {
+            let n = Double(vReports.count)
+            let failCount = vReports.filter { $0.results.overallGrade == "Poor" || $0.results.overallGrade == "Fair" }
+                .count
+            cursor.drawTableRow(
+                [
+                    version,
+                    "\(vReports.count)",
+                    f(vReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
+                    f(vReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
+                    f(vReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
+                    f(vReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
+                    f(vReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
+                    f(Double(failCount) / n * 100),
+                ],
+                columnWidths: cols, totalWidth: width, isHeader: false
+            )
+        }
+    }
+
     // MARK: - Failed
 
     private static func drawFailedTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
-        let cols: [CGFloat] = [0.20, 0.20, 0.20, 0.40]
+        let cols: [CGFloat] = [0.12, 0.15, 0.10, 0.15, 0.10, 0.38]
         cursor.drawTableRow(
-            ["Date", "Sender", "Receiver", "Errors"],
+            ["Date", "Sender", "Send OS", "Receiver", "Recv OS", "Errors"],
             columnWidths: cols,
             totalWidth: width,
             isHeader: true
@@ -212,7 +314,9 @@ enum AnalyticsReportRenderer {
                 [
                     dateFmt.string(from: report.date),
                     report.localDevice.shortDescription,
+                    report.localDevice.osVersion,
                     report.remoteDevice.shortDescription,
+                    report.remoteDevice.osVersion,
                     report.errors?.joined(separator: "; ") ?? "Unknown",
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
@@ -223,20 +327,21 @@ enum AnalyticsReportRenderer {
     // MARK: - All Tests
 
     private static func drawAllTestsTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
-        let cols: [CGFloat] = [0.10, 0.13, 0.13, 0.07, 0.09, 0.09, 0.09, 0.09, 0.09, 0.06, 0.06]
+        let cols: [CGFloat] = [0.08, 0.11, 0.09, 0.11, 0.09, 0.06, 0.08, 0.08, 0.08, 0.08, 0.07, 0.07]
         cursor.drawTableRow(
             [
                 "Date",
                 "Sender",
+                "Send OS",
                 "Receiver",
+                "Recv OS",
                 "Grade",
                 "Lat (ms)",
                 "P95 (ms)",
-                "Thru (MB/s)",
-                "Jitter (ms)",
-                "Loss (%)",
-                "Degrad (%)",
-                "Dur (s)",
+                "Thru",
+                "Jitter",
+                "Loss %",
+                "Degrad %",
             ],
             columnWidths: cols, totalWidth: width, isHeader: true
         )
@@ -250,7 +355,9 @@ enum AnalyticsReportRenderer {
                 [
                     dateFmt.string(from: report.date),
                     report.localDevice.shortDescription,
+                    report.localDevice.osVersion,
                     report.remoteDevice.shortDescription,
+                    report.remoteDevice.osVersion,
                     r.overallGrade,
                     f(r.latencyBurst.avg),
                     f(r.latencyBurst.p95),
@@ -258,7 +365,6 @@ enum AnalyticsReportRenderer {
                     f(r.jitterMeasurement.averageJitter),
                     f(r.packetLossStress.lostPercent),
                     f(r.latencyUnderLoad.degradationPercent),
-                    String(format: "%.0f", report.durationSeconds),
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
             )

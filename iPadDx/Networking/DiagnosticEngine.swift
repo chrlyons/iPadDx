@@ -26,6 +26,12 @@ class DiagnosticEngine {
     private let maxLatencyHistory = 120
     private var lastPathUpdate: TimeInterval = 0
     private var systemTimer: Timer?
+    // Responder-side metric collection during remote test
+    private var responderTestActive = false
+    private var responderCpuSamples: [Double] = []
+    private var responderPeakMemoryMB: Double = 0
+    private var responderWorstThermal: String = "Nominal"
+    private var responderBatteryStart: Float = -1
 
     init(connectionManager: ConnectionManager, metrics: DiagnosticMetrics) {
         self.connectionManager = connectionManager
@@ -112,8 +118,28 @@ class DiagnosticEngine {
         case .testPong:
             testSuiteRunner?.handleTestMessage(message)
 
-        case .testSuiteStatus:
+        case let .testSuiteStatus(running, _):
+            if running, !responderTestActive {
+                // Remote test starting — begin collecting responder metrics
+                responderTestActive = true
+                responderCpuSamples.removeAll()
+                responderPeakMemoryMB = 0
+                responderWorstThermal = "Nominal"
+                responderBatteryStart = SystemMonitor.batteryLevel()
+            } else if !running, responderTestActive {
+                // Remote test ended — send our metrics back
+                responderTestActive = false
+                sendResponderMetrics()
+            }
             onTestSuiteStatus?(message)
+
+        case let .responderMetrics(peakCpu, avgCpu, peakMemoryMB, thermalState, batteryDrain):
+            testSuiteRunner?.handleResponderMetrics(
+                peakCpu: peakCpu, avgCpu: avgCpu,
+                peakMemoryMB: peakMemoryMB,
+                thermalState: thermalState,
+                batteryDrain: batteryDrain
+            )
 
         case let .reportSync(reportJSON):
             onReportReceived?(reportJSON)
@@ -244,5 +270,37 @@ class DiagnosticEngine {
         metrics.cpuUsage = snap.cpuUsage
         metrics.memoryUsedMB = snap.memoryUsedMB
         metrics.memoryTotalMB = snap.memoryTotalMB
+
+        // Collect responder-side samples while a remote test is active
+        if responderTestActive {
+            responderCpuSamples.append(snap.cpuUsage)
+            responderPeakMemoryMB = max(responderPeakMemoryMB, snap.memoryUsedMB)
+            let thermal = SystemMonitor.thermalStateString(snap.thermalState)
+            let thermalOrder = ["Nominal", "Fair", "Serious", "Critical"]
+            if let currentIdx = thermalOrder.firstIndex(of: thermal),
+               let worstIdx = thermalOrder.firstIndex(of: responderWorstThermal),
+               currentIdx > worstIdx
+            {
+                responderWorstThermal = thermal
+            }
+        }
+    }
+
+    private func sendResponderMetrics() {
+        let peakCpu = responderCpuSamples.max() ?? 0
+        let avgCpu = responderCpuSamples.isEmpty ? 0 : responderCpuSamples
+            .reduce(0, +) / Double(responderCpuSamples.count)
+        let batteryEnd = SystemMonitor.batteryLevel()
+        let drain: Double = (responderBatteryStart >= 0 && batteryEnd >= 0)
+            ? max(0, Double(responderBatteryStart - batteryEnd) * 100)
+            : 0
+
+        connectionManager.send(.responderMetrics(
+            peakCpu: peakCpu,
+            avgCpu: avgCpu,
+            peakMemoryMB: responderPeakMemoryMB,
+            thermalState: responderWorstThermal,
+            batteryDrain: drain
+        ))
     }
 }

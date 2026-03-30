@@ -124,6 +124,7 @@ class TestSuiteRunner {
     var livePingCount: Int = 0
     var isWarmingUp: Bool = false
     var config: TestSuiteConfig = .default
+    var responderMetrics: ResponderMetricsResult?
 
     private let connectionManager: ConnectionManager
     private let metrics: DiagnosticMetrics
@@ -157,6 +158,20 @@ class TestSuiteRunner {
         }
     }
 
+    func handleResponderMetrics(
+        peakCpu: Double, avgCpu: Double,
+        peakMemoryMB: Double, thermalState: String,
+        batteryDrain: Double
+    ) {
+        responderMetrics = ResponderMetricsResult(
+            peakCpuUsage: peakCpu,
+            avgCpuUsage: avgCpu,
+            peakMemoryMB: peakMemoryMB,
+            thermalStateDuringTest: thermalState,
+            batteryDrainPercent: batteryDrain
+        )
+    }
+
     func runFullSuite() async -> TestReport? {
         guard state == .idle || state == .completed else { return nil }
 
@@ -174,6 +189,7 @@ class TestSuiteRunner {
         peakMemoryMB = 0
         worstThermalState = "Nominal"
         errorLog.removeAll()
+        responderMetrics = nil
         progress = 0
         state = .running
         isWarmingUp = false
@@ -332,6 +348,12 @@ class TestSuiteRunner {
             errorLog.append("Peer info exchange failed — remote device is Unknown (peer info never received)")
         }
 
+        // Signal test complete so responder sends its metrics
+        connectionManager.send(.testSuiteStatus(running: false, phase: ""))
+
+        // Wait briefly for responder metrics to arrive
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+
         let skipped = TestPhase.allCases.filter { !$0.isEnabled(in: cfg) }.map(\.rawValue)
         let grade = computeGrade(latency: latency, jitter: jitter, loss: packetLoss, underLoad: underLoad)
 
@@ -347,7 +369,8 @@ class TestSuiteRunner {
                 packetLossStress: packetLoss,
                 latencyUnderLoad: underLoad,
                 systemMetrics: systemResult,
-                overallGrade: grade.rawValue
+                overallGrade: grade.rawValue,
+                responderMetrics: responderMetrics
             ),
             durationSeconds: Date().timeIntervalSince(suiteStartTime ?? Date()),
             errors: errorLog.isEmpty ? nil : errorLog,
@@ -357,7 +380,6 @@ class TestSuiteRunner {
         lastReport = report
         state = .completed
         currentPhase = nil
-        connectionManager.send(.testSuiteStatus(running: false, phase: ""))
         ProcessInfo.processInfo.endActivity(activity)
         return report
     }

@@ -17,6 +17,7 @@ class BonjourService {
     var conductorService: ConductorService?
     var agentService: AgentService?
     private var browseRefreshTimer: Timer?
+    private var reverseTestEngines: [DiagnosticEngine] = []
 
     var localDeviceName: String {
         // Use user-set name if available, otherwise fall back to system name
@@ -76,9 +77,11 @@ class BonjourService {
                     case .ready:
                         self.statusMessage = "Advertising on port \(listener.port?.rawValue ?? 0)"
                         self.isAdvertising = true
+                        AppLog("Advertising on port \(listener.port?.rawValue ?? 0)", category: "Bonjour")
                     case let .failed(error):
                         self.statusMessage = "Listener failed: \(error.localizedDescription)"
                         self.isAdvertising = false
+                        AppLog("Listener failed: \(error.localizedDescription)", level: .error, category: "Bonjour")
                     case .cancelled:
                         self.isAdvertising = false
                     default:
@@ -131,9 +134,11 @@ class BonjourService {
                 case .ready:
                     self.isBrowsing = true
                     self.statusMessage = "Browsing for peers..."
+                    AppLog("Browsing started", category: "Bonjour")
                 case let .failed(error):
                     self.statusMessage = "Browser failed: \(error.localizedDescription)"
                     self.isBrowsing = false
+                    AppLog("Browser failed: \(error.localizedDescription)", level: .error, category: "Bonjour")
                 default:
                     break
                 }
@@ -167,6 +172,7 @@ class BonjourService {
 
         peer.connectionState = .connecting
         statusMessage = "Connecting to \(peer.name)..."
+        AppLog("Connecting to \(peer.name)", category: "Bonjour")
 
         let manager = ConnectionManager(label: "standalone->\(peer.name)")
         manager.onConnectionLost = { [weak self] in
@@ -281,11 +287,23 @@ class BonjourService {
     func disableConductorMode() {
         browseRefreshTimer?.invalidate()
         browseRefreshTimer = nil
+        let agentCount = conductorService?.fleet.count ?? 0
+        AppLog("Disabling conductor mode, disconnecting \(agentCount) agents", category: "Bonjour")
+        for engine in reverseTestEngines {
+            engine.stop()
+        }
+        reverseTestEngines.removeAll()
         conductorService?.disconnectAll()
+        // Keep reference alive until disconnect messages flush
+        let cs = conductorService
         conductorService = nil
         appMode = .standalone
         statusMessage = "Standalone Mode"
         UIApplication.shared.isIdleTimerDisabled = false
+        Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            _ = cs // prevent premature dealloc
+        }
     }
 
     func connectAgentFromConductor(_ peer: PeerDevice) {
@@ -319,8 +337,21 @@ class BonjourService {
     }
 
     func leaveAgentMode() {
+        AppLog("Leaving agent mode", category: "Bonjour")
         agentService?.reset()
         agentService = nil
+
+        // Clean up the underlying conductor connection
+        let engine = diagnosticEngine
+        let manager = connectionManager
+        diagnosticEngine = nil
+        connectionManager = nil
+        engine?.onRemoteDisconnect = nil
+        engine?.onOrchestration = nil
+        engine?.stop()
+        manager?.onConnectionLost = nil
+        manager?.disconnect()
+
         appMode = .standalone
         statusMessage = "Standalone Mode"
         UIApplication.shared.isIdleTimerDisabled = false
@@ -340,8 +371,14 @@ class BonjourService {
     }
 
     func handleConnectionLost() {
-        // Don't clean up if we're in agent/conductor mode — the connection
-        // is managed by the respective service, not BonjourService
+        if appMode == .agent {
+            // Conductor connection dropped — leave agent mode
+            AppLog("Conductor connection lost, leaving agent mode", level: .warning, category: "Bonjour")
+            leaveAgentMode()
+            return
+        }
+        // Don't clean up if we're in conductor mode — the connection
+        // is managed by ConductorService, not BonjourService
         guard appMode == .standalone else { return }
         cleanUp(status: "Connection lost")
     }
@@ -402,6 +439,14 @@ class BonjourService {
                 newPeers.append(peer)
             }
         }
+        let added = newPeers.filter { np in !discoveredPeers.contains { $0.name == np.name } }
+        let removed = discoveredPeers.filter { op in !newPeers.contains { $0.name == op.name } }
+        for p in added {
+            AppLog("Discovered: \(p.name)", category: "Bonjour")
+        }
+        for p in removed {
+            AppLog("Lost: \(p.name)", category: "Bonjour")
+        }
         discoveredPeers = newPeers
     }
 
@@ -418,9 +463,18 @@ class BonjourService {
             let manager = ConnectionManager(label: "conductor-reverse-test")
             let metrics = DiagnosticMetrics()
             let engine = DiagnosticEngine(connectionManager: manager, metrics: metrics)
+            reverseTestEngines.append(engine)
             manager.accept(conn) { data in
                 Task { @MainActor in
                     engine.handleMessage(data)
+                }
+            }
+            manager.onConnectionLost = { [weak self, weak engine] in
+                Task { @MainActor in
+                    engine?.stop()
+                    if let engine {
+                        self?.reverseTestEngines.removeAll { $0 === engine }
+                    }
                 }
             }
             Task {
@@ -429,7 +483,14 @@ class BonjourService {
             }
             return
         }
-        guard connectedPeer == nil else {
+        // Reject if we already have a connection or are setting one up.
+        // Network.framework may resolve a Bonjour name to multiple addresses
+        // and connect via each — the listener accepts them all. Only keep the first.
+        guard connectedPeer == nil, connectionManager == nil else {
+            AppLog(
+                "Rejecting duplicate incoming connection (peer=\(connectedPeer != nil), mgr=\(connectionManager != nil))",
+                category: "Bonjour"
+            )
             conn.cancel()
             return
         }

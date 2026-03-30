@@ -26,6 +26,14 @@ enum DiagnosticMessage: Codable {
     case orchestrationStatus(phase: String, detail: String)
     case orchestrationReport(reportJSON: Data)
     case orchestrationCancel
+    /// Responder-side system metrics sent back to controller after test
+    case responderMetrics(
+        peakCpu: Double,
+        avgCpu: Double,
+        peakMemoryMB: Double,
+        thermalState: String,
+        batteryDrain: Double
+    )
 
     // MARK: - Serialization
 

@@ -461,13 +461,23 @@ struct TestSuiteView: View {
                 resultRow("Impact", report.results.latencyUnderLoad.formattedDegradation)
             }
 
-            testResultCard("System Metrics", icon: "cpu", color: .indigo) {
+            testResultCard("System Metrics (Controller)", icon: "cpu", color: .indigo) {
                 let s = report.results.systemMetrics
                 resultRow("Battery Drain", String(format: "%.2f%%", s.batteryDrainPercent))
                 resultRow("Peak CPU", String(format: "%.1f%%", s.peakCpuUsage))
                 resultRow("Avg CPU", String(format: "%.1f%%", s.avgCpuUsage))
                 resultRow("Peak Memory", String(format: "%.0f MB", s.peakMemoryMB))
                 resultRow("Thermal", s.thermalStateDuringTest)
+            }
+
+            if let r = report.results.responderMetrics {
+                testResultCard("System Metrics (Responder)", icon: "cpu", color: .teal) {
+                    resultRow("Battery Drain", String(format: "%.2f%%", r.batteryDrainPercent))
+                    resultRow("Peak CPU", String(format: "%.1f%%", r.peakCpuUsage))
+                    resultRow("Avg CPU", String(format: "%.1f%%", r.avgCpuUsage))
+                    resultRow("Peak Memory", String(format: "%.0f MB", r.peakMemoryMB))
+                    resultRow("Thermal", r.thermalStateDuringTest)
+                }
             }
         }
     }

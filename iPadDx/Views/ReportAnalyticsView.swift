@@ -49,6 +49,7 @@ private enum DateRange: String, CaseIterable, Identifiable {
 struct ReportAnalyticsView: View {
     @Environment(ReportStore.self) private var store
     @State private var selectedPair: String = "All"
+    @State private var selectedOS: String = "All"
     @State private var dateRange: DateRange = .all
     @State private var selectedMetric: AnalyticsMetric = .latencyAvg
     @State private var exportURLs: [URL]?
@@ -58,12 +59,20 @@ struct ReportAnalyticsView: View {
         return Array(Set(pairs)).sorted()
     }
 
+    private var uniqueOSVersions: [String] {
+        let versions = Set(store.reports.flatMap { [$0.localDevice.osVersion, $0.remoteDevice.osVersion] })
+        return versions.sorted()
+    }
+
     private var filteredReports: [TestReport] {
         store.reports.filter { report in
             let pair = "\(report.localDevice.chipFamily) vs \(report.remoteDevice.chipFamily)"
             let matchesPair = selectedPair == "All" || pair == selectedPair
             let matchesDate = dateRange.startDate.map { report.date >= $0 } ?? true
-            return matchesPair && matchesDate
+            let matchesOS = selectedOS == "All"
+                || report.localDevice.osVersion == selectedOS
+                || report.remoteDevice.osVersion == selectedOS
+            return matchesPair && matchesDate && matchesOS
         }
         .sorted { $0.date < $1.date }
     }
@@ -103,6 +112,7 @@ struct ReportAnalyticsView: View {
                     summaryCards
                     trendChart
                     pairComparisonChart
+                    osVersionChart
                     gradeChart
                 }
                 .padding()
@@ -173,6 +183,14 @@ struct ReportAnalyticsView: View {
                 Text("All Pairs").tag("All")
                 ForEach(uniquePairs, id: \.self) { pair in
                     Text(pair).tag(pair)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Picker("OS", selection: $selectedOS) {
+                Text("All OS").tag("All")
+                ForEach(uniqueOSVersions, id: \.self) { version in
+                    Text(version).tag(version)
                 }
             }
             .pickerStyle(.menu)
@@ -248,7 +266,7 @@ struct ReportAnalyticsView: View {
                     : "-",
                 .red
             )
-            summaryItem("Device Pairs", "\(uniquePairs.count)", .indigo)
+            summaryItem("OS Versions", "\(uniqueOSVersions.count)", .indigo)
         }
     }
 
@@ -328,6 +346,109 @@ struct ReportAnalyticsView: View {
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - OS Version Breakdown
+
+    private var osVersionAggregates: [OSAggregate] {
+        var map: [String: [TestReport]] = [:]
+        for report in filteredReports {
+            map[report.localDevice.osVersion, default: []].append(report)
+            map[report.remoteDevice.osVersion, default: []].append(report)
+        }
+        return map.map { version, reports in
+            let n = Double(reports.count)
+            let avgLat = reports.map(\.results.latencyBurst.avg).reduce(0, +) / n
+            let avgLoss = reports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n
+            let failCount = reports.filter { $0.results.overallGrade == "Poor" || $0.results.overallGrade == "Fair" }
+                .count
+            let failRate = Double(failCount) / n * 100
+            return OSAggregate(
+                version: version,
+                count: reports.count,
+                avgLatency: avgLat,
+                avgPacketLoss: avgLoss,
+                failRate: failRate
+            )
+        }
+        .sorted { $0.version < $1.version }
+    }
+
+    private var osVersionChart: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "gear.badge").foregroundStyle(.indigo)
+                Text("\(selectedMetric.rawValue) by iPadOS Version").font(.headline)
+                Spacer()
+            }
+
+            let aggregates = osVersionAggregates
+            if !aggregates.isEmpty {
+                Chart(aggregates) { item in
+                    BarMark(
+                        x: .value(selectedMetric.rawValue, osMetricValue(for: item)),
+                        y: .value("OS", item.version)
+                    )
+                    .foregroundStyle(by: .value("OS", item.version))
+                    .annotation(position: .trailing, spacing: 4) {
+                        Text(formatMetricValue(osMetricValue(for: item)))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .chartXAxisLabel(selectedMetric.unit)
+                .chartLegend(.hidden)
+                .frame(height: max(CGFloat(aggregates.count) * 50, 80))
+
+                // Detail table
+                VStack(spacing: 4) {
+                    HStack {
+                        Text("Version").font(.caption2).fontWeight(.semibold).frame(
+                            maxWidth: .infinity,
+                            alignment: .leading
+                        )
+                        Text("Tests").font(.caption2).fontWeight(.semibold).frame(width: 50, alignment: .trailing)
+                        Text("Avg Lat").font(.caption2).fontWeight(.semibold).frame(width: 60, alignment: .trailing)
+                        Text("Loss").font(.caption2).fontWeight(.semibold).frame(width: 50, alignment: .trailing)
+                        Text("Fail Rate").font(.caption2).fontWeight(.semibold).frame(width: 60, alignment: .trailing)
+                    }
+                    .foregroundStyle(.secondary)
+
+                    ForEach(aggregates) { item in
+                        HStack {
+                            Text(item.version).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                            Text("\(item.count)").font(.caption).frame(width: 50, alignment: .trailing)
+                            Text(String(format: "%.1fms", item.avgLatency)).font(.caption).frame(
+                                width: 60,
+                                alignment: .trailing
+                            )
+                            Text(String(format: "%.1f%%", item.avgPacketLoss)).font(.caption).frame(
+                                width: 50,
+                                alignment: .trailing
+                            )
+                            Text(String(format: "%.1f%%", item.failRate)).font(.caption)
+                                .foregroundStyle(item.failRate > 10 ? .red : .primary)
+                                .frame(width: 60, alignment: .trailing)
+                        }
+                    }
+                }
+                .padding(.top, 8)
+            } else {
+                Text("No data for selected filters.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(height: 80).frame(maxWidth: .infinity)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func osMetricValue(for item: OSAggregate) -> Double {
+        switch selectedMetric {
+        case .latencyAvg: item.avgLatency
+        case .packetLoss: item.avgPacketLoss
+        default: item.avgLatency // default to latency for metrics not in the aggregate
+        }
     }
 
     // MARK: - Grade Distribution
@@ -421,5 +542,16 @@ private struct PairAggregate: Identifiable {
     let count: Int
     var id: String {
         pair
+    }
+}
+
+private struct OSAggregate: Identifiable {
+    let version: String
+    let count: Int
+    let avgLatency: Double
+    let avgPacketLoss: Double
+    let failRate: Double
+    var id: String {
+        version
     }
 }

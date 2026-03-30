@@ -395,6 +395,9 @@ class ConductorService {
             }
         }
 
+        // Settle delay — let agent clean up partner connections before reuse
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+
         if conn.connectionManager.isConnected {
             conn.agentStatus = .idle
             conn.currentTestPartner = nil
@@ -444,16 +447,34 @@ class ConductorService {
             failedPairs.append(pair)
         }
 
-        // Release both devices — use idle if still connected, leave failed if disconnected
+        // Cancel responder if test failed
+        if !completed {
+            if connA.connectionManager.isConnected { connA.connectionManager.send(.orchestrationCancel) }
+            if connB.connectionManager.isConnected { connB.connectionManager.send(.orchestrationCancel) }
+        }
+
+        // Wait for responder (connB) to also finish — it may still be responding
+        // even after the controller reports done
+        if connB.agentStatus == .testing {
+            log("Waiting for responder \(pair.deviceB.name) to finish...", level: .info)
+            for _ in 0 ..< 20 { // up to 10 seconds
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if connB.agentStatus != .testing { break }
+                if !connB.connectionManager.isConnected { break }
+            }
+        }
+
+        // Settle delay — let agent clean up partner connections before reuse
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+        // Release both devices
         if connA.connectionManager.isConnected {
             connA.agentStatus = .idle
             connA.currentTestPartner = nil
-            if !completed { connA.connectionManager.send(.orchestrationCancel) }
         }
         if connB.connectionManager.isConnected {
             connB.agentStatus = .idle
             connB.currentTestPartner = nil
-            if !completed { connB.connectionManager.send(.orchestrationCancel) }
         }
     }
 

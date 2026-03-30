@@ -1,12 +1,12 @@
 import Foundation
 import Network
 
-/// Shared TLS-PSK configuration matching the Pearson Q-Interactive Assess connection model
+/// Shared TLS-PSK configuration
 enum ConnectionSecurity {
     /// Create TLS-PSK parameters for Network.framework connections
-    /// - Parameter peerToPeer: Include AWDL/peer-to-peer. Use true for listeners (accept from any interface),
-    ///   false for outgoing connections (force WiFi to avoid AWDL "Connection refused" failures).
-    static func tlsParameters(peerToPeer: Bool = false) -> NWParameters {
+    /// - Parameter peerToPeer: Include AWDL/peer-to-peer so connections work over local Wi-Fi
+    ///   (without an access point) as well as infrastructure Wi-Fi.
+    static func tlsParameters(peerToPeer: Bool = true) -> NWParameters {
         let tlsOptions = NWProtocolTLS.Options()
         let secOptions = tlsOptions.securityProtocolOptions
 
@@ -37,6 +37,12 @@ enum ConnectionSecurity {
         }
 
         let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 10 // Send keepalive after 10s idle
+        tcpOptions.keepaliveInterval = 5 // Retry every 5s
+        tcpOptions.keepaliveCount = 3 // Give up after 3 missed
+        tcpOptions.noDelay = true // Disable Nagle's algorithm for low-latency pings
+        tcpOptions.connectionTimeout = 15 // 15s connection timeout
         let params = NWParameters(tls: tlsOptions, tcp: tcpOptions)
         params.includePeerToPeer = peerToPeer
         return params
@@ -68,7 +74,7 @@ class ConnectionManager {
         let params = ConnectionSecurity.tlsParameters()
         let conn = NWConnection(to: endpoint, using: params)
         connection = conn
-        print("[CM:\(label)] connect to \(endpoint)")
+        AppLog("connect to \(endpoint)", category: "CM:\(label)")
         setupConnection(conn)
         conn.start(queue: queue)
     }
@@ -76,28 +82,35 @@ class ConnectionManager {
     func accept(_ conn: NWConnection, handler: @escaping (Data) -> Void) {
         receiveHandler = handler
         connection = conn
-        print("[CM:\(label)] accept \(conn.endpoint)")
+        AppLog("accept \(conn.endpoint)", category: "CM:\(label)")
         setupConnection(conn)
         conn.start(queue: queue)
     }
 
     func send(_ message: DiagnosticMessage) {
-        guard let conn = connection, isConnected else { return }
+        guard let conn = connection, isConnected else {
+            AppLog(
+                "send DROPPED (connected=\(isConnected), conn=\(connection != nil))",
+                level: .warning,
+                category: "CM:\(label)"
+            )
+            return
+        }
         do {
             let data = try message.encode()
             totalBytesSent += data.count
             conn.send(content: data, completion: .contentProcessed { error in
                 if let error {
-                    print("Send error: \(error)")
+                    AppLog("Send error: \(error)", level: .error, category: "CM")
                 }
             })
         } catch {
-            print("Encode error: \(error)")
+            AppLog("Encode error: \(error)", level: .error, category: "CM")
         }
     }
 
     func disconnect() {
-        print("[CM:\(label)] disconnect called")
+        AppLog("disconnect called", category: "CM:\(label)")
         connection?.cancel()
         connection = nil
         Task { @MainActor in
@@ -109,12 +122,18 @@ class ConnectionManager {
     /// Returns true if connected, false if failed/timed out.
     func waitForReady(timeout: TimeInterval = 15) async -> Bool {
         if isConnected {
-            print("[CM:\(label)] waitForReady: already connected")
+            AppLog("waitForReady: already connected", category: "CM:\(label)")
             return true
         }
-        print("[CM:\(label)] waitForReady: waiting up to \(timeout)s")
+        AppLog("waitForReady: waiting up to \(timeout)s", category: "CM:\(label)")
         let start = Date()
         let result = await withCheckedContinuation { continuation in
+            // Re-check after setting continuation to close the race window
+            // where .ready fires between the isConnected check and here
+            if isConnected {
+                continuation.resume(returning: true)
+                return
+            }
             readyContinuation = continuation
 
             // Timeout — resolve as failure if still waiting
@@ -122,13 +141,16 @@ class ConnectionManager {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 if let pending = readyContinuation {
                     readyContinuation = nil
-                    print("[CM:\(label)] waitForReady: TIMEOUT after \(timeout)s")
+                    AppLog("waitForReady: TIMEOUT after \(timeout)s", level: .error, category: "CM:\(label)")
                     pending.resume(returning: false)
                 }
             }
         }
         let elapsed = Date().timeIntervalSince(start)
-        print("[CM:\(label)] waitForReady: \(result ? "READY" : "FAILED") in \(String(format: "%.1f", elapsed))s")
+        AppLog(
+            "waitForReady: \(result ? "READY" : "FAILED") in \(String(format: "%.1f", elapsed))s",
+            category: "CM:\(label)"
+        )
         return result
     }
 
@@ -144,18 +166,18 @@ class ConnectionManager {
                 guard let self else { return }
                 switch state {
                 case .setup:
-                    print("[CM:\(self.label)] state: setup")
+                    AppLog("state: setup", category: "CM:\(self.label)")
                 case .preparing:
-                    print("[CM:\(self.label)] state: preparing")
+                    AppLog("state: preparing", category: "CM:\(self.label)")
                 case .ready:
-                    print("[CM:\(self.label)] state: READY")
+                    AppLog("state: READY", category: "CM:\(self.label)")
                     self.isConnected = true
                     if let continuation = self.readyContinuation {
                         self.readyContinuation = nil
                         continuation.resume(returning: true)
                     }
                 case let .failed(error):
-                    print("[CM:\(self.label)] state: FAILED — \(error)")
+                    AppLog("state: FAILED — \(error)", level: .error, category: "CM:\(self.label)")
                     if let continuation = self.readyContinuation {
                         self.readyContinuation = nil
                         continuation.resume(returning: false)
@@ -165,7 +187,7 @@ class ConnectionManager {
                         self.onConnectionLost?()
                     }
                 case .cancelled:
-                    print("[CM:\(self.label)] state: cancelled")
+                    AppLog("state: cancelled", category: "CM:\(self.label)")
                     if let continuation = self.readyContinuation {
                         self.readyContinuation = nil
                         continuation.resume(returning: false)
@@ -175,16 +197,17 @@ class ConnectionManager {
                         self.onConnectionLost?()
                     }
                 case let .waiting(error):
-                    print("[CM:\(self.label)] state: waiting — \(error)")
+                    AppLog("state: waiting — \(error)", level: .warning, category: "CM:\(self.label)")
                 @unknown default:
-                    print("[CM:\(self.label)] state: unknown")
+                    AppLog("state: unknown", category: "CM:\(self.label)")
                 }
             }
         }
 
         conn.pathUpdateHandler = { [weak self] path in
-            print(
-                "[CM:\(self?.label ?? "?")] path: \(path.status), ifaces: \(path.availableInterfaces.map { "\($0.type)" })"
+            AppLog(
+                "path: \(path.status), ifaces: \(path.availableInterfaces.map { "\($0.type)" })",
+                category: "CM:\(self?.label ?? "?")"
             )
         }
 
@@ -197,14 +220,25 @@ class ConnectionManager {
             guard let self else { return }
 
             if let error {
-                print("Receive error: \(error)")
-                Task { @MainActor in self.isConnected = false }
+                AppLog("Receive error: \(error)", level: .error, category: "CM:\(label)")
+                Task { @MainActor in
+                    if self.isConnected {
+                        self.isConnected = false
+                        self.onConnectionLost?()
+                    }
+                }
                 return
             }
 
             guard let lengthData = data, lengthData.count == 4 else {
                 if isComplete {
-                    Task { @MainActor in self.isConnected = false }
+                    AppLog("Receive complete (EOF)", category: "CM:\(label)")
+                    Task { @MainActor in
+                        if self.isConnected {
+                            self.isConnected = false
+                            self.onConnectionLost?()
+                        }
+                    }
                 } else {
                     startReceiving(conn)
                 }
@@ -222,8 +256,13 @@ class ConnectionManager {
                     guard let self else { return }
 
                     if let error {
-                        print("Payload receive error: \(error)")
-                        Task { @MainActor in self.isConnected = false }
+                        AppLog("Payload receive error: \(error)", level: .error, category: "CM:\(label)")
+                        Task { @MainActor in
+                            if self.isConnected {
+                                self.isConnected = false
+                                self.onConnectionLost?()
+                            }
+                        }
                         return
                     }
 
@@ -236,7 +275,13 @@ class ConnectionManager {
 
                     // Always continue receiving as long as the connection isn't done
                     if isComplete2 {
-                        Task { @MainActor in self.isConnected = false }
+                        AppLog("Payload receive complete (EOF)", category: "CM:\(label)")
+                        Task { @MainActor in
+                            if self.isConnected {
+                                self.isConnected = false
+                                self.onConnectionLost?()
+                            }
+                        }
                     } else {
                         startReceiving(conn)
                     }

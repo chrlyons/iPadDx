@@ -153,6 +153,27 @@ struct DeviceListView: View {
                 Text("Reports")
             }
 
+            #if DEBUG
+                Section {
+                    Button {
+                        detailSelection = .console
+                    } label: {
+                        HStack {
+                            Image(systemName: "terminal")
+                                .foregroundStyle(.green)
+                            Text("Console")
+                            Spacer()
+                            if detailSelection == .console {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.blue)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Developer")
+                }
+            #endif
+
             // Mode section
             Section {
                 if service.appMode == .conductor {

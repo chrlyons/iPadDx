@@ -41,6 +41,8 @@
 		A10032 /* FleetDeviceCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034 /* FleetDeviceCard.swift */; };
 		A10033 /* AnalyticsReportRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10035 /* AnalyticsReportRenderer.swift */; };
 		A10034 /* TestInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10036 /* TestInfoView.swift */; };
+		A10035 /* LogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10037 /* LogStore.swift */; };
+		A10036 /* ConsoleLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10038 /* ConsoleLogView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -80,6 +82,8 @@
 		B10034 /* FleetDeviceCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetDeviceCard.swift; sourceTree = "<group>"; };
 		B10035 /* AnalyticsReportRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsReportRenderer.swift; sourceTree = "<group>"; };
 		B10036 /* TestInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestInfoView.swift; sourceTree = "<group>"; };
+		B10037 /* LogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogStore.swift; sourceTree = "<group>"; };
+		B10038 /* ConsoleLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleLogView.swift; sourceTree = "<group>"; };
 		C10001 /* iPadDx.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iPadDx.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -159,6 +163,7 @@
 				B10033 /* AgentStatusView.swift */,
 				B10034 /* FleetDeviceCard.swift */,
 				B10036 /* TestInfoView.swift */,
+				B10038 /* ConsoleLogView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -181,6 +186,7 @@
 				B10030 /* ConductorService.swift */,
 				B10031 /* AgentService.swift */,
 				B10035 /* AnalyticsReportRenderer.swift */,
+				B10037 /* LogStore.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -287,6 +293,8 @@
 				A10032 /* FleetDeviceCard.swift in Sources */,
 				A10033 /* AnalyticsReportRenderer.swift in Sources */,
 				A10034 /* TestInfoView.swift in Sources */,
+				A10035 /* LogStore.swift in Sources */,
+				A10036 /* ConsoleLogView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

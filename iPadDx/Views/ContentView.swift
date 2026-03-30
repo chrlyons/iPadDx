@@ -6,6 +6,7 @@ enum DetailView: Hashable {
     case tests
     case reports
     case analytics
+    case console
     case conductor
     case agent
 }
@@ -57,6 +58,8 @@ struct ContentView: View {
                     }
                 case .tests:
                     TestInfoView()
+                case .console:
+                    ConsoleLogView()
                 case .reports:
                     ReportListView()
                 case .analytics:

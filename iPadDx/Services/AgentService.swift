@@ -14,6 +14,7 @@ class AgentService {
 
     private var conductorConnection: ConnectionManager?
     private var partnerConnection: ConnectionManager?
+    private var partnerEngine: DiagnosticEngine?
     private var testRunner: TestSuiteRunner?
     private let serviceType = "_ipadconn._tcp"
     private var testGeneration: Int = 0
@@ -52,6 +53,8 @@ class AgentService {
 
     func cancelTest() {
         testGeneration += 1 // invalidate any pending async work
+        partnerEngine?.stop()
+        partnerEngine = nil
         partnerConnection?.onConnectionLost = nil
         partnerConnection?.disconnect()
         partnerConnection = nil
@@ -64,7 +67,16 @@ class AgentService {
 
     /// Accept an incoming connection from a test partner (another agent)
     func acceptTestPartnerConnection(_ conn: NWConnection) {
+        // Reject if we're not expecting a partner connection
+        if status != .connecting, status != .idle {
+            AppLog("Rejecting partner connection — already \(status)", level: .warning, category: "Agent")
+            conn.cancel()
+            return
+        }
+
         // Clean up any previous partner connection
+        partnerEngine?.stop()
+        partnerEngine = nil
         partnerConnection?.onConnectionLost = nil
         partnerConnection?.disconnect()
         partnerConnection = nil
@@ -74,6 +86,7 @@ class AgentService {
 
         let metrics = DiagnosticMetrics()
         let engine = DiagnosticEngine(connectionManager: manager, metrics: metrics)
+        partnerEngine = engine
 
         manager.accept(conn) { data in
             Task { @MainActor in
@@ -86,6 +99,8 @@ class AgentService {
             Task { @MainActor in
                 guard let self else { return }
                 let wasActive = self.status == .testing || self.status == .connecting
+                self.partnerEngine?.stop()
+                self.partnerEngine = nil
                 self.partnerConnection = nil
                 self.status = .idle
                 self.testPartnerName = ""
@@ -222,6 +237,7 @@ class AgentService {
         manager.onConnectionLost = nil
         engine.stop()
         manager.disconnect()
+        partnerEngine = nil
         partnerConnection = nil
         testRunner = nil
         status = .idle

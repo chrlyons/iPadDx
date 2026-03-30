@@ -1,6 +1,6 @@
 # iPadDx
 
-A diagnostic tool for testing iPad-to-iPad Bonjour connections using Apple's Network.framework with TLS-PSK encryption. Designed to mirror the connection architecture used by Pearson Q-Interactive Assess -- fully offline over local Wi-Fi.
+A diagnostic tool for testing iPad-to-iPad Bonjour connections using Apple's Network.framework with TLS-PSK encryption.
 
 Supports standalone 1:1 testing, or fleet-wide automated testing via Conductor mode across multiple iPads simultaneously.
 
