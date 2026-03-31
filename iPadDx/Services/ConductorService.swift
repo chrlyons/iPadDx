@@ -57,6 +57,7 @@ class ConductorService {
     var failedPairs: [TestPair] = []
     var runningPairs: [String] = []
     var eventLog: [ConductorEvent] = []
+    private var cancelRequested = false
 
     private let serviceType = "_ipadconn._tcp"
     private var listener: NWListener?
@@ -220,8 +221,20 @@ class ConductorService {
     var conductorBonjourName: String = ""
     private var selfBusy = false
 
+    func cancelQueue() {
+        guard queueStatus != .idle else { return }
+        cancelRequested = true
+        log("Queue cancellation requested", level: .warning)
+
+        // Send cancel to all agents that are currently testing
+        for conn in fleet where conn.agentStatus == .testing {
+            conn.connectionManager.send(.orchestrationCancel)
+        }
+    }
+
     func runQueue(reportStore _: ReportStore) async {
         guard !testQueue.isEmpty else { return }
+        cancelRequested = false
         let total = testQueue.count
         queueStatus = .running(pairIndex: 0, total: total)
         completedReports.removeAll()
@@ -234,6 +247,22 @@ class ConductorService {
         var activeTasks: [UUID: Task<Void, Never>] = [:]
 
         while !remaining.isEmpty || !activeTasks.isEmpty {
+            // Check for cancellation
+            if cancelRequested {
+                log(
+                    "Cancelling \(remaining.count) remaining pairs, waiting for \(activeTasks.count) active",
+                    level: .warning
+                )
+                remaining.removeAll()
+                for (_, task) in activeTasks {
+                    task.cancel()
+                }
+                for (_, task) in activeTasks {
+                    await task.value
+                }
+                activeTasks.removeAll()
+                break
+            }
             // Prune pairs where a device has gone offline
             let deadPairs = remaining.filter { pair in
                 let isSelfA = pair.deviceA.id == selfDeviceID
@@ -330,9 +359,15 @@ class ConductorService {
         }
         selfBusy = false
 
-        queueStatus = .completed
+        if cancelRequested {
+            queueStatus = .idle
+            log("Queue cancelled — \(completedCount)/\(total) completed", level: .warning)
+        } else {
+            queueStatus = .completed
+        }
         runningPairs.removeAll()
         testQueue.removeAll()
+        cancelRequested = false
     }
 
     // MARK: - Pair Execution

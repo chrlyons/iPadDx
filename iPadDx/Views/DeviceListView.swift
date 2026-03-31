@@ -33,6 +33,27 @@ struct DeviceListView: View {
                 Text(service.statusMessage)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                if service.appMode == .conductor {
+                    HStack {
+                        Circle()
+                            .fill(.purple)
+                            .frame(width: 8, height: 8)
+                        Text("Conducting")
+                            .font(.caption)
+                            .foregroundStyle(.purple)
+                            .fontWeight(.medium)
+                    }
+                } else if service.appMode == .agent {
+                    HStack {
+                        Circle()
+                            .fill(.orange)
+                            .frame(width: 8, height: 8)
+                        Text("Agent Mode")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fontWeight(.medium)
+                    }
+                }
             } header: {
                 Text("This Device")
             }

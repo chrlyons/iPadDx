@@ -236,19 +236,30 @@ struct ConductorDashboardView: View {
                     .buttonStyle(.bordered)
                     .disabled(conductor.connectedAgents.isEmpty || conductor.queueStatus != .idle)
 
-                    Button {
-                        Task {
-                            await conductor.runQueue(reportStore: reportStore)
-                            for report in conductor.completedReports {
-                                reportStore.save(report, source: "conductor")
-                            }
+                    if conductor.queueStatus != .idle, conductor.queueStatus != .completed {
+                        Button(role: .destructive) {
+                            conductor.cancelQueue()
+                        } label: {
+                            Label("Cancel", systemImage: "stop.fill")
+                                .frame(maxWidth: .infinity)
                         }
-                    } label: {
-                        Label("Run Queue", systemImage: "play.fill")
-                            .frame(maxWidth: .infinity)
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                    } else {
+                        Button {
+                            Task {
+                                await conductor.runQueue(reportStore: reportStore)
+                                for report in conductor.completedReports {
+                                    reportStore.save(report, source: "conductor")
+                                }
+                            }
+                        } label: {
+                            Label("Run Queue", systemImage: "play.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(conductor.testQueue.isEmpty || conductor.queueStatus != .idle)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(conductor.testQueue.isEmpty || conductor.queueStatus != .idle)
                 }
             }
         }

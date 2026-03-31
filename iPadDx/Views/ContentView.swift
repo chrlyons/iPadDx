@@ -79,6 +79,16 @@ struct ContentView: View {
                 service.startAll()
             }
         }
+        .onChange(of: service.appMode) { _, newMode in
+            switch newMode {
+            case .agent:
+                detailSelection = .agent
+            case .conductor:
+                detailSelection = .conductor
+            case .standalone:
+                detailSelection = .dashboard
+            }
+        }
         .alert("Set Device Name", isPresented: $showNamePrompt) {
             TextField("e.g. Christian's iPad", text: $editingName)
             Button("Save") {
