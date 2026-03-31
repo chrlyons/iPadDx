@@ -58,6 +58,7 @@ class ConductorService {
     var runningPairs: [String] = []
     var eventLog: [ConductorEvent] = []
     private var cancelRequested = false
+    private var activeTasks: [UUID: Task<Void, Never>] = [:]
 
     private let serviceType = "_ipadconn._tcp"
     private var listener: NWListener?
@@ -226,10 +227,20 @@ class ConductorService {
         cancelRequested = true
         log("Queue cancellation requested", level: .warning)
 
+        // Cancel all active tasks
+        for (_, task) in activeTasks {
+            task.cancel()
+        }
+
         // Send cancel to all agents that are currently testing
         for conn in fleet where conn.agentStatus == .testing {
             conn.connectionManager.send(.orchestrationCancel)
+            conn.agentStatus = .idle
+            conn.currentTestPartner = nil
+            conn.testProgress = 0
+            conn.testPhase = ""
         }
+        selfBusy = false
     }
 
     func runQueue(reportStore _: ReportStore) async {
@@ -244,7 +255,7 @@ class ConductorService {
 
         // Process queue — launch pairs in parallel when devices are available
         var remaining = testQueue
-        var activeTasks: [UUID: Task<Void, Never>] = [:]
+        activeTasks.removeAll()
 
         while !remaining.isEmpty || !activeTasks.isEmpty {
             // Check for cancellation
@@ -349,6 +360,7 @@ class ConductorService {
         for (_, task) in activeTasks {
             await task.value
         }
+        activeTasks.removeAll()
 
         // Reset all agent statuses
         for conn in fleet {

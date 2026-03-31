@@ -319,8 +319,11 @@ class BonjourService {
         // Stop the standalone ping loop but keep the engine alive for message routing
         diagnosticEngine?.stop() // stops ping timer only
 
-        // Clear standalone callbacks that would overwrite agent state
-        diagnosticEngine?.onPeerNameUpdated = nil
+        // Rewire callbacks for agent mode
+        diagnosticEngine?.onPeerNameUpdated = { [weak self] name in
+            self?.agentService?.conductorName = name
+            self?.statusMessage = "Agent — Connected to \(name)"
+        }
         diagnosticEngine?.onTestSuiteStatus = nil
         connectionManager?.onConnectionLost = nil
 
@@ -515,8 +518,15 @@ class BonjourService {
 
         let engine = DiagnosticEngine(connectionManager: manager, metrics: peer.metrics)
         engine.peer = peer
-        engine.onPeerNameUpdated = { [weak self] name in
-            self?.statusMessage = "Connected to \(name) (Responder)"
+        engine.onPeerNameUpdated = { [weak self, weak peer] name in
+            // Always store the resolved name on the peer object
+            peer?.name = name
+            if self?.appMode == .agent {
+                self?.agentService?.conductorName = name
+                self?.statusMessage = "Agent — Connected to \(name)"
+            } else {
+                self?.statusMessage = "Connected to \(name) (Responder)"
+            }
         }
         engine.onTestSuiteStatus = { [weak self] msg in
             if case let .testSuiteStatus(running, phase) = msg {
@@ -536,9 +546,10 @@ class BonjourService {
         engine.onRemoteDisconnect = { [weak self] in
             self?.handleRemoteDisconnect()
         }
-        engine.onOrchestration = { [weak self, weak manager] message in
+        engine.onOrchestration = { [weak self, weak peer, weak manager] message in
             if case let .roleAssignment(role) = message, role == "agent", let manager {
-                self?.enterAgentMode(conductorName: "Conductor", conductorConnection: manager)
+                let name = peer?.name ?? "Conductor"
+                self?.enterAgentMode(conductorName: name, conductorConnection: manager)
             }
             self?.agentService?.handleOrchestration(message)
         }

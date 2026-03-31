@@ -58,7 +58,7 @@ struct DeviceListView: View {
                 Text("This Device")
             }
 
-            if let connected = service.connectedPeer {
+            if service.appMode == .standalone, let connected = service.connectedPeer {
                 Section {
                     Button {
                         detailSelection = .dashboard
@@ -89,37 +89,40 @@ struct DeviceListView: View {
                 }
             }
 
-            Section {
-                if service.discoveredPeers.isEmpty {
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                        Text("Searching for nearby iPads...")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    ForEach(service.discoveredPeers) { peer in
-                        Button {
-                            service.connectToPeer(peer)
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(peer.name)
-                                        .font(.headline)
-                                    Text(peer.connectionState.rawValue)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                ConnectionStatusBadge(state: peer.connectionState)
-                            }
+            // In conductor/agent mode, discovery is handled by the fleet/nearby sections
+            if service.appMode == .standalone {
+                Section {
+                    if service.discoveredPeers.isEmpty {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Searching for nearby iPads...")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
-                        .disabled(service.connectedPeer != nil)
+                    } else {
+                        ForEach(service.discoveredPeers) { peer in
+                            Button {
+                                service.connectToPeer(peer)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(peer.name)
+                                            .font(.headline)
+                                        Text(peer.connectionState.rawValue)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    ConnectionStatusBadge(state: peer.connectionState)
+                                }
+                            }
+                            .disabled(service.connectedPeer != nil)
+                        }
                     }
+                } header: {
+                    Text("Discovered Devices")
                 }
-            } header: {
-                Text("Discovered Devices")
             }
 
             Section {
