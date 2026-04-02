@@ -40,6 +40,10 @@ Bridges/flutter_bridge/*.iml
 Bridges/capacitor_bridge/node_modules/
 Bridges/capacitor_bridge/package-lock.json
 
+# Cordova bridge — cordova.js is copied from node_modules at build time
+Bridges/cordova_bridge/www/cordova.js
+iPadDx/Resources/cordova_www/cordova.js
+
 # CocoaPods (built from Podfile)
 Pods/
 *.xcworkspace

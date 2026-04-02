@@ -76,12 +76,19 @@ frameworks: ## Build embedded bridge frameworks from source
 	@cp -R build/flutter_frameworks/Release/App.xcframework Frameworks/
 	@echo "✓ Flutter frameworks built and copied to Frameworks/"
 
-pods: ## Install CocoaPods dependencies (Capacitor)
+pods: ## Install CocoaPods dependencies (Capacitor + Cordova)
 	@cd Bridges/capacitor_bridge && npm install 2>&1 | tail -3
 	@pod install 2>&1 | tail -3
 	@echo "✓ Pods installed — use iPadDx.xcworkspace from now on"
 
-bridges: frameworks pods ## Build all bridge dependencies
+cordova-js: ## Copy real cordova.js into bundled resources
+	@mkdir -p Bridges/cordova_bridge/www iPadDx/Resources/cordova_www
+	@cp Bridges/capacitor_bridge/node_modules/@capacitor/core/cordova.js Bridges/cordova_bridge/www/cordova.js
+	@cp Bridges/cordova_bridge/www/cordova.js iPadDx/Resources/cordova_www/cordova.js
+	@cp Bridges/cordova_bridge/www/index.html iPadDx/Resources/cordova_www/index.html
+	@echo "✓ cordova.js copied to cordova_www bundle"
+
+bridges: frameworks pods cordova-js ## Build all bridge dependencies
 
 setup: ## Install development dependencies
 	brew install swiftlint swiftformat cocoapods

@@ -12,6 +12,7 @@ struct iPadDxApp: App {
         Task { @MainActor in
             _ = await FlutterBridge.sharedEngine()
             _ = await CapacitorBridgeManager.shared()
+            _ = await CordovaBridgeManager.shared()
         }
     }
 

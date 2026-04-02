@@ -4,15 +4,15 @@
 
 The current bridge transports (Cordova, Flutter, React Native, Capacitor) are **simulations**, not real implementations. They approximate overhead patterns but don't run actual framework runtimes. This produces misleading data — if the goal is to diagnose real-world connection behavior across frameworks, the measurements must come from real framework code paths.
 
-### What's Fake Today
+### Current Status
 
-| Transport | What's Real | What's Fake |
+| Transport | Status | Implementation |
 |---|---|---|
-| **NativeTransport** | Everything — direct Network.framework | N/A (baseline) |
-| **CordovaTransport** | JSContext runs real JS | No actual Cordova runtime, no WKWebView IPC, no CDVPlugin infrastructure |
-| **FlutterTransport** | Binary codec format is accurate, thread hop is real | No Dart VM, no FlutterEngine, no MethodChannel — pure Swift simulation |
-| **ReactNativeTransport** | JSContext runs real JS with MessageQueue structure | No RCTBridge, no Hermes/JSC engine, no NativeModules |
-| **CapacitorTransport** | Uses real WKWebView with genuine IPC | No actual Capacitor runtime, no CAPPlugin infrastructure |
+| **NativeTransport** | **Real** | Direct Network.framework — baseline |
+| **FlutterTransport** | **Real** | FlutterEngine + FlutterMethodChannel + AOT Dart isolate |
+| **CapacitorTransport** | **Real** | CAPBridgeViewController + CAPPlugin + WKWebView IPC |
+| **CordovaTransport** | **Real** | WKWebView + real cordova.js + CDVPlugin + CDVPluginResult + CDVInvokedUrlCommand |
+| **ReactNativeTransport** | **Simulated** | JSContext with MessageQueue structure — no RCTBridge, no Hermes/JSC, no NativeModules |
 
 ---
 
