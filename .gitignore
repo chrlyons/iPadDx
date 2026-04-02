@@ -44,6 +44,10 @@ Bridges/capacitor_bridge/package-lock.json
 Bridges/cordova_bridge/www/cordova.js
 iPadDx/Resources/cordova_www/cordova.js
 
+# React Native bridge (structural model — real RCTBridge blocked by use_frameworks! incompatibility)
+Bridges/rn_bridge/node_modules/
+Bridges/rn_bridge/package-lock.json
+
 # CocoaPods (built from Podfile)
 Pods/
 *.xcworkspace

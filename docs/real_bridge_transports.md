@@ -12,7 +12,7 @@ The current bridge transports (Cordova, Flutter, React Native, Capacitor) are **
 | **FlutterTransport** | **Real** | FlutterEngine + FlutterMethodChannel + AOT Dart isolate |
 | **CapacitorTransport** | **Real** | CAPBridgeViewController + CAPPlugin + WKWebView IPC |
 | **CordovaTransport** | **Real** | WKWebView + real cordova.js + CDVPlugin + CDVPluginResult + CDVInvokedUrlCommand |
-| **ReactNativeTransport** | **Simulated** | JSContext with MessageQueue structure — no RCTBridge, no Hermes/JSC, no NativeModules |
+| **ReactNativeTransport** | **Structural Model** | JSContext with faithful MessageQueue/BatchedBridge — cannot embed real RCTBridge (see below) |
 
 ---
 
@@ -269,6 +269,23 @@ iPadDx/
 │   ├── cordova_bridge/                (Cordova web assets — HTML/JS + config.xml)
 │   └── capacitor_bridge/             (Capacitor web assets — HTML/JS)
 ```
+
+---
+
+## React Native: Why It Remains a Structural Model
+
+React Native cannot be embedded as a real runtime alongside Capacitor due to a **fundamental CocoaPods incompatibility**:
+
+- **Capacitor** requires `use_frameworks!` in the Podfile (Swift pod with custom module maps)
+- **React Native** 0.79+'s C++ internals (Folly, Yoga, cxxreact, JSI, Hermes) have broken header resolution under `use_frameworks!` — platform-specific includes like `react/renderer/components/view/HostPlatformViewProps.h` resolve through `platform/cxx/` directories using header maps that don't work with framework imports
+- Additionally, RCT-Folly's `Demangle.cpp` uses `<demangle.h>` APIs (`demangle_callbackref`) that were removed in Xcode 16.3+
+
+These are known, unresolved issues in the React Native community. Options for future resolution:
+1. **Build RN as a separate Xcode project** → produce pre-built xcframeworks (like Flutter)
+2. **Wait for RN to fix `use_frameworks!` compatibility** (tracked in multiple GitHub issues)
+3. **Use a separate build target** that doesn't share pod configuration with Capacitor
+
+The current structural model faithfully replicates RN's BatchedBridge/MessageQueue architecture (module registry, method registry, JSON batch serialization, callback dispatch) using JavaScriptCore. It measures the same overhead patterns — just without Hermes bytecode and the real RCTBridge thread scheduling.
 
 ---
 
