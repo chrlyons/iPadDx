@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -50,9 +50,29 @@
 		A10041 /* ReactNativeTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10043 /* ReactNativeTransport.swift */; };
 		A10042 /* FlutterTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10044 /* FlutterTransport.swift */; };
 		A10043 /* CapacitorTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10045 /* CapacitorTransport.swift */; };
+		A32CC1C036F2649E2A49BB1C /* App.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A55C21F82BDA6BB4994328F3 /* Flutter.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */; };
+		E26C4AD941ADDC3163802C76 /* App.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */; };
+		E6444C74DDD0C5C2BEFF34FC /* Flutter.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		829F3273AD368B02B85AA50D /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				E6444C74DDD0C5C2BEFF34FC /* Flutter.xcframework in Embed Frameworks */,
+				A32CC1C036F2649E2A49BB1C /* App.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */ = {isa = PBXFileReference; expectedSignature = "AppleDeveloperProgram:S8QB4VV633:FLUTTER.IO LLC"; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; name = Flutter.xcframework; path = Frameworks/Flutter.xcframework; sourceTree = SOURCE_ROOT; };
 		B10001 /* iPadDxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadDxApp.swift; sourceTree = "<group>"; };
 		B10002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B10003 /* DeviceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceListView.swift; sourceTree = "<group>"; };
@@ -99,6 +119,7 @@
 		B10044 /* FlutterTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlutterTransport.swift; sourceTree = "<group>"; };
 		B10045 /* CapacitorTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapacitorTransport.swift; sourceTree = "<group>"; };
 		C10001 /* iPadDx.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iPadDx.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; name = App.xcframework; path = Frameworks/App.xcframework; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,17 +127,29 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A55C21F82BDA6BB4994328F3 /* Flutter.xcframework in Frameworks */,
+				E26C4AD941ADDC3163802C76 /* App.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		6CD4546AD2CD0DD675816586 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */,
+				C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */,
+			);
+			name = Frameworks;
+			sourceTree = SOURCE_ROOT;
+		};
 		E10001 = {
 			isa = PBXGroup;
 			children = (
 				E10002 /* iPadDx */,
 				E10006 /* Products */,
+				6CD4546AD2CD0DD675816586 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -222,6 +255,7 @@
 				D10002 /* Sources */,
 				D10001 /* Frameworks */,
 				D10003 /* Resources */,
+				829F3273AD368B02B85AA50D /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -458,6 +492,10 @@
 				CODE_SIGN_ENTITLEMENTS = iPadDx/iPadDx.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = iPadDx/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -487,6 +525,10 @@
 				CODE_SIGN_ENTITLEMENTS = iPadDx/iPadDx.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = iPadDx/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

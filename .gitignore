@@ -23,3 +23,18 @@ Pods/
 # Swift Package Manager
 .build/
 Package.resolved
+
+# Embedded frameworks (built from source — see Bridges/)
+Frameworks/
+
+# Flutter module build artifacts
+Bridges/flutter_bridge/.dart_tool/
+Bridges/flutter_bridge/.android/
+Bridges/flutter_bridge/.ios/
+Bridges/flutter_bridge/build/
+Bridges/flutter_bridge/.idea/
+Bridges/flutter_bridge/.metadata
+Bridges/flutter_bridge/*.iml
+
+# Reports (generated at runtime)
+reports/

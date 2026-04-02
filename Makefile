@@ -66,5 +66,16 @@ fix: lint-fix format ## Auto-fix lint issues and format code
 open: ## Open project in Xcode
 	open $(PROJECT)
 
+frameworks: ## Build embedded bridge frameworks from source
+	@echo "Building Flutter bridge..."
+	@cd Bridges/flutter_bridge && flutter build ios-framework --no-debug --no-profile \
+		--output=../../build/flutter_frameworks 2>&1 | tail -5
+	@mkdir -p Frameworks
+	@rm -rf Frameworks/Flutter.xcframework Frameworks/App.xcframework
+	@cp -R build/flutter_frameworks/Release/Flutter.xcframework Frameworks/
+	@cp -R build/flutter_frameworks/Release/App.xcframework Frameworks/
+	@echo "✓ Frameworks built and copied to Frameworks/"
+
 setup: ## Install development dependencies
 	brew install swiftlint swiftformat
+	@echo "For bridge transports, also install: brew install --cask flutter && brew install cocoapods"

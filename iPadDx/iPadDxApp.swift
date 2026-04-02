@@ -6,6 +6,14 @@ struct iPadDxApp: App {
     @State private var bonjourService = BonjourService()
     @State private var reportStore = ReportStore()
 
+    init() {
+        // Pre-warm the Flutter engine in the background so it's ready
+        // before any bridge transport test needs it (~200-500ms startup).
+        Task { @MainActor in
+            _ = await FlutterBridge.sharedEngine()
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
