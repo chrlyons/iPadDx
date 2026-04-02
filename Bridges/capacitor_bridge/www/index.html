@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body>
+<script>
+// Wait for Capacitor's native-bridge.js to initialize the bridge,
+// then signal readiness and expose the echo function.
+document.addEventListener('DOMContentLoaded', function() {
+    // Poll until Capacitor bridge is ready
+    var checkBridge = setInterval(function() {
+        if (window.Capacitor && window.Capacitor.toNative) {
+            clearInterval(checkBridge);
+            window.bridgeReady = true;
+            // Notify native side we're ready
+            window.Capacitor.toNative('BridgeEchoPlugin', 'ready', {});
+        }
+    }, 10);
+});
+
+// Called from native to send data through the bridge
+function echoBridge(base64Data, callId) {
+    if (window.Capacitor && window.Capacitor.toNative) {
+        window.Capacitor.toNative('BridgeEchoPlugin', 'echo', {
+            payload: base64Data,
+            callId: callId
+        });
+    }
+}
+</script>
+</body>
+</html>

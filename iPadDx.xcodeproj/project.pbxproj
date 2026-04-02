@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		944837671C67B47D553624BA /* Pods_iPadDx.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 988BD68FCF85FE8E1A722AE4 /* Pods_iPadDx.framework */; };
 		A10001 /* iPadDxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001 /* iPadDxApp.swift */; };
 		A10002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002 /* ContentView.swift */; };
 		A10003 /* DeviceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003 /* DeviceListView.swift */; };
@@ -52,6 +53,7 @@
 		A10043 /* CapacitorTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10045 /* CapacitorTransport.swift */; };
 		A32CC1C036F2649E2A49BB1C /* App.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A55C21F82BDA6BB4994328F3 /* Flutter.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */; };
+		DE9F5003D7EA693A3BD09A0C /* capacitor_www in Resources */ = {isa = PBXBuildFile; fileRef = 1D148EEE53F5E87EF688EEE2 /* capacitor_www */; };
 		E26C4AD941ADDC3163802C76 /* App.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */; };
 		E6444C74DDD0C5C2BEFF34FC /* Flutter.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
@@ -72,7 +74,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0D4A9199803553CE108AC983 /* Pods-iPadDx.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-iPadDx.release.xcconfig"; path = "Target Support Files/Pods-iPadDx/Pods-iPadDx.release.xcconfig"; sourceTree = "<group>"; };
+		124DC8E9FC4FF5A721DBB9B6 /* Pods-iPadDx.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-iPadDx.debug.xcconfig"; path = "Target Support Files/Pods-iPadDx/Pods-iPadDx.debug.xcconfig"; sourceTree = "<group>"; };
+		1D148EEE53F5E87EF688EEE2 /* capacitor_www */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; name = capacitor_www; path = iPadDx/Resources/capacitor_www; sourceTree = "<group>"; };
 		3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */ = {isa = PBXFileReference; expectedSignature = "AppleDeveloperProgram:S8QB4VV633:FLUTTER.IO LLC"; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; name = Flutter.xcframework; path = Frameworks/Flutter.xcframework; sourceTree = SOURCE_ROOT; };
+		988BD68FCF85FE8E1A722AE4 /* Pods_iPadDx.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_iPadDx.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10001 /* iPadDxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadDxApp.swift; sourceTree = "<group>"; };
 		B10002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B10003 /* DeviceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceListView.swift; sourceTree = "<group>"; };
@@ -129,6 +135,7 @@
 			files = (
 				A55C21F82BDA6BB4994328F3 /* Flutter.xcframework in Frameworks */,
 				E26C4AD941ADDC3163802C76 /* App.xcframework in Frameworks */,
+				944837671C67B47D553624BA /* Pods_iPadDx.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -140,9 +147,28 @@
 			children = (
 				3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */,
 				C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */,
+				988BD68FCF85FE8E1A722AE4 /* Pods_iPadDx.framework */,
 			);
 			name = Frameworks;
 			sourceTree = SOURCE_ROOT;
+		};
+		CD3AC5A3FBEDB0944CCC7BD6 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				1D148EEE53F5E87EF688EEE2 /* capacitor_www */,
+			);
+			name = Resources;
+			sourceTree = SOURCE_ROOT;
+		};
+		DF3ECB7AFD516BE6D1E84878 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				124DC8E9FC4FF5A721DBB9B6 /* Pods-iPadDx.debug.xcconfig */,
+				0D4A9199803553CE108AC983 /* Pods-iPadDx.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
 		};
 		E10001 = {
 			isa = PBXGroup;
@@ -150,6 +176,7 @@
 				E10002 /* iPadDx */,
 				E10006 /* Products */,
 				6CD4546AD2CD0DD675816586 /* Frameworks */,
+				DF3ECB7AFD516BE6D1E84878 /* Pods */,
 			);
 			sourceTree = "<group>";
 		};
@@ -164,6 +191,7 @@
 				E10004 /* Networking */,
 				E10007 /* Services */,
 				E10005 /* Views */,
+				CD3AC5A3FBEDB0944CCC7BD6 /* Resources */,
 			);
 			path = iPadDx;
 			sourceTree = "<group>";
@@ -252,10 +280,12 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = G10003 /* Build configuration list for PBXNativeTarget "iPadDx" */;
 			buildPhases = (
+				4773C9CE0A2912265F52EF91 /* [CP] Check Pods Manifest.lock */,
 				D10002 /* Sources */,
 				D10001 /* Frameworks */,
 				D10003 /* Resources */,
 				829F3273AD368B02B85AA50D /* Embed Frameworks */,
+				9A02F066B77F0C2503356C0B /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -305,10 +335,53 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10014 /* Assets.xcassets in Resources */,
+				DE9F5003D7EA693A3BD09A0C /* capacitor_www in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4773C9CE0A2912265F52EF91 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-iPadDx-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+		9A02F066B77F0C2503356C0B /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-iPadDx/Pods-iPadDx-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-iPadDx/Pods-iPadDx-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-iPadDx/Pods-iPadDx-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		D10002 /* Sources */ = {
@@ -486,12 +559,14 @@
 		};
 		G10005 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 124DC8E9FC4FF5A721DBB9B6 /* Pods-iPadDx.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = iPadDx/iPadDx.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",
@@ -519,12 +594,14 @@
 		};
 		G10006 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 0D4A9199803553CE108AC983 /* Pods-iPadDx.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = iPadDx/iPadDx.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",

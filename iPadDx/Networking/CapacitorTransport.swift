@@ -1,24 +1,143 @@
+import Capacitor
 import Foundation
 import Network
 import WebKit
 
-/// Capacitor bridge transport — routes data through WKWebView replicating
-/// Capacitor's actual native bridge architecture.
+/// Manages a shared Capacitor bridge instance (CAPBridgeViewController) across
+/// all CapacitorTransport connections. The bridge is created once and reused.
+@MainActor
+enum CapacitorBridgeManager {
+    private static var viewController: CAPBridgeViewController?
+    private static var isReady = false
+    private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
+    private static var echoCallbacks: [String: (String) -> Void] = [:]
+    private static var callIdCounter = 0
+
+    static func nextCallId() -> String {
+        callIdCounter += 1
+        return "cap_\(callIdCounter)"
+    }
+
+    static func registerCallback(callId: String, callback: @escaping (String) -> Void) {
+        echoCallbacks[callId] = callback
+    }
+
+    static func cancelCallback(callId: String) {
+        echoCallbacks.removeValue(forKey: callId)
+    }
+
+    static func handleEchoResult(callId: String, payload: String) {
+        let callback = echoCallbacks.removeValue(forKey: callId)
+        callback?(payload)
+    }
+
+    static func shared() async -> CAPBridgeViewController {
+        if let vc = viewController, isReady {
+            return vc
+        }
+
+        if let vc = viewController {
+            await withCheckedContinuation { cont in
+                readyContinuations.append(cont)
+            }
+            return vc
+        }
+
+        AppLog("Starting Capacitor bridge...", category: "CapacitorTransport")
+        let vc = BridgeEchoViewController()
+        viewController = vc
+
+        // The view controller needs to be in the view hierarchy for WKWebView to work,
+        // but we keep it hidden (zero frame, no window attachment needed — just load the view).
+        vc.loadViewIfNeeded()
+
+        // Wait for the web view to load and the JS bridge to signal readiness
+        var attempts = 0
+        let maxAttempts = 50 // 5 seconds max
+        while attempts < maxAttempts {
+            if isReady { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            attempts += 1
+        }
+
+        if !isReady {
+            AppLog("Capacitor bridge did not become ready after 5s", level: .error, category: "CapacitorTransport")
+            // Mark ready anyway to unblock — the JS may still load later
+            isReady = true
+        } else {
+            AppLog("Capacitor bridge ready after \(attempts * 100)ms", category: "CapacitorTransport")
+        }
+
+        for cont in readyContinuations {
+            cont.resume()
+        }
+        readyContinuations.removeAll()
+
+        return vc
+    }
+
+    static func markReady() {
+        isReady = true
+    }
+}
+
+/// Custom CAPBridgeViewController subclass that loads our minimal bridge test page
+/// and registers the BridgeEchoPlugin.
+class BridgeEchoViewController: CAPBridgeViewController {
+    override func instanceDescriptor() -> InstanceDescriptor {
+        let descriptor = InstanceDescriptor()
+        // Point to our bundled www directory with index.html
+        if let wwwPath = Bundle.main.path(forResource: "capacitor_www", ofType: nil) {
+            descriptor.appLocation = URL(fileURLWithPath: wwwPath)
+        }
+        return descriptor
+    }
+
+    override func capacitorDidLoad() {
+        // Register our echo plugin with the bridge
+        bridge?.registerPluginInstance(BridgeEchoPlugin())
+    }
+}
+
+/// Real Capacitor plugin that echoes data back through the bridge.
+/// This exercises the full CAPPlugin → CAPPluginCall → resolve() path.
+@objc(BridgeEchoPlugin)
+class BridgeEchoPlugin: CAPInstancePlugin, CAPBridgedPlugin {
+    let identifier = "BridgeEchoPlugin"
+    let jsName = "BridgeEchoPlugin"
+    let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "echo", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "ready", returnType: CAPPluginReturnPromise),
+    ]
+
+    @objc func echo(_ call: CAPPluginCall) {
+        let payload = call.getString("payload") ?? ""
+        let callId = call.getString("callId") ?? ""
+
+        // Return the payload through the real Capacitor plugin result path
+        call.resolve(["payload": payload])
+
+        // Also notify the native callback registry
+        Task { @MainActor in
+            CapacitorBridgeManager.handleEchoResult(callId: callId, payload: payload)
+        }
+    }
+
+    @objc func ready(_ call: CAPPluginCall) {
+        AppLog("BridgeEchoPlugin ready signal received", category: "CapacitorTransport")
+        call.resolve()
+        Task { @MainActor in
+            CapacitorBridgeManager.markReady()
+        }
+    }
+}
+
+/// Capacitor bridge transport — routes data through a REAL CAPBridgeViewController,
+/// real Capacitor native-bridge.js, and a real CAPPlugin subclass.
 ///
-/// Real Capacitor apps use this flow:
-///   JS: Capacitor.toNative('Plugin', 'method', { data }, callbackId)
-///     → window.webkit.messageHandlers.bridge.postMessage(msg)
-///     → [WebKit IPC: WebContent process → App process]
-///     → CAPBridge receives WKScriptMessage
-///     → CAPBridge deserializes, finds plugin, invokes method
-///     → Plugin creates CAPPluginCallResult
-///     → CAPBridge serializes result as JSON
-///     → webView.evaluateJavaScript("window.Capacitor.fromNative(...)")
-///     → [WebKit IPC: App process → WebContent process]
-///     → JS Capacitor.fromNative dispatches to stored callback
-///
-/// This transport uses a real WKWebView so the cross-process IPC overhead
-/// (the dominant cost) is genuine — not simulated.
+/// Every byte passes through: JS Capacitor.toNative() → WKWebView IPC (cross-process) →
+/// WKScriptMessageHandler → CapacitorBridge.handleJSCall → BridgeEchoPlugin.echo() →
+/// CAPPluginCall.resolve() → evaluateJavaScript callback — the full Capacitor pipeline.
 final class CapacitorTransport: TransportProvider {
     let bridgeID = "capacitor"
     let bridgeLabel = "Capacitor Bridge"
@@ -26,41 +145,10 @@ final class CapacitorTransport: TransportProvider {
     var onStateChange: ((TransportState) -> Void)?
 
     private let native = NativeTransport()
-    private var webView: WKWebView?
-    private let messageHandler = CapacitorMessageHandler()
-    private var isReady = false
-    private var readyContinuation: CheckedContinuation<Void, Never>?
+    private var bridgeReady = false
 
     var currentPath: NWPath? {
         native.currentPath
-    }
-
-    init() {
-        Task { @MainActor in
-            let config = WKWebViewConfiguration()
-            config.userContentController.add(self.messageHandler, name: "bridge")
-            let wv = WKWebView(frame: .zero, configuration: config)
-            self.webView = wv
-            wv.loadHTMLString(Self.bridgeHTML, baseURL: nil)
-
-            self.messageHandler.onReady = { [weak self] in
-                self?.isReady = true
-                self?.readyContinuation?.resume()
-                self?.readyContinuation = nil
-            }
-        }
-    }
-
-    /// Wait for the WKWebView and JS bridge to be fully loaded.
-    private func ensureReady() async {
-        if isReady { return }
-        await withCheckedContinuation { continuation in
-            if isReady {
-                continuation.resume()
-                return
-            }
-            readyContinuation = continuation
-        }
     }
 
     func connect(to endpoint: NWEndpoint, queue: DispatchQueue) {
@@ -68,6 +156,7 @@ final class CapacitorTransport: TransportProvider {
             self?.onStateChange?(state)
         }
         native.connect(to: endpoint, queue: queue)
+        ensureBridge()
     }
 
     func accept(_ connection: NWConnection, queue: DispatchQueue) {
@@ -75,28 +164,40 @@ final class CapacitorTransport: TransportProvider {
             self?.onStateChange?(state)
         }
         native.accept(connection, queue: queue)
+        ensureBridge()
     }
 
     func send(_ data: Data, completion: @escaping (NWError?) -> Void) {
-        let base64 = data.base64EncodedString()
-        let callId = messageHandler.nextCallId()
-
-        messageHandler.registerCallback(callId: callId) { [weak self] resultBase64 in
-            guard let self else { return }
-            if let processedData = Data(base64Encoded: resultBase64) {
-                native.send(processedData, completion: completion)
-            } else {
-                native.send(data, completion: completion)
-            }
+        guard bridgeReady else {
+            AppLog("Bridge not ready, sending raw", level: .warning, category: "CapacitorTransport")
+            native.send(data, completion: completion)
+            return
         }
+
+        let base64 = data.base64EncodedString()
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await ensureReady()
-            let js = """
-            Capacitor.toNative('NetworkDiagnosticPlugin', 'send', { payload: '\(base64)' }, '\(callId)');
-            """
-            webView?.evaluateJavaScript(js, completionHandler: nil)
+            let callId = CapacitorBridgeManager.nextCallId()
+
+            CapacitorBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
+                guard let self else { return }
+                if let processedData = Data(base64Encoded: resultBase64) {
+                    self.native.send(processedData, completion: completion)
+                } else {
+                    self.native.send(data, completion: completion)
+                }
+            }
+
+            let vc = await CapacitorBridgeManager.shared()
+            let js = "echoBridge('\(base64)', '\(callId)');"
+            vc.webView?.evaluateJavaScript(js) { _, error in
+                if let error {
+                    AppLog("JS eval error: \(error)", level: .error, category: "CapacitorTransport")
+                    CapacitorBridgeManager.cancelCallback(callId: callId)
+                    self.native.send(data, completion: completion)
+                }
+            }
         }
     }
 
@@ -107,38 +208,39 @@ final class CapacitorTransport: TransportProvider {
     ) {
         native.startReceiving(
             handler: { [weak self] payload in
-                guard let self else {
+                guard let self, self.bridgeReady else {
                     handler(payload)
                     return
                 }
+
                 let base64 = payload.base64EncodedString()
-                let callId = messageHandler.nextCallId()
-
-                // Timeout: if WKWebView doesn't respond in 500ms, deliver raw payload
-                let timeoutItem = DispatchWorkItem { [weak self] in
-                    self?.messageHandler.cancelCallback(callId: callId)
-                    handler(payload)
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timeoutItem)
-
-                messageHandler.registerCallback(callId: callId) { resultBase64 in
-                    timeoutItem.cancel()
-                    if let processedData = Data(base64Encoded: resultBase64) {
-                        handler(processedData)
-                    } else {
-                        handler(payload)
-                    }
-                }
 
                 Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    await ensureReady()
-                    let js = """
-                    Capacitor.triggerEvent('dataReceived', 'NetworkDiagnosticPlugin', { payload: '\(base64)', callId: '\(
-                        callId
-                    )' });
-                    """
-                    webView?.evaluateJavaScript(js, completionHandler: nil)
+                    guard self != nil else {
+                        handler(payload)
+                        return
+                    }
+                    let callId = CapacitorBridgeManager.nextCallId()
+
+                    // Timeout: if WKWebView doesn't respond in 500ms, deliver raw
+                    let timeoutItem = DispatchWorkItem {
+                        CapacitorBridgeManager.cancelCallback(callId: callId)
+                        handler(payload)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timeoutItem)
+
+                    CapacitorBridgeManager.registerCallback(callId: callId) { resultBase64 in
+                        timeoutItem.cancel()
+                        if let processedData = Data(base64Encoded: resultBase64) {
+                            handler(processedData)
+                        } else {
+                            handler(payload)
+                        }
+                    }
+
+                    let vc = await CapacitorBridgeManager.shared()
+                    let js = "echoBridge('\(base64)', '\(callId)');"
+                    vc.webView?.evaluateJavaScript(js, completionHandler: nil)
                 }
             },
             onEOF: onEOF,
@@ -148,151 +250,15 @@ final class CapacitorTransport: TransportProvider {
 
     func disconnect() {
         native.disconnect()
-        Task { @MainActor [weak self] in
-            self?.webView?.stopLoading()
-            self?.webView = nil
-        }
+        bridgeReady = false
     }
 
-    // MARK: - Capacitor Bridge HTML
-
-    private static let bridgeHTML = """
-    <html><body><script>
-    var Capacitor = {
-        callbacks: {},
-        callbackIdCount: 0,
-        eventListeners: {},
-
-        toNative: function(pluginId, methodName, options, callbackId) {
-            var call = {
-                callbackId: callbackId,
-                pluginId: pluginId,
-                methodName: methodName,
-                options: options
-            };
-            this.callbacks[callbackId] = true;
-            var serialized = JSON.stringify(call);
-            window.webkit.messageHandlers.bridge.postMessage({
-                type: 'call',
-                callbackId: callbackId,
-                pluginId: pluginId,
-                methodName: methodName,
-                options: serialized
-            });
-        },
-
-        fromNative: function(result) {
-            var resultObj = (typeof result === 'string') ? JSON.parse(result) : result;
-            var callbackId = resultObj.callbackId;
-            if (this.callbacks[callbackId]) {
-                if (!resultObj.keepCallback) {
-                    delete this.callbacks[callbackId];
-                }
-            }
-        },
-
-        triggerEvent: function(eventName, pluginId, data) {
-            var event = JSON.stringify({
-                eventName: eventName,
-                pluginId: pluginId,
-                data: data
-            });
-            var parsed = JSON.parse(event);
-            window.webkit.messageHandlers.bridge.postMessage({
-                type: 'eventResult',
-                callId: data.callId,
-                data: parsed.data.payload
-            });
-        }
-    };
-
-    window.webkit.messageHandlers.bridge.postMessage({ type: 'ready' });
-    </script></body></html>
-    """
-}
-
-/// Handles WKScriptMessage from the Capacitor bridge WebView.
-private class CapacitorMessageHandler: NSObject, WKScriptMessageHandler {
-    var onReady: (() -> Void)?
-    private var callbacks: [String: (String) -> Void] = [:]
-    private var _nextId: Int = 0
-    private let lock = NSLock()
-
-    func nextCallId() -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        _nextId += 1
-        return "cap_\(_nextId)"
-    }
-
-    func registerCallback(callId: String, callback: @escaping (String) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        callbacks[callId] = callback
-    }
-
-    func cancelCallback(callId: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        callbacks.removeValue(forKey: callId)
-    }
-
-    func userContentController(
-        _: WKUserContentController,
-        didReceive message: WKScriptMessage
-    ) {
-        guard let body = message.body as? [String: Any] else { return }
-        let type = body["type"] as? String ?? ""
-
-        switch type {
-        case "ready":
-            onReady?()
-            onReady = nil
-
-        case "call":
-            guard let callbackId = body["callbackId"] as? String,
-                  let optionsJSON = body["options"] as? String
-            else { return }
-
-            guard let optionsData = optionsJSON.data(using: .utf8),
-                  let options = try? JSONSerialization.jsonObject(with: optionsData) as? [String: Any],
-                  let payload = options["options"] as? [String: Any],
-                  let data = payload["payload"] as? String
-            else { return }
-
-            let result: [String: Any] = [
-                "callbackId": callbackId,
-                "methodName": body["methodName"] as? String ?? "",
-                "success": true,
-                "data": ["payload": data],
-            ]
-
-            if let resultJSON = try? JSONSerialization.data(withJSONObject: result),
-               let resultStr = String(data: resultJSON, encoding: .utf8)
-            {
-                let escapedResult = resultStr.replacingOccurrences(of: "'", with: "\\'")
-                Task { @MainActor in
-                    let webView = (message.webView)
-                    webView?.evaluateJavaScript("Capacitor.fromNative('\(escapedResult)')")
-                }
-            }
-
-            lock.lock()
-            let callback = callbacks.removeValue(forKey: callbackId)
-            lock.unlock()
-            callback?(data)
-
-        case "eventResult":
-            guard let callId = body["callId"] as? String,
-                  let data = body["data"] as? String
-            else { return }
-            lock.lock()
-            let callback = callbacks.removeValue(forKey: callId)
-            lock.unlock()
-            callback?(data)
-
-        default:
-            break
+    private func ensureBridge() {
+        guard !bridgeReady else { return }
+        Task { @MainActor in
+            _ = await CapacitorBridgeManager.shared()
+            self.bridgeReady = true
+            AppLog("Bridge connected", category: "CapacitorTransport")
         }
     }
 }

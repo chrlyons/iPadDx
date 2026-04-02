@@ -36,5 +36,13 @@ Bridges/flutter_bridge/.idea/
 Bridges/flutter_bridge/.metadata
 Bridges/flutter_bridge/*.iml
 
+# Capacitor bridge npm artifacts
+Bridges/capacitor_bridge/node_modules/
+Bridges/capacitor_bridge/package-lock.json
+
+# CocoaPods (built from Podfile)
+Pods/
+*.xcworkspace
+
 # Reports (generated at runtime)
 reports/

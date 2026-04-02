@@ -74,8 +74,16 @@ frameworks: ## Build embedded bridge frameworks from source
 	@rm -rf Frameworks/Flutter.xcframework Frameworks/App.xcframework
 	@cp -R build/flutter_frameworks/Release/Flutter.xcframework Frameworks/
 	@cp -R build/flutter_frameworks/Release/App.xcframework Frameworks/
-	@echo "✓ Frameworks built and copied to Frameworks/"
+	@echo "✓ Flutter frameworks built and copied to Frameworks/"
+
+pods: ## Install CocoaPods dependencies (Capacitor)
+	@cd Bridges/capacitor_bridge && npm install 2>&1 | tail -3
+	@pod install 2>&1 | tail -3
+	@echo "✓ Pods installed — use iPadDx.xcworkspace from now on"
+
+bridges: frameworks pods ## Build all bridge dependencies
 
 setup: ## Install development dependencies
-	brew install swiftlint swiftformat
-	@echo "For bridge transports, also install: brew install --cask flutter && brew install cocoapods"
+	brew install swiftlint swiftformat cocoapods
+	brew install --cask flutter
+	@echo "Then run: make bridges"

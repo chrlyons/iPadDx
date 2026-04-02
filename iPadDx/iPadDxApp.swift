@@ -7,10 +7,11 @@ struct iPadDxApp: App {
     @State private var reportStore = ReportStore()
 
     init() {
-        // Pre-warm the Flutter engine in the background so it's ready
-        // before any bridge transport test needs it (~200-500ms startup).
+        // Pre-warm bridge engines in the background so they're ready
+        // before any bridge transport test needs them.
         Task { @MainActor in
             _ = await FlutterBridge.sharedEngine()
+            _ = await CapacitorBridgeManager.shared()
         }
     }
 
