@@ -22,10 +22,12 @@ enum DiagnosticMessage: Codable {
     case disconnect
     // Orchestration
     case roleAssignment(role: String)
-    case orchestrateTest(targetDeviceName: String, configJSON: Data, role: String) // "controller" or "responder"
+    case orchestrateTest(targetDeviceName: String, configJSON: Data, role: String, bridgeTransport: String = "native")
     case orchestrationStatus(phase: String, detail: String)
     case orchestrationReport(reportJSON: Data)
     case orchestrationCancel
+    /// Agent advertises which bridge transports it supports.
+    case agentCapabilities(supportedBridges: [String])
     /// Responder-side system metrics sent back to controller after test
     case responderMetrics(
         peakCpu: Double,

@@ -114,7 +114,7 @@ struct ConductorDashboardView: View {
                     .font(.headline)
                 Spacer()
                 if let conductor {
-                    Text("\(conductor.testQueue.count) pairs")
+                    Text("\(conductor.testQueue.count) runs")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -129,13 +129,19 @@ struct ConductorDashboardView: View {
                             .foregroundStyle(.secondary)
                             .padding(.vertical, 8)
                     } else {
-                        ForEach(conductor.testQueue) { pair in
+                        ForEach(conductor.testQueue) { run in
                             HStack {
-                                Text(pair.label)
+                                Text(run.label)
                                     .font(.caption)
                                 Spacer()
+                                if run.bridgeTransport != "native" {
+                                    Text(run.bridgeTransport)
+                                        .font(.caption2)
+                                        .padding(.horizontal, 4).padding(.vertical, 1)
+                                        .background(.orange.opacity(0.15), in: Capsule())
+                                }
                                 Button {
-                                    conductor.removePair(pair)
+                                    conductor.removeRun(run)
                                 } label: {
                                     Image(systemName: "xmark.circle")
                                         .font(.caption)
@@ -217,6 +223,9 @@ struct ConductorDashboardView: View {
                 .padding(.horizontal)
                 .disabled(conductor.queueStatus != .idle)
 
+                // Bridge transport toggles
+                bridgeTransportSection(conductor)
+
                 HStack(spacing: 12) {
                     Button {
                         showPairPicker = true
@@ -296,13 +305,13 @@ struct ConductorDashboardView: View {
             .buttonStyle(.plain)
 
             if resultsExpanded, let conductor {
-                if !conductor.failedPairs.isEmpty,
+                if !conductor.failedRuns.isEmpty,
                    conductor.queueStatus == .idle || conductor.queueStatus == .completed
                 {
                     Button {
-                        rerunFailedPairs()
+                        rerunFailedRuns()
                     } label: {
-                        Label("Re-run \(conductor.failedPairs.count) Failed", systemImage: "arrow.counterclockwise")
+                        Label("Re-run \(conductor.failedRuns.count) Failed", systemImage: "arrow.counterclockwise")
                             .font(.caption)
                             .frame(maxWidth: .infinity)
                     }
@@ -313,8 +322,16 @@ struct ConductorDashboardView: View {
                 ForEach(conductor.completedReports) { report in
                     NavigationLink(destination: ReportDetailView(report: report)) {
                         HStack {
-                            Text("\(report.localDevice.chipFamily) \u{2192} \(report.remoteDevice.chipFamily)")
-                                .font(.subheadline)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(report.localDevice.chipFamily) \u{2192} \(report.remoteDevice.chipFamily)")
+                                    .font(.subheadline)
+                                if let bridge = report.bridgeTransport, bridge != "native" {
+                                    Text(bridge)
+                                        .font(.caption2)
+                                        .padding(.horizontal, 4).padding(.vertical, 1)
+                                        .background(.orange.opacity(0.15), in: Capsule())
+                                }
+                            }
                             Spacer()
                             Text(report.results.overallGrade)
                                 .font(.subheadline)
@@ -459,25 +476,72 @@ struct ConductorDashboardView: View {
 
     // MARK: - Re-run Failed
 
-    private func rerunFailedPairs() {
+    private func rerunFailedRuns() {
         guard let conductor else { return }
 
-        // Re-queue the exact pairs that failed — no report matching needed
-        for pair in conductor.failedPairs {
-            conductor.addPair(pair.deviceA, pair.deviceB)
+        // Re-queue the exact runs that failed — preserves bridge transport
+        for run in conductor.failedRuns {
+            conductor.testQueue.append(TestRun(pair: run.pair, bridgeTransport: run.bridgeTransport))
         }
-        conductor.failedPairs.removeAll()
+        conductor.failedRuns.removeAll()
 
         guard !conductor.testQueue.isEmpty else { return }
         conductor.queueStatus = .idle
         Task {
-            // Let agents settle after previous cancel before starting new tests
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await conductor.runQueue(reportStore: reportStore)
             for report in conductor.completedReports {
                 reportStore.save(report, source: "conductor")
             }
         }
+    }
+
+    private func bridgeTransportSection(_ conductor: ConductorService) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(.teal)
+                Text("Bridge Transports")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Spacer()
+                Text("\(conductor.selectedBridges.count) selected")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(BridgeRegistry.available) { bridge in
+                HStack {
+                    Image(systemName: conductor.selectedBridges.contains(bridge.id)
+                        ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(bridge.enabled ? .blue : .gray)
+                    Text(bridge.label)
+                        .font(.caption)
+                    if bridge.id == "native" {
+                        Text("always on")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if !bridge.enabled, bridge.id != "native" {
+                        Spacer()
+                        Text("coming soon")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .onTapGesture {
+                    guard bridge.enabled, bridge.id != "native" else { return }
+                    if conductor.selectedBridges.contains(bridge.id) {
+                        conductor.selectedBridges.removeAll { $0 == bridge.id }
+                    } else {
+                        conductor.selectedBridges.append(bridge.id)
+                    }
+                }
+                .opacity(bridge.enabled ? 1 : 0.5)
+            }
+        }
+        .padding(.horizontal)
+        .disabled(conductor.queueStatus != .idle)
     }
 
     // MARK: - Helpers

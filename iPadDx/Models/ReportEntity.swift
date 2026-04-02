@@ -62,6 +62,10 @@ class ReportEntity {
     var peakMemory: Double
     var thermalState: String
 
+    /// Bridge transport identifier. "native" | "cordova" | "reactnative" | etc.
+    /// Defaults to "native" for migrated records.
+    var bridgeTransport: String = "native"
+
     /// Raw JSON for full report export
     var rawJSON: Data?
 
@@ -71,6 +75,7 @@ class ReportEntity {
         durationSeconds = report.durationSeconds
         overallGrade = report.results.overallGrade
         self.source = source
+        bridgeTransport = report.bridgeTransport ?? "native"
 
         localName = report.localDevice.name
         localModel = report.localDevice.model
@@ -137,5 +142,9 @@ class ReportEntity {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(TestReport.self, from: data)
+    }
+
+    func toSummary() -> ReportSummary {
+        ReportSummary(from: self)
     }
 }

@@ -116,6 +116,59 @@ struct TestSuiteView: View {
             }
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
 
+            // Bridge Transports
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "arrow.triangle.branch")
+                        .foregroundStyle(.teal)
+                    Text("Bridge Transports")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    Spacer()
+                    Text("\(config.bridgeTransports.count) selected")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(BridgeRegistry.available) { bridge in
+                    HStack {
+                        Image(systemName: config.bridgeTransports.contains(bridge.id)
+                            ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(bridge.enabled ? .blue : .gray)
+                        Text(bridge.label)
+                            .font(.caption)
+                        if bridge.id == "native" {
+                            Text("always on")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        if !bridge.enabled, bridge.id != "native" {
+                            Spacer()
+                            Text("coming soon")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .onTapGesture {
+                        guard bridge.enabled, bridge.id != "native" else { return }
+                        if config.bridgeTransports.contains(bridge.id) {
+                            config.bridgeTransports.removeAll { $0 == bridge.id }
+                        } else {
+                            config.bridgeTransports.append(bridge.id)
+                        }
+                    }
+                    .opacity(bridge.enabled ? 1 : 0.5)
+                }
+
+                if config.bridgeTransports.count > 1 {
+                    Text("This test will run \(config.bridgeTransports.count)x (once per bridge)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding()
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+
             // Preset buttons
             HStack(spacing: 12) {
                 Button {
@@ -141,7 +194,24 @@ struct TestSuiteView: View {
 
             Button {
                 runner.config = config
-                Task { await runner.runFullSuite() }
+                Task {
+                    // Run once per selected bridge transport
+                    let bridges = config.bridgeTransports
+                    for (index, bridge) in bridges.enumerated() {
+                        runner.bridgeTransportOverride = bridge
+                        let report = await runner.runFullSuite()
+                        // Save intermediate reports (all but last) immediately
+                        if let report, bridges.count > 1, index < bridges.count - 1 {
+                            reportStore.save(report)
+                            if let data = reportStore.encodeForSync(report) {
+                                service.sendReport(data)
+                            }
+                            // Reset and settle before next bridge run
+                            runner.reset()
+                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        }
+                    }
+                }
             } label: {
                 Label("Start Test Suite", systemImage: "play.fill")
                     .font(.headline)

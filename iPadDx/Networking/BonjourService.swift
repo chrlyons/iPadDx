@@ -337,6 +337,9 @@ class BonjourService {
         agent.configure(conductorConnection: conductorConnection, conductorName: conductorName)
         agentService = agent
         statusMessage = "Agent — Connected to \(conductorName)"
+
+        // Advertise supported bridge transports to conductor
+        conductorConnection.send(.agentCapabilities(supportedBridges: BridgeRegistry.enabledBridgeIDs))
     }
 
     func leaveAgentMode() {

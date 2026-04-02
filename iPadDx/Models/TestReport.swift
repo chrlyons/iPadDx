@@ -10,7 +10,12 @@ struct TestReport: Codable, Identifiable {
     let errors: [String]?
     let skippedPhases: [String]?
 
-    /// Support decoding reports that don't have errors/skippedPhases yet
+    /// The bridge transport used for this test run.
+    /// "native" for direct Network.framework, "cordova" for Cordova bridge, etc.
+    /// nil for backward compatibility with reports created before this feature.
+    let bridgeTransport: String?
+
+    /// Support decoding reports that don't have errors/skippedPhases/bridgeTransport yet
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -21,6 +26,7 @@ struct TestReport: Codable, Identifiable {
         durationSeconds = try container.decode(TimeInterval.self, forKey: .durationSeconds)
         errors = try container.decodeIfPresent([String].self, forKey: .errors)
         skippedPhases = try container.decodeIfPresent([String].self, forKey: .skippedPhases)
+        bridgeTransport = try container.decodeIfPresent(String.self, forKey: .bridgeTransport)
     }
 
     init(
@@ -31,7 +37,8 @@ struct TestReport: Codable, Identifiable {
         results: TestSuiteResults,
         durationSeconds: TimeInterval,
         errors: [String]? = nil,
-        skippedPhases: [String]? = nil
+        skippedPhases: [String]? = nil,
+        bridgeTransport: String? = nil
     ) {
         self.id = id
         self.date = date
@@ -41,10 +48,11 @@ struct TestReport: Codable, Identifiable {
         self.durationSeconds = durationSeconds
         self.errors = errors
         self.skippedPhases = skippedPhases
+        self.bridgeTransport = bridgeTransport
     }
 }
 
-struct DeviceInfo: Codable {
+struct DeviceInfo: Codable, Equatable {
     let name: String
     let model: String // Pretty name: "iPad Pro 13-inch (M4)"
     let modelNumber: String // Hardware ID: "iPad16,3"

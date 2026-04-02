@@ -125,6 +125,8 @@ class TestSuiteRunner {
     var isWarmingUp: Bool = false
     var config: TestSuiteConfig = .default
     var responderMetrics: ResponderMetricsResult?
+    /// Override bridge transport for the report. If nil, uses connectionManager.bridgeTransport.
+    var bridgeTransportOverride: String?
 
     private let connectionManager: ConnectionManager
     private let metrics: DiagnosticMetrics
@@ -374,7 +376,8 @@ class TestSuiteRunner {
             ),
             durationSeconds: Date().timeIntervalSince(suiteStartTime ?? Date()),
             errors: errorLog.isEmpty ? nil : errorLog,
-            skippedPhases: skipped.isEmpty ? nil : skipped
+            skippedPhases: skipped.isEmpty ? nil : skipped,
+            bridgeTransport: bridgeTransportOverride ?? connectionManager.bridgeTransport
         )
 
         lastReport = report

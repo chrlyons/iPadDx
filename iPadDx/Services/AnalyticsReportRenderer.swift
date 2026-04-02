@@ -83,6 +83,16 @@ enum AnalyticsReportRenderer {
                 cursor.y += 20
             }
 
+            // Bridge Overhead Analysis (only if multiple bridges)
+            let bridges = Array(Set(reports.map { $0.bridgeTransport ?? "native" })).sorted()
+            if bridges.count > 1 {
+                cursor.drawSectionHeader("Bridge Overhead Analysis", width: contentWidth)
+                drawBridgeComparisonTable(reports: reports, bridges: bridges, cursor: &cursor, width: contentWidth)
+                cursor.y += 10
+                drawPerPairBridgeTable(reports: reports, bridges: bridges, cursor: &cursor, width: contentWidth)
+                cursor.y += 20
+            }
+
             // Failed tests
             let failed = reports.filter { $0.results.latencyBurst.sampleCount == 0 }
             if !failed.isEmpty {
@@ -368,6 +378,91 @@ enum AnalyticsReportRenderer {
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
             )
+        }
+    }
+
+    // MARK: - Bridge Comparison
+
+    private static func drawBridgeComparisonTable(
+        reports: [TestReport], bridges: [String], cursor: inout Cursor, width: CGFloat
+    ) {
+        let cols: [CGFloat] = [0.14, 0.07, 0.12, 0.12, 0.13, 0.12, 0.10, 0.10, 0.10]
+        cursor.drawTableRow(
+            [
+                "Bridge",
+                "#",
+                "Lat (ms)",
+                "P95 (ms)",
+                "Thru (MB/s)",
+                "Jitter (ms)",
+                "Loss (%)",
+                "Degrad (%)",
+                "Δ vs Native",
+            ],
+            columnWidths: cols, totalWidth: width, isHeader: true
+        )
+
+        let nativeReports = reports.filter { ($0.bridgeTransport ?? "native") == "native" }
+        let nativeAvgLat = nativeReports.isEmpty ? 0
+            : nativeReports.map(\.results.latencyBurst.avg).reduce(0, +) / Double(nativeReports.count)
+
+        for bridge in bridges {
+            let br = reports.filter { ($0.bridgeTransport ?? "native") == bridge }
+            guard !br.isEmpty else { continue }
+            let n = Double(br.count)
+            let avgLat = br.map(\.results.latencyBurst.avg).reduce(0, +) / n
+            let delta = bridge == "native" ? "—" : String(format: "%+.1fms", avgLat - nativeAvgLat)
+            cursor.drawTableRow(
+                [
+                    bridge, "\(br.count)",
+                    f(avgLat),
+                    f(br.map(\.results.latencyBurst.p95).reduce(0, +) / n),
+                    f(br.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
+                    f(br.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
+                    f(br.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
+                    f(br.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                    delta,
+                ],
+                columnWidths: cols, totalWidth: width, isHeader: false
+            )
+        }
+    }
+
+    private static func drawPerPairBridgeTable(
+        reports: [TestReport], bridges: [String], cursor: inout Cursor, width: CGFloat
+    ) {
+        cursor.drawText("Per-Pair Bridge Comparison", font: .systemFont(ofSize: 10, weight: .medium), width: width)
+
+        let cols: [CGFloat] = [0.20, 0.12, 0.07, 0.12, 0.12, 0.12, 0.12, 0.13]
+        cursor.drawTableRow(
+            ["Pair", "Bridge", "#", "Lat (ms)", "P95 (ms)", "Thru (MB/s)", "Jitter (ms)", "Grade"],
+            columnWidths: cols, totalWidth: width, isHeader: true
+        )
+
+        let grouped = Dictionary(grouping: reports) {
+            "\($0.localDevice.chipFamily) \u{2192} \($0.remoteDevice.chipFamily)"
+        }
+
+        for (pair, pairReports) in grouped.sorted(by: { $0.key < $1.key }) {
+            for bridge in bridges {
+                let br = pairReports.filter { ($0.bridgeTransport ?? "native") == bridge }
+                guard !br.isEmpty else { continue }
+                let n = Double(br.count)
+                let gradeMode = br.map(\.results.overallGrade)
+                    .reduce(into: [:]) { $0[$1, default: 0] += 1 }
+                    .max(by: { $0.value < $1.value })?.key ?? "—"
+                cursor.drawTableRow(
+                    [
+                        pair, bridge, "\(br.count)",
+                        f(br.map(\.results.latencyBurst.avg).reduce(0, +) / n),
+                        f(br.map(\.results.latencyBurst.p95).reduce(0, +) / n),
+                        f(br.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
+                        f(br.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
+                        gradeMode,
+                    ],
+                    columnWidths: cols, totalWidth: width, isHeader: false
+                )
+            }
         }
     }
 

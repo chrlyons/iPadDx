@@ -43,6 +43,13 @@
 		A10034 /* TestInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10036 /* TestInfoView.swift */; };
 		A10035 /* LogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10037 /* LogStore.swift */; };
 		A10036 /* ConsoleLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10038 /* ConsoleLogView.swift */; };
+		A10037 /* ReportSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10039 /* ReportSummary.swift */; };
+		A10038 /* TransportProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10040 /* TransportProvider.swift */; };
+		A10039 /* NativeTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10041 /* NativeTransport.swift */; };
+		A10040 /* CordovaTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10042 /* CordovaTransport.swift */; };
+		A10041 /* ReactNativeTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10043 /* ReactNativeTransport.swift */; };
+		A10042 /* FlutterTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10044 /* FlutterTransport.swift */; };
+		A10043 /* CapacitorTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10045 /* CapacitorTransport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -84,6 +91,13 @@
 		B10036 /* TestInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestInfoView.swift; sourceTree = "<group>"; };
 		B10037 /* LogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogStore.swift; sourceTree = "<group>"; };
 		B10038 /* ConsoleLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleLogView.swift; sourceTree = "<group>"; };
+		B10039 /* ReportSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportSummary.swift; sourceTree = "<group>"; };
+		B10040 /* TransportProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportProvider.swift; sourceTree = "<group>"; };
+		B10041 /* NativeTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTransport.swift; sourceTree = "<group>"; };
+		B10042 /* CordovaTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CordovaTransport.swift; sourceTree = "<group>"; };
+		B10043 /* ReactNativeTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReactNativeTransport.swift; sourceTree = "<group>"; };
+		B10044 /* FlutterTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlutterTransport.swift; sourceTree = "<group>"; };
+		B10045 /* CapacitorTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapacitorTransport.swift; sourceTree = "<group>"; };
 		C10001 /* iPadDx.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iPadDx.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -131,6 +145,7 @@
 				B10025 /* ReportEntity.swift */,
 				B10028 /* TestSuiteConfig.swift */,
 				B10029 /* DeviceConnection.swift */,
+				B10039 /* ReportSummary.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -141,6 +156,12 @@
 				B10011 /* BonjourService.swift */,
 				B10012 /* ConnectionManager.swift */,
 				B10013 /* DiagnosticEngine.swift */,
+				B10040 /* TransportProvider.swift */,
+				B10041 /* NativeTransport.swift */,
+				B10042 /* CordovaTransport.swift */,
+				B10043 /* ReactNativeTransport.swift */,
+				B10044 /* FlutterTransport.swift */,
+				B10045 /* CapacitorTransport.swift */,
 			);
 			path = Networking;
 			sourceTree = "<group>";
@@ -295,6 +316,13 @@
 				A10034 /* TestInfoView.swift in Sources */,
 				A10035 /* LogStore.swift in Sources */,
 				A10036 /* ConsoleLogView.swift in Sources */,
+				A10037 /* ReportSummary.swift in Sources */,
+				A10038 /* TransportProvider.swift in Sources */,
+				A10039 /* NativeTransport.swift in Sources */,
+				A10040 /* CordovaTransport.swift in Sources */,
+				A10041 /* ReactNativeTransport.swift in Sources */,
+				A10042 /* FlutterTransport.swift in Sources */,
+				A10043 /* CapacitorTransport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

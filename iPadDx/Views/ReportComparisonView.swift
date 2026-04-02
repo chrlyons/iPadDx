@@ -21,6 +21,13 @@ struct ReportComparisonView: View {
                     lowerIsBetter: false
                 )
 
+                // Bridge info (if different)
+                let bridgeA = reportA.bridgeTransport ?? "native"
+                let bridgeB = reportB.bridgeTransport ?? "native"
+                if bridgeA != bridgeB {
+                    comparisonRow("Bridge", bridgeA, bridgeB, lowerIsBetter: false)
+                }
+
                 // Latency section
                 sectionTitle("Latency Burst", icon: "bolt.fill", color: .blue)
                 comparisonRow(
@@ -168,6 +175,12 @@ struct ReportComparisonView: View {
             Text(report.localDevice.name)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if let bridge = report.bridgeTransport, bridge != "native" {
+                Text(bridge)
+                    .font(.caption2).fontWeight(.medium)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(.orange.opacity(0.12), in: Capsule())
+            }
             Text(report.date, style: .date)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)

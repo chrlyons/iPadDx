@@ -19,6 +19,8 @@ class DeviceConnection: Identifiable {
     var currentTestPartner: String?
     var testProgress: Double = 0
     var testPhase: String = ""
+    /// Bridges this agent supports. Populated from agentCapabilities message.
+    var supportedBridges: [String] = ["native"]
 
     init(peer: PeerDevice, connectionManager: ConnectionManager) {
         id = peer.id

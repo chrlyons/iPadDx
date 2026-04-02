@@ -26,22 +26,24 @@ private enum AnalyticsMetric: String, CaseIterable, Identifiable {
     }
 }
 
-private enum DateRange: String, CaseIterable, Identifiable {
+private enum DateRangePreset: String, CaseIterable, Identifiable {
     case all = "All Time"
     case week = "7 Days"
     case month = "30 Days"
     case quarter = "90 Days"
+    case custom = "Custom"
 
     var id: String {
         rawValue
     }
 
-    var startDate: Date? {
+    var icon: String {
         switch self {
-        case .all: nil
-        case .week: Calendar.current.date(byAdding: .day, value: -7, to: Date())
-        case .month: Calendar.current.date(byAdding: .day, value: -30, to: Date())
-        case .quarter: Calendar.current.date(byAdding: .day, value: -90, to: Date())
+        case .all: "infinity"
+        case .week: "7.square"
+        case .month: "30.square"
+        case .quarter: "90.square"
+        case .custom: "calendar"
         }
     }
 }
@@ -50,40 +52,63 @@ struct ReportAnalyticsView: View {
     @Environment(ReportStore.self) private var store
     @State private var selectedPair: String = "All"
     @State private var selectedOS: String = "All"
-    @State private var dateRange: DateRange = .all
+    @State private var selectedBridge: String = "All"
+    @State private var datePreset: DateRangePreset = .all
+    @State private var customStart: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var customEnd: Date = .init()
     @State private var selectedMetric: AnalyticsMetric = .latencyAvg
     @State private var exportURLs: [URL]?
 
+    private var effectiveDateRange: (start: Date?, end: Date?) {
+        switch datePreset {
+        case .all: (nil, nil)
+        case .week: (Calendar.current.date(byAdding: .day, value: -7, to: Date()), nil)
+        case .month: (Calendar.current.date(byAdding: .day, value: -30, to: Date()), nil)
+        case .quarter: (Calendar.current.date(byAdding: .day, value: -90, to: Date()), nil)
+        case .custom: (
+                Calendar.current.startOfDay(for: customStart),
+                Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: customEnd))
+            )
+        }
+    }
+
     private var uniquePairs: [String] {
-        let pairs = store.reports.map { "\($0.localDevice.chipFamily) vs \($0.remoteDevice.chipFamily)" }
+        let pairs = store.summaries.map { "\($0.localChip) vs \($0.remoteChip)" }
         return Array(Set(pairs)).sorted()
     }
 
     private var uniqueOSVersions: [String] {
-        let versions = Set(store.reports.flatMap { [$0.localDevice.osVersion, $0.remoteDevice.osVersion] })
+        let versions = Set(store.summaries.flatMap { [$0.localOS, $0.remoteOS] })
         return versions.sorted()
     }
 
-    private var filteredReports: [TestReport] {
-        store.reports.filter { report in
-            let pair = "\(report.localDevice.chipFamily) vs \(report.remoteDevice.chipFamily)"
+    private var filteredSummaries: [ReportSummary] {
+        let range = effectiveDateRange
+        return store.summaries.filter { summary in
+            let pair = "\(summary.localChip) vs \(summary.remoteChip)"
             let matchesPair = selectedPair == "All" || pair == selectedPair
-            let matchesDate = dateRange.startDate.map { report.date >= $0 } ?? true
+            let afterStart = range.start.map { summary.date >= $0 } ?? true
+            let beforeEnd = range.end.map { summary.date < $0 } ?? true
             let matchesOS = selectedOS == "All"
-                || report.localDevice.osVersion == selectedOS
-                || report.remoteDevice.osVersion == selectedOS
-            return matchesPair && matchesDate && matchesOS
+                || summary.localOS == selectedOS
+                || summary.remoteOS == selectedOS
+            let matchesBridge = selectedBridge == "All" || summary.bridgeTransport == selectedBridge
+            return matchesPair && afterStart && beforeEnd && matchesOS && matchesBridge
         }
         .sorted { $0.date < $1.date }
     }
 
     private var pairAverages: [PairAggregate] {
-        let grouped = Dictionary(grouping: filteredReports) {
-            "\($0.localDevice.chipFamily) vs \($0.remoteDevice.chipFamily)"
+        let grouped = Dictionary(grouping: filteredSummaries) {
+            "\($0.localChip) vs \($0.remoteChip)|\($0.bridgeTransport)"
         }
-        return grouped.map { pair, reports in
-            let avg = reports.map { metricValue(for: $0) }.reduce(0, +) / Double(reports.count)
-            return PairAggregate(pair: pair, average: avg, count: reports.count)
+        let hasBridges = Set(filteredSummaries.map(\.bridgeTransport)).count > 1
+        return grouped.map { _, summaries in
+            let pair = "\(summaries[0].localChip) vs \(summaries[0].remoteChip)"
+            let bridge = summaries[0].bridgeTransport
+            let label = hasBridges ? "\(pair) [\(bridge)]" : pair
+            let avg = summaries.map { metricValue(for: $0) }.reduce(0, +) / Double(summaries.count)
+            return PairAggregate(pair: label, average: avg, count: summaries.count, bridge: bridge)
         }
         .sorted { $0.pair < $1.pair }
     }
@@ -91,10 +116,10 @@ struct ReportAnalyticsView: View {
     private var gradeDistribution: [(grade: String, count: Int, color: Color)] {
         let grades = ["Excellent", "Good", "Fair", "Poor"]
         let colors: [Color] = [.green, .blue, .orange, .red]
-        let reports = filteredReports
+        let summaries = filteredSummaries
         var result: [(grade: String, count: Int, color: Color)] = []
         for i in 0 ..< grades.count {
-            let gradeCount = reports.filter { $0.results.overallGrade == grades[i] }.count
+            let gradeCount = summaries.filter { $0.overallGrade == grades[i] }.count
             if gradeCount > 0 {
                 result.append((grade: grades[i], count: gradeCount, color: colors[i]))
             }
@@ -104,7 +129,7 @@ struct ReportAnalyticsView: View {
 
     var body: some View {
         ScrollView {
-            if store.reports.isEmpty {
+            if store.summaries.isEmpty {
                 emptyState
             } else {
                 VStack(spacing: 16) {
@@ -112,6 +137,12 @@ struct ReportAnalyticsView: View {
                     summaryCards
                     trendChart
                     pairComparisonChart
+
+                    // Bridge comparison (only when multiple bridges exist)
+                    if store.availableBridgeTransports().count > 1 {
+                        bridgeComparisonChart
+                    }
+
                     osVersionChart
                     gradeChart
                 }
@@ -120,7 +151,7 @@ struct ReportAnalyticsView: View {
         }
         .navigationTitle("Analytics")
         .toolbar {
-            if !store.reports.isEmpty {
+            if !store.summaries.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         exportAnalytics()
@@ -142,13 +173,13 @@ struct ReportAnalyticsView: View {
     }
 
     private func exportAnalytics() {
+        let ids = Set(filteredSummaries.map(\.id))
+        let fullReports = store.loadFullReports(ids: ids)
         var urls: [URL] = []
-        // PDF report
-        if let pdfURL = AnalyticsReportRenderer.renderPDF(reports: filteredReports) {
+        if let pdfURL = AnalyticsReportRenderer.renderPDF(reports: fullReports) {
             urls.append(pdfURL)
         }
-        // CSV raw data as companion
-        if let summaryURL = store.exportSummaryCSV(for: filteredReports) {
+        if let summaryURL = store.exportSummaryCSV(for: fullReports) {
             urls.append(summaryURL)
         }
         if !urls.isEmpty {
@@ -178,37 +209,78 @@ struct ReportAnalyticsView: View {
     // MARK: - Filter Bar
 
     private var filterBar: some View {
-        HStack(spacing: 12) {
-            Picker("Pair", selection: $selectedPair) {
-                Text("All Pairs").tag("All")
-                ForEach(uniquePairs, id: \.self) { pair in
-                    Text(pair).tag(pair)
+        VStack(spacing: 8) {
+            HStack(spacing: 12) {
+                Picker("Pair", selection: $selectedPair) {
+                    Text("All Pairs").tag("All")
+                    ForEach(uniquePairs, id: \.self) { pair in
+                        Text(pair).tag(pair)
+                    }
                 }
-            }
-            .pickerStyle(.menu)
+                .pickerStyle(.menu)
 
-            Picker("OS", selection: $selectedOS) {
-                Text("All OS").tag("All")
-                ForEach(uniqueOSVersions, id: \.self) { version in
-                    Text(version).tag(version)
+                Picker("OS", selection: $selectedOS) {
+                    Text("All OS").tag("All")
+                    ForEach(uniqueOSVersions, id: \.self) { version in
+                        Text(version).tag(version)
+                    }
                 }
-            }
-            .pickerStyle(.menu)
+                .pickerStyle(.menu)
 
-            Picker("Range", selection: $dateRange) {
-                ForEach(DateRange.allCases) { range in
-                    Text(range.rawValue).tag(range)
+                if store.availableBridgeTransports().count > 1 {
+                    Picker("Bridge", selection: $selectedBridge) {
+                        Text("All Bridges").tag("All")
+                        ForEach(store.availableBridgeTransports(), id: \.self) { bridge in
+                            Text(bridge).tag(bridge)
+                        }
+                    }
+                    .pickerStyle(.menu)
                 }
-            }
-            .pickerStyle(.segmented)
 
-            Picker("Metric", selection: $selectedMetric) {
-                ForEach(AnalyticsMetric.allCases) { metric in
-                    Text(metric.rawValue).tag(metric)
+                Picker("Metric", selection: $selectedMetric) {
+                    ForEach(AnalyticsMetric.allCases) { metric in
+                        Text(metric.rawValue).tag(metric)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            HStack(spacing: 8) {
+                ForEach(DateRangePreset.allCases) { preset in
+                    Button {
+                        datePreset = preset
+                    } label: {
+                        Text(preset.rawValue)
+                            .font(.caption)
+                            .fontWeight(datePreset == preset ? .semibold : .regular)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                datePreset == preset
+                                    ? AnyShapeStyle(.blue.opacity(0.15))
+                                    : AnyShapeStyle(.quaternary),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(datePreset == preset ? .blue : .secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .pickerStyle(.menu)
+
+            if datePreset == .custom {
+                HStack(spacing: 12) {
+                    DatePicker("From", selection: $customStart, in: ...customEnd, displayedComponents: .date)
+                        .labelsHidden()
+                    Image(systemName: "arrow.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    DatePicker("To", selection: $customEnd, in: customStart..., displayedComponents: .date)
+                        .labelsHidden()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: datePreset)
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
@@ -216,8 +288,8 @@ struct ReportAnalyticsView: View {
     // MARK: - Summary Cards
 
     private var summaryCards: some View {
-        let reports = filteredReports
-        let count = reports.count
+        let items = filteredSummaries
+        let count = items.count
 
         return LazyVGrid(columns: [
             GridItem(.flexible(), spacing: 12),
@@ -231,7 +303,7 @@ struct ReportAnalyticsView: View {
             summaryItem(
                 "Avg Latency",
                 count > 0
-                    ? String(format: "%.1fms", reports.map(\.results.latencyBurst.avg).reduce(0, +) / Double(count))
+                    ? String(format: "%.1fms", items.map(\.latencyAvg).reduce(0, +) / Double(count))
                     : "-",
                 .blue
             )
@@ -240,8 +312,7 @@ struct ReportAnalyticsView: View {
                 count > 0
                     ? String(
                         format: "%.1f MB/s",
-                        reports.map(\.results.sustainedThroughput.bytesPerSecond)
-                            .reduce(0, +) / Double(count) / 1_000_000
+                        items.map(\.throughputBps).reduce(0, +) / Double(count) / 1_000_000
                     )
                     : "-",
                 .purple
@@ -251,7 +322,7 @@ struct ReportAnalyticsView: View {
                 count > 0
                     ? String(
                         format: "%.1fms",
-                        reports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / Double(count)
+                        items.map(\.jitterAvg).reduce(0, +) / Double(count)
                     )
                     : "-",
                 .orange
@@ -261,7 +332,7 @@ struct ReportAnalyticsView: View {
                 count > 0
                     ? String(
                         format: "%.1f%%",
-                        reports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / Double(count)
+                        items.map(\.packetLossPercent).reduce(0, +) / Double(count)
                     )
                     : "-",
                 .red
@@ -278,26 +349,34 @@ struct ReportAnalyticsView: View {
                 Image(systemName: "chart.xyaxis.line").foregroundStyle(.blue)
                 Text("\(selectedMetric.rawValue) Over Time").font(.headline)
                 Spacer()
-                Text("\(filteredReports.count) reports").font(.caption).foregroundStyle(.secondary)
+                Text("\(filteredSummaries.count) reports").font(.caption).foregroundStyle(.secondary)
             }
 
-            if filteredReports.count >= 2 {
+            if filteredSummaries.count >= 2 {
+                let hasBridges = Set(filteredSummaries.map(\.bridgeTransport)).count > 1
                 Chart {
-                    ForEach(filteredReports) { report in
-                        let pair = "\(report.localDevice.chipFamily) vs \(report.remoteDevice.chipFamily)"
+                    ForEach(filteredSummaries) { summary in
+                        let pair = "\(summary.localChip) vs \(summary.remoteChip)"
                         LineMark(
-                            x: .value("Date", report.date),
-                            y: .value(selectedMetric.rawValue, metricValue(for: report))
+                            x: .value("Date", summary.date),
+                            y: .value(selectedMetric.rawValue, metricValue(for: summary))
                         )
-                        .foregroundStyle(by: .value("Pair", pair))
+                        .foregroundStyle(by: .value(
+                            hasBridges ? "Bridge" : "Pair",
+                            hasBridges ? summary.bridgeTransport : pair
+                        ))
                         .interpolationMethod(.catmullRom)
                         .symbol(by: .value("Pair", pair))
 
                         PointMark(
-                            x: .value("Date", report.date),
-                            y: .value(selectedMetric.rawValue, metricValue(for: report))
+                            x: .value("Date", summary.date),
+                            y: .value(selectedMetric.rawValue, metricValue(for: summary))
                         )
-                        .foregroundStyle(by: .value("Pair", pair))
+                        .foregroundStyle(by: .value(
+                            hasBridges ? "Bridge" : "Pair",
+                            hasBridges ? summary.bridgeTransport : pair
+                        ))
+                        .symbol(by: .value("Pair", pair))
                     }
                 }
                 .chartYAxisLabel(selectedMetric.unit)
@@ -348,24 +427,86 @@ struct ReportAnalyticsView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    // MARK: - Bridge Comparison
+
+    private var bridgeComparisonChart: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "arrow.triangle.branch").foregroundStyle(.teal)
+                Text("Bridge Overhead").font(.headline)
+                Spacer()
+            }
+
+            let bridges = store.availableBridgeTransports()
+            let bridgeAverages: [(bridge: String, avg: Double, count: Int)] = bridges.compactMap { bridge in
+                let items = filteredSummaries.filter { $0.bridgeTransport == bridge }
+                guard !items.isEmpty else { return nil }
+                let avg = items.map { metricValue(for: $0) }.reduce(0, +) / Double(items.count)
+                return (bridge: bridge, avg: avg, count: items.count)
+            }
+
+            if bridgeAverages.count >= 2 {
+                Chart(bridgeAverages, id: \.bridge) { item in
+                    BarMark(
+                        x: .value(selectedMetric.rawValue, item.avg),
+                        y: .value("Bridge", item.bridge)
+                    )
+                    .foregroundStyle(item.bridge == "native" ? Color.blue : Color.orange)
+                    .annotation(position: .trailing, spacing: 4) {
+                        Text(formatMetricValue(item.avg))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .chartXAxisLabel(selectedMetric.unit)
+                .frame(height: max(CGFloat(bridgeAverages.count) * 50, 80))
+
+                // Delta vs native
+                if let native = bridgeAverages.first(where: { $0.bridge == "native" }) {
+                    VStack(spacing: 4) {
+                        ForEach(bridgeAverages.filter { $0.bridge != "native" }, id: \.bridge) { item in
+                            let delta = item.avg - native.avg
+                            let pctDelta = native.avg > 0 ? (delta / native.avg * 100) : 0
+                            HStack {
+                                Text(item.bridge).font(.caption).fontWeight(.medium)
+                                Spacer()
+                                Text(String(format: "%+.1f%@ (%+.0f%%)", delta, selectedMetric.unit, pctDelta))
+                                    .font(.caption)
+                                    .foregroundStyle(selectedMetric.lowerIsBetter
+                                        ? (delta > 0 ? .red : .green)
+                                        : (delta > 0 ? .green : .red))
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+            } else {
+                Text("Need reports from multiple bridges to compare.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(height: 60).frame(maxWidth: .infinity)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
     // MARK: - OS Version Breakdown
 
     private var osVersionAggregates: [OSAggregate] {
-        var map: [String: [TestReport]] = [:]
-        for report in filteredReports {
-            map[report.localDevice.osVersion, default: []].append(report)
-            map[report.remoteDevice.osVersion, default: []].append(report)
+        var map: [String: [ReportSummary]] = [:]
+        for summary in filteredSummaries {
+            map[summary.localOS, default: []].append(summary)
+            map[summary.remoteOS, default: []].append(summary)
         }
-        return map.map { version, reports in
-            let n = Double(reports.count)
-            let avgLat = reports.map(\.results.latencyBurst.avg).reduce(0, +) / n
-            let avgLoss = reports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n
-            let failCount = reports.filter { $0.results.overallGrade == "Poor" || $0.results.overallGrade == "Fair" }
-                .count
+        return map.map { version, items in
+            let n = Double(items.count)
+            let avgLat = items.map(\.latencyAvg).reduce(0, +) / n
+            let avgLoss = items.map(\.packetLossPercent).reduce(0, +) / n
+            let failCount = items.filter { $0.overallGrade == "Poor" || $0.overallGrade == "Fair" }.count
             let failRate = Double(failCount) / n * 100
             return OSAggregate(
                 version: version,
-                count: reports.count,
+                count: items.count,
                 avgLatency: avgLat,
                 avgPacketLoss: avgLoss,
                 failRate: failRate
@@ -447,7 +588,7 @@ struct ReportAnalyticsView: View {
         switch selectedMetric {
         case .latencyAvg: item.avgLatency
         case .packetLoss: item.avgPacketLoss
-        default: item.avgLatency // default to latency for metrics not in the aggregate
+        default: item.avgLatency
         }
     }
 
@@ -459,7 +600,7 @@ struct ReportAnalyticsView: View {
                 Image(systemName: "chart.pie.fill").foregroundStyle(.green)
                 Text("Grade Distribution").font(.headline)
                 Spacer()
-                Text("\(filteredReports.count) reports").font(.caption).foregroundStyle(.secondary)
+                Text("\(filteredSummaries.count) reports").font(.caption).foregroundStyle(.secondary)
             }
 
             if !gradeDistribution.isEmpty {
@@ -498,14 +639,14 @@ struct ReportAnalyticsView: View {
 
     // MARK: - Helpers
 
-    private func metricValue(for report: TestReport) -> Double {
+    private func metricValue(for summary: ReportSummary) -> Double {
         switch selectedMetric {
-        case .latencyAvg: report.results.latencyBurst.avg
-        case .latencyP95: report.results.latencyBurst.p95
-        case .throughput: report.results.sustainedThroughput.bytesPerSecond / 1_000_000
-        case .jitterAvg: report.results.jitterMeasurement.averageJitter
-        case .packetLoss: report.results.packetLossStress.lostPercent
-        case .loadDegradation: report.results.latencyUnderLoad.degradationPercent
+        case .latencyAvg: summary.latencyAvg
+        case .latencyP95: summary.latencyP95
+        case .throughput: summary.throughputBps / 1_000_000
+        case .jitterAvg: summary.jitterAvg
+        case .packetLoss: summary.packetLossPercent
+        case .loadDegradation: summary.loadDegradation
         }
     }
 
@@ -540,8 +681,17 @@ private struct PairAggregate: Identifiable {
     let pair: String
     let average: Double
     let count: Int
+    let bridge: String?
     var id: String {
-        pair
+        if let bridge { return "\(pair)|\(bridge)" }
+        return pair
+    }
+
+    init(pair: String, average: Double, count: Int, bridge: String? = nil) {
+        self.pair = pair
+        self.average = average
+        self.count = count
+        self.bridge = bridge
     }
 }
 

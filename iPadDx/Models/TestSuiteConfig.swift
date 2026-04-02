@@ -23,6 +23,11 @@ struct TestSuiteConfig: Codable {
     var packetLossCount: Int = 500
     var packetLossIntervalMs: Int = 10
 
+    /// Which bridge transports to test through.
+    /// Empty array or ["native"] = current behavior (no bridge overhead).
+    /// ["native", "cordova"] = run the suite twice: once native, once through Cordova bridge.
+    var bridgeTransports: [String] = ["native"]
+
     var enabledPhaseCount: Int {
         [runLatencyBurst, runThroughput, runJitter, runPacketLoss, runLatencyUnderLoad, runHeavyLoad]
             .filter(\.self).count

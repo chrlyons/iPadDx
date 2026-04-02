@@ -17,6 +17,11 @@ struct ReportListView: View {
     @State private var selectedReports: Set<UUID> = []
     @State private var selectionMode: SelectionMode = .none
     @State private var activeSheet: ActiveSheet?
+    @State private var chipFilter: String = "All"
+    @State private var gradeFilter: String = "All"
+    @State private var osFilter: String = "All"
+    @State private var bridgeFilter: String = "All"
+    @State private var searchText: String = ""
 
     enum SelectionMode {
         case none
@@ -25,9 +30,48 @@ struct ReportListView: View {
         case delete
     }
 
+    private var activeFilterCount: Int {
+        [chipFilter, gradeFilter, osFilter, bridgeFilter].filter { $0 != "All" }.count
+    }
+
+    private var availableChips: [String] {
+        let chips = Set(store.summaries.flatMap { [$0.localChip, $0.remoteChip] })
+        return chips.sorted()
+    }
+
+    private var availableGrades: [String] {
+        let grades = Set(store.summaries.map(\.overallGrade))
+        return ["Excellent", "Good", "Fair", "Poor"].filter { grades.contains($0) }
+    }
+
+    private var availableOSVersions: [String] {
+        let versions = Set(store.summaries.flatMap { [$0.localOS, $0.remoteOS] })
+        return versions.sorted()
+    }
+
+    private var filteredSummaries: [ReportSummary] {
+        store.summaries.filter { s in
+            if chipFilter != "All",
+               s.localChip != chipFilter, s.remoteChip != chipFilter
+            { return false }
+            if gradeFilter != "All", s.overallGrade != gradeFilter { return false }
+            if osFilter != "All",
+               s.localOS != osFilter, s.remoteOS != osFilter
+            { return false }
+            if bridgeFilter != "All", s.bridgeTransport != bridgeFilter { return false }
+            if !searchText.isEmpty {
+                let query = searchText.lowercased()
+                let haystack = "\(s.localName) \(s.remoteName) \(s.localChip) \(s.remoteChip) \(s.localDisplayModel) \(s.remoteDisplayModel)"
+                    .lowercased()
+                if !haystack.contains(query) { return false }
+            }
+            return true
+        }
+    }
+
     var body: some View {
         List {
-            if store.reports.isEmpty {
+            if store.summaries.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "doc.text.magnifyingglass")
                         .font(.system(size: 40))
@@ -44,36 +88,40 @@ struct ReportListView: View {
                 .padding(.vertical, 40)
                 .listRowBackground(Color.clear)
             } else {
-                ForEach(store.reports) { report in
+                filterBar
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+
+                ForEach(filteredSummaries) { summary in
                     if selectionMode != .none {
                         Button {
-                            toggleSelection(report.id)
+                            toggleSelection(summary.id)
                         } label: {
                             HStack(spacing: 12) {
-                                Image(systemName: selectedReports.contains(report.id)
+                                Image(systemName: selectedReports.contains(summary.id)
                                     ? "checkmark.circle.fill" : "circle")
                                     .font(.title3)
-                                    .foregroundStyle(selectedReports.contains(report.id) ? .blue : .secondary)
-                                reportRow(report)
+                                    .foregroundStyle(selectedReports.contains(summary.id) ? .blue : .secondary)
+                                reportRow(summary)
                             }
                         }
                         .listRowBackground(
-                            selectedReports.contains(report.id) ? Color.blue.opacity(0.08) : nil
+                            selectedReports.contains(summary.id) ? Color.blue.opacity(0.08) : nil
                         )
                     } else {
-                        NavigationLink(destination: ReportDetailView(report: report)) {
-                            reportRow(report)
+                        NavigationLink(destination: ReportDetailView(reportID: summary.id)) {
+                            reportRow(summary)
                         }
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
-                                store.delete(report)
+                                store.delete(summary.id)
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
                         .swipeActions(edge: .leading) {
                             Button {
-                                exportSingle(report)
+                                exportSingle(summary.id)
                             } label: {
                                 Label("Export", systemImage: "square.and.arrow.up")
                             }
@@ -84,9 +132,10 @@ struct ReportListView: View {
             }
         }
         .navigationTitle("Saved Reports")
+        .searchable(text: $searchText, prompt: "Search devices, chips, models…")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                if !store.reports.isEmpty {
+                if !store.summaries.isEmpty {
                     Menu {
                         if selectionMode == .none {
                             Button {
@@ -95,7 +144,7 @@ struct ReportListView: View {
                             } label: {
                                 Label("Compare Two", systemImage: "arrow.left.arrow.right")
                             }
-                            .disabled(store.reports.count < 2)
+                            .disabled(store.summaries.count < 2)
 
                             Button {
                                 selectionMode = .export
@@ -116,7 +165,7 @@ struct ReportListView: View {
                             Button {
                                 exportAll()
                             } label: {
-                                Label("Export All (\(store.reports.count))", systemImage: "doc.on.doc")
+                                Label("Export All (\(filteredSummaries.count))", systemImage: "doc.on.doc")
                             }
                         } else {
                             Button("Done") {
@@ -139,9 +188,7 @@ struct ReportListView: View {
                     HStack(spacing: 12) {
                         if selectionMode == .compare, selectedReports.count == 2 {
                             Button {
-                                if let pair = getSelectedReports() {
-                                    activeSheet = .compare(reportA: pair.0, reportB: pair.1)
-                                }
+                                compareSelected()
                             } label: {
                                 Label("Compare", systemImage: "arrow.left.arrow.right")
                                     .frame(maxWidth: .infinity)
@@ -174,7 +221,7 @@ struct ReportListView: View {
                             Button {
                                 selectAll()
                             } label: {
-                                Text(selectedReports.count == store.reports.count ? "Deselect All" : "Select All")
+                                Text(selectedReports.count == filteredSummaries.count ? "Deselect All" : "Select All")
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.bordered)
@@ -217,46 +264,144 @@ struct ReportListView: View {
 
     // MARK: - Row
 
-    private func reportRow(_ report: TestReport) -> some View {
+    private func reportRow(_ summary: ReportSummary) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(report.localDevice.chipFamily)
+                Text(summary.localChip)
                     .font(.caption).fontWeight(.semibold)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(.blue.opacity(0.1), in: Capsule())
                 Image(systemName: "arrow.right")
                     .font(.caption2).foregroundStyle(.secondary)
-                Text(report.remoteDevice.chipFamily)
+                Text(summary.remoteChip)
                     .font(.caption).fontWeight(.semibold)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(.purple.opacity(0.1), in: Capsule())
+                if summary.bridgeTransport != "native" {
+                    Text(summary.bridgeTransport)
+                        .font(.caption2).fontWeight(.medium)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(.orange.opacity(0.12), in: Capsule())
+                }
                 Spacer()
-                Text(report.results.overallGrade)
+                Text(summary.overallGrade)
                     .font(.subheadline).fontWeight(.bold)
-                    .foregroundStyle(gradeColor(report.results.overallGrade))
+                    .foregroundStyle(gradeColor(summary.overallGrade))
             }
 
             HStack(spacing: 4) {
-                Text(report.localDevice.displayModel)
+                Text(summary.localDisplayModel)
                     .foregroundStyle(.primary)
                 Text("(sender)")
                     .foregroundStyle(.tertiary)
                 Text("\u{2192}")
                     .foregroundStyle(.secondary)
-                Text(report.remoteDevice.displayModel)
+                Text(summary.remoteDisplayModel)
                     .foregroundStyle(.primary)
             }
             .font(.caption)
 
             HStack {
-                Text(report.date, style: .date)
-                Text(report.date, style: .time)
+                Text(summary.date, style: .date)
+                Text(summary.date, style: .time)
                 Spacer()
-                Text(String(format: "%.1fs", report.durationSeconds))
+                Text(String(format: "%.1fs", summary.durationSeconds))
             }
             .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
+    }
+
+    // MARK: - Filters
+
+    private var filterBar: some View {
+        VStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    filterMenu("Chip", icon: "cpu", selection: $chipFilter, options: availableChips)
+                    filterMenu("Grade", icon: "star", selection: $gradeFilter, options: availableGrades)
+                    filterMenu("OS", icon: "ipad", selection: $osFilter, options: availableOSVersions)
+                    if store.availableBridgeTransports().count > 1 {
+                        filterMenu(
+                            "Bridge",
+                            icon: "network",
+                            selection: $bridgeFilter,
+                            options: store.availableBridgeTransports()
+                        )
+                    }
+                    if activeFilterCount > 0 {
+                        Button {
+                            chipFilter = "All"
+                            gradeFilter = "All"
+                            osFilter = "All"
+                            bridgeFilter = "All"
+                        } label: {
+                            Label("Clear", systemImage: "xmark.circle.fill")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+            }
+            if activeFilterCount > 0 || !searchText.isEmpty {
+                Text("\(filteredSummaries.count) of \(store.summaries.count) reports")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func filterMenu(
+        _ label: String,
+        icon: String,
+        selection: Binding<String>,
+        options: [String]
+    ) -> some View {
+        Menu {
+            Button {
+                selection.wrappedValue = "All"
+            } label: {
+                HStack {
+                    Text("All \(label)s")
+                    if selection.wrappedValue == "All" {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+            Divider()
+            ForEach(options, id: \.self) { option in
+                Button {
+                    selection.wrappedValue = option
+                } label: {
+                    HStack {
+                        Text(option)
+                        if selection.wrappedValue == option {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                Text(selection.wrappedValue == "All" ? label : selection.wrappedValue)
+                    .lineLimit(1)
+            }
+            .font(.caption)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                selection.wrappedValue != "All"
+                    ? AnyShapeStyle(.blue.opacity(0.12))
+                    : AnyShapeStyle(.quaternary),
+                in: Capsule()
+            )
+            .foregroundStyle(selection.wrappedValue != "All" ? .blue : .primary)
+        }
     }
 
     // MARK: - Selection
@@ -284,45 +429,50 @@ struct ReportListView: View {
         selectedReports.removeAll()
     }
 
-    private func getSelectedReports() -> (TestReport, TestReport)? {
-        let selected = store.reports.filter { selectedReports.contains($0.id) }
-        guard selected.count == 2 else { return nil }
-        return (selected[0], selected[1])
+    private func compareSelected() {
+        let ids = Array(selectedReports)
+        guard ids.count == 2 else { return }
+        let reports = store.loadFullReports(ids: selectedReports)
+        guard reports.count == 2 else { return }
+        activeSheet = .compare(reportA: reports[0], reportB: reports[1])
     }
 
     private func selectAll() {
-        if selectedReports.count == store.reports.count {
+        if selectedReports.count == filteredSummaries.count {
             selectedReports.removeAll()
         } else {
-            selectedReports = Set(store.reports.map(\.id))
+            selectedReports = Set(filteredSummaries.map(\.id))
         }
     }
 
     private func deleteSelected() {
-        let toDelete = store.reports.filter { selectedReports.contains($0.id) }
-        for report in toDelete {
-            store.delete(report)
+        for id in selectedReports {
+            store.delete(id)
         }
         exitSelectionMode()
     }
 
     // MARK: - Export
 
-    private func exportSingle(_ report: TestReport) {
+    private func exportSingle(_ id: UUID) {
         Task {
-            if let url = store.exportCSV(for: report) {
+            if let report = store.loadFullReport(id: id),
+               let url = store.exportCSV(for: report)
+            {
                 activeSheet = .export(urls: [url])
             }
         }
     }
 
     private func exportSelected() {
-        let selected = store.reports.filter { selectedReports.contains($0.id) }
-        exportReports(selected)
+        let reports = store.loadFullReports(ids: selectedReports)
+        exportReports(reports)
     }
 
     private func exportAll() {
-        exportReports(store.reports)
+        let ids = Set(filteredSummaries.map(\.id))
+        let reports = store.loadFullReports(ids: ids)
+        exportReports(reports)
     }
 
     private func exportReports(_ reports: [TestReport]) {
