@@ -13,6 +13,7 @@ struct iPadDxApp: App {
             _ = await FlutterBridge.sharedEngine()
             _ = await CapacitorBridgeManager.shared()
             _ = await CordovaBridgeManager.shared()
+            _ = await ReactNativeBridgeManager.shared()
         }
     }
 

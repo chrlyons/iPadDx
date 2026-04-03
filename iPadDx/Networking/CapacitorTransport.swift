@@ -183,9 +183,9 @@ final class CapacitorTransport: TransportProvider {
             CapacitorBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
                 guard let self else { return }
                 if let processedData = Data(base64Encoded: resultBase64) {
-                    self.native.send(processedData, completion: completion)
+                    native.send(processedData, completion: completion)
                 } else {
-                    self.native.send(data, completion: completion)
+                    native.send(data, completion: completion)
                 }
             }
 
@@ -208,7 +208,7 @@ final class CapacitorTransport: TransportProvider {
     ) {
         native.startReceiving(
             handler: { [weak self] payload in
-                guard let self, self.bridgeReady else {
+                guard let self, bridgeReady else {
                     handler(payload)
                     return
                 }

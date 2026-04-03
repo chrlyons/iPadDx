@@ -126,7 +126,7 @@ class CordovaBridgeMessageHandler: NSObject, WKScriptMessageHandler {
     var plugin: CordovaEchoPlugin?
 
     func userContentController(
-        _ userContentController: WKUserContentController,
+        _: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
         guard let body = message.body as? [String: Any],
@@ -174,15 +174,15 @@ class CordovaBridgeMessageHandler: NSObject, WKScriptMessageHandler {
 // MARK: - WKNavigationDelegate (page load debugging)
 
 class CordovaBridgeNavigationDelegate: NSObject, WKNavigationDelegate {
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
         AppLog("Cordova WebView loaded: \(webView.url?.absoluteString ?? "nil")", category: "CordovaTransport")
     }
 
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         AppLog("Cordova WebView failed: \(error)", level: .error, category: "CordovaTransport")
     }
 
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+    func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
         AppLog("Cordova WebView provisional navigation failed: \(error)", level: .error, category: "CordovaTransport")
     }
 }
@@ -223,7 +223,10 @@ class CordovaEchoPlugin: CDVPlugin {
 /// This replicates what CDVCommandDelegateImpl does: serializes the result as JSON
 /// and calls evaluateJavaScript with `cordova.require('cordova/exec').nativeCallback(...)`.
 class CordovaBridgeCommandDelegate: NSObject, CDVCommandDelegate {
-    var settings: [AnyHashable: Any] { [:] }
+    var settings: [AnyHashable: Any] {
+        [:]
+    }
+
     var urlTransformer: UrlTransformerBlock?
 
     private weak var webView: WKWebView?
@@ -237,7 +240,7 @@ class CordovaBridgeCommandDelegate: NSObject, CDVCommandDelegate {
         Bundle.main.path(forResource: resourcepath, ofType: nil)
     }
 
-    func getCommandInstance(_ pluginName: String!) -> Any! {
+    func getCommandInstance(_: String!) -> Any! {
         nil
     }
 
@@ -267,7 +270,7 @@ class CordovaBridgeCommandDelegate: NSObject, CDVCommandDelegate {
         }
     }
 
-    func evalJs(_ js: String!, scheduledOnRunLoop: Bool) {
+    func evalJs(_ js: String!, scheduledOnRunLoop _: Bool) {
         evalJs(js)
     }
 
@@ -337,9 +340,9 @@ final class CordovaTransport: TransportProvider {
             CordovaBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
                 guard let self else { return }
                 if let processedData = Data(base64Encoded: resultBase64) {
-                    self.native.send(processedData, completion: completion)
+                    native.send(processedData, completion: completion)
                 } else {
-                    self.native.send(data, completion: completion)
+                    native.send(data, completion: completion)
                 }
             }
 
@@ -362,7 +365,7 @@ final class CordovaTransport: TransportProvider {
     ) {
         native.startReceiving(
             handler: { [weak self] payload in
-                guard let self, self.bridgeReady else {
+                guard let self, bridgeReady else {
                     handler(payload)
                     return
                 }

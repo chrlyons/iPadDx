@@ -62,7 +62,11 @@ enum FlutterBridge {
         }
 
         if attempts >= maxAttempts {
-            AppLog("FlutterEngine Dart isolate did not respond to ping after 5s", level: .error, category: "FlutterTransport")
+            AppLog(
+                "FlutterEngine Dart isolate did not respond to ping after 5s",
+                level: .error,
+                category: "FlutterTransport"
+            )
         } else {
             AppLog("FlutterEngine ready after \(attempts * 100)ms", category: "FlutterTransport")
         }
@@ -137,16 +141,16 @@ final class FlutterTransport: TransportProvider {
         channel.invokeMethod("echo", arguments: flutterData) { [weak self] result in
             guard let self else { return }
             if let typedResult = result as? FlutterStandardTypedData {
-                self.native.send(typedResult.data, completion: completion)
+                native.send(typedResult.data, completion: completion)
             } else if let dataResult = result as? Data {
-                self.native.send(dataResult, completion: completion)
+                native.send(dataResult, completion: completion)
             } else {
                 AppLog(
                     "Flutter echo returned unexpected type: \(type(of: result)), sending original",
                     level: .warning,
                     category: "FlutterTransport"
                 )
-                self.native.send(data, completion: completion)
+                native.send(data, completion: completion)
             }
         }
     }
@@ -158,7 +162,7 @@ final class FlutterTransport: TransportProvider {
     ) {
         native.startReceiving(
             handler: { [weak self] payload in
-                guard let self, let channel = self.channel, self.engineReady else {
+                guard let self, let channel, engineReady else {
                     handler(payload)
                     return
                 }

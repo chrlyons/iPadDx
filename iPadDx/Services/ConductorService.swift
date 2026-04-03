@@ -116,8 +116,8 @@ class ConductorService {
     // MARK: - Fleet Management
 
     func connectToDevice(_ peer: PeerDevice) {
-        // Check if already in fleet (connected or connecting)
-        guard !fleet.contains(where: { $0.peer.name == peer.name }) else { return }
+        // Check if already in fleet by ID or name (covers reconnects and multi-interface discovery)
+        guard !fleet.contains(where: { $0.peer.id == peer.id || $0.peer.name == peer.name }) else { return }
 
         // Reset stale state from a previous failed attempt
         peer.connectionState = .connecting
@@ -459,6 +459,8 @@ class ConductorService {
         selfBusy = true
         conn.agentStatus = .testing
         conn.currentTestPartner = isSelfA ? "→ Conductor" : "Conductor →"
+        conn.testProgress = 0
+        conn.testPhase = ""
 
         if isSelfA {
             let runner = TestSuiteRunner(connectionManager: conn.connectionManager, metrics: conn.peer.metrics)
@@ -503,6 +505,8 @@ class ConductorService {
         if conn.connectionManager.isConnected {
             conn.agentStatus = .idle
             conn.currentTestPartner = nil
+            conn.testProgress = 0
+            conn.testPhase = ""
         }
         selfBusy = false
     }
@@ -524,8 +528,12 @@ class ConductorService {
 
         connA.agentStatus = .testing
         connA.currentTestPartner = run.deviceB.name
+        connA.testProgress = 0
+        connA.testPhase = ""
         connB.agentStatus = .testing
         connB.currentTestPartner = run.deviceA.name
+        connB.testProgress = 0
+        connB.testPhase = ""
 
         // Use Bonjour names (not display names) for device discovery
         let nameA = run.deviceA.bonjourName ?? run.deviceA.name
@@ -573,10 +581,14 @@ class ConductorService {
         if connA.connectionManager.isConnected {
             connA.agentStatus = .idle
             connA.currentTestPartner = nil
+            connA.testProgress = 0
+            connA.testPhase = ""
         }
         if connB.connectionManager.isConnected {
             connB.agentStatus = .idle
             connB.currentTestPartner = nil
+            connB.testProgress = 0
+            connB.testPhase = ""
         }
     }
 
@@ -588,6 +600,7 @@ class ConductorService {
         switch message {
         case let .orchestrationStatus(phase, detail):
             connection.testPhase = detail
+            connection.lastStatusUpdate = Date()
             if phase == "failed" {
                 log("\(connection.peer.name): \(detail)", level: .error)
             } else if phase == "completed" {
@@ -633,6 +646,15 @@ class ConductorService {
             // Device disconnected — fail fast instead of waiting full timeout
             if !connection.connectionManager.isConnected {
                 connection.agentStatus = .failed
+                return false
+            }
+            // Detect stale agent — no status update for 30s while supposedly testing
+            if connection.agentStatus == .testing,
+               Date().timeIntervalSince(connection.lastStatusUpdate) > 30
+            {
+                log("\(connection.peer.name) unresponsive for 30s", level: .error)
+                connection.agentStatus = .failed
+                connection.testPhase = "Agent unresponsive"
                 return false
             }
         }

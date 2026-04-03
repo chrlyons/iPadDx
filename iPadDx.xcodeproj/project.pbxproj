@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		115AAEEAD9963A69E9339609 /* hermes.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 32DB46677C72C84022DA9303 /* hermes.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		23017BA8FD68124AD07F9C80 /* libReactNative.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 851C689043900965271C0730 /* libReactNative.a */; };
 		28F3B92F98ADE72AC8AFAB44 /* Pods_iPadDx.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 367BB7BFAFA86B157259F077 /* Pods_iPadDx.framework */; };
 		A10001 /* iPadDxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001 /* iPadDxApp.swift */; };
 		A10002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002 /* ContentView.swift */; };
@@ -53,10 +55,12 @@
 		A10043 /* CapacitorTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10045 /* CapacitorTransport.swift */; };
 		A32CC1C036F2649E2A49BB1C /* App.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A55C21F82BDA6BB4994328F3 /* Flutter.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */; };
+		B29B15E9F8796F8EA7119D2F /* main.jsbundle in Resources */ = {isa = PBXBuildFile; fileRef = 5196CB9957B052A1A89CC948 /* main.jsbundle */; };
 		DE9F5003D7EA693A3BD09A0C /* capacitor_www in Resources */ = {isa = PBXBuildFile; fileRef = 1D148EEE53F5E87EF688EEE2 /* capacitor_www */; };
 		E26C4AD941ADDC3163802C76 /* App.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */; };
 		E6444C74DDD0C5C2BEFF34FC /* Flutter.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F1A2B3C4D5E6F70819203142 /* cordova_www in Resources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F70819203143 /* cordova_www */; };
+		FC5CC90E7F875EFC0500C301 /* hermes.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 32DB46677C72C84022DA9303 /* hermes.xcframework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -68,6 +72,7 @@
 			files = (
 				E6444C74DDD0C5C2BEFF34FC /* Flutter.xcframework in Embed Frameworks */,
 				A32CC1C036F2649E2A49BB1C /* App.xcframework in Embed Frameworks */,
+				115AAEEAD9963A69E9339609 /* hermes.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -76,9 +81,14 @@
 
 /* Begin PBXFileReference section */
 		1D148EEE53F5E87EF688EEE2 /* capacitor_www */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; name = capacitor_www; path = iPadDx/Resources/capacitor_www; sourceTree = "<group>"; };
+		32DB46677C72C84022DA9303 /* hermes.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; path = Frameworks/hermes.xcframework; sourceTree = SOURCE_ROOT; };
 		367BB7BFAFA86B157259F077 /* Pods_iPadDx.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_iPadDx.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */ = {isa = PBXFileReference; expectedSignature = "AppleDeveloperProgram:S8QB4VV633:FLUTTER.IO LLC"; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; name = Flutter.xcframework; path = Frameworks/Flutter.xcframework; sourceTree = SOURCE_ROOT; };
+		3D5862413E7B3BC8E4ABA34F /* ReactNativeBridge.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = ReactNativeBridge.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		5196CB9957B052A1A89CC948 /* main.jsbundle */ = {isa = PBXFileReference; includeInIndex = 1; name = main.jsbundle; path = Resources/main.jsbundle; sourceTree = "<group>"; };
+		5759457BE8CE7437B1F4AF09 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		7D940F19EA9DC092A8AF7268 /* Pods-iPadDx.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-iPadDx.debug.xcconfig"; path = "Target Support Files/Pods-iPadDx/Pods-iPadDx.debug.xcconfig"; sourceTree = "<group>"; };
+		851C689043900965271C0730 /* libReactNative.a */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = archive.ar; name = libReactNative.a; path = ../Frameworks/ReactNative/libReactNative.a; sourceTree = "<group>"; };
 		B10001 /* iPadDxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadDxApp.swift; sourceTree = "<group>"; };
 		B10002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B10003 /* DeviceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceListView.swift; sourceTree = "<group>"; };
@@ -127,6 +137,7 @@
 		C10001 /* iPadDx.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iPadDx.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; name = App.xcframework; path = Frameworks/App.xcframework; sourceTree = SOURCE_ROOT; };
 		F1A2B3C4D5E6F70819203143 /* cordova_www */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; name = cordova_www; path = iPadDx/Resources/cordova_www; sourceTree = "<group>"; };
+		FBC8EB8792AA0DC67925E88C /* BridgeEchoModule.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = BridgeEchoModule.m; sourceTree = "<group>"; };
 		FD3442C6EFB9D527CA2128FC /* Pods-iPadDx.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-iPadDx.release.xcconfig"; path = "Target Support Files/Pods-iPadDx/Pods-iPadDx.release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -138,6 +149,8 @@
 				A55C21F82BDA6BB4994328F3 /* Flutter.xcframework in Frameworks */,
 				E26C4AD941ADDC3163802C76 /* App.xcframework in Frameworks */,
 				28F3B92F98ADE72AC8AFAB44 /* Pods_iPadDx.framework in Frameworks */,
+				23017BA8FD68124AD07F9C80 /* libReactNative.a in Frameworks */,
+				FC5CC90E7F875EFC0500C301 /* hermes.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -160,9 +173,20 @@
 				3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */,
 				C43D4F7A0CF23AC7D3A2EBEA /* App.xcframework */,
 				367BB7BFAFA86B157259F077 /* Pods_iPadDx.framework */,
+				CC73F540929789B846AE20E2 /* iOS */,
+				851C689043900965271C0730 /* libReactNative.a */,
+				32DB46677C72C84022DA9303 /* hermes.xcframework */,
 			);
 			name = Frameworks;
 			sourceTree = SOURCE_ROOT;
+		};
+		CC73F540929789B846AE20E2 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				5759457BE8CE7437B1F4AF09 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
 		};
 		CD3AC5A3FBEDB0944CCC7BD6 /* Resources */ = {
 			isa = PBXGroup;
@@ -195,6 +219,7 @@
 				E10007 /* Services */,
 				E10005 /* Views */,
 				CD3AC5A3FBEDB0944CCC7BD6 /* Resources */,
+				5196CB9957B052A1A89CC948 /* main.jsbundle */,
 			);
 			path = iPadDx;
 			sourceTree = "<group>";
@@ -226,6 +251,7 @@
 				B10043 /* ReactNativeTransport.swift */,
 				B10044 /* FlutterTransport.swift */,
 				B10045 /* CapacitorTransport.swift */,
+				FBC8EB8792AA0DC67925E88C /* BridgeEchoModule.m */,
 			);
 			path = Networking;
 			sourceTree = "<group>";
@@ -257,6 +283,7 @@
 			isa = PBXGroup;
 			children = (
 				C10001 /* iPadDx.app */,
+				3D5862413E7B3BC8E4ABA34F /* ReactNativeBridge.framework */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -340,6 +367,7 @@
 				A10014 /* Assets.xcassets in Resources */,
 				DE9F5003D7EA693A3BD09A0C /* capacitor_www in Resources */,
 				F1A2B3C4D5E6F70819203142 /* cordova_www in Resources */,
+				B29B15E9F8796F8EA7119D2F /* main.jsbundle in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -575,7 +603,19 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",
 				);
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"RCT_ENABLE_INSPECTOR=0",
+					"RCT_REMOTE_PROFILE=0",
+					"RCT_DEV=0",
+					"RCT_DEBUG=0",
+					"HERMES_ENABLE_DEBUGGER=0",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(PROJECT_DIR)/Frameworks/ReactNative/include\"",
+				);
 				INFOPLIST_FILE = iPadDx/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -585,12 +625,27 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(PROJECT_DIR)/Frameworks/ReactNative\"",
+				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+					"-framework AudioToolbox",
+					"-framework MobileCoreServices",
+					"-framework JavaScriptCore",
+					"-framework CoreServices",
+					"-framework Accelerate",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.christianlyons.ipadconnection;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "iPadDx/iPadDx-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 2;
 			};
@@ -610,7 +665,19 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",
 				);
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"RCT_ENABLE_INSPECTOR=0",
+					"RCT_REMOTE_PROFILE=0",
+					"RCT_DEV=0",
+					"RCT_DEBUG=0",
+					"HERMES_ENABLE_DEBUGGER=0",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(PROJECT_DIR)/Frameworks/ReactNative/include\"",
+				);
 				INFOPLIST_FILE = iPadDx/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -620,12 +687,27 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(PROJECT_DIR)/Frameworks/ReactNative\"",
+				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+					"-framework AudioToolbox",
+					"-framework MobileCoreServices",
+					"-framework JavaScriptCore",
+					"-framework CoreServices",
+					"-framework Accelerate",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.christianlyons.ipadconnection;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "iPadDx/iPadDx-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 2;
 			};

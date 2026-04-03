@@ -99,19 +99,26 @@ class AgentService {
             }
         }
 
-        // When the partner disconnects after test, notify conductor and reset
+        // When the partner disconnects, determine if it's normal completion or a real failure.
+        // The controller disconnects after finishing the test — that's expected for responders.
+        // Only report failure if we were still connecting (never got to test).
         manager.onConnectionLost = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                let wasActive = self.status == .testing || self.status == .connecting
+                let wasConnecting = self.status == .connecting
                 self.partnerEngine?.stop()
                 self.partnerEngine = nil
                 self.partnerConnection = nil
-                self.status = .idle
                 self.testPartnerName = ""
                 self.testProgress = 0
-                if wasActive {
-                    self.sendStatus("failed", detail: "Partner disconnected during test")
+                if wasConnecting {
+                    // Never got to test — real failure
+                    self.status = .failed
+                    self.sendStatus("failed", detail: "Partner disconnected before test started")
+                } else {
+                    // Was testing — controller finished and disconnected (normal)
+                    self.status = .idle
+                    self.sendStatus("completed", detail: "Responder finished")
                 }
             }
         }

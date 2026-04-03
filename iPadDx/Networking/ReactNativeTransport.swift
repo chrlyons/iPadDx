@@ -1,23 +1,122 @@
 import Foundation
-import JavaScriptCore
 import Network
 
-/// React Native bridge transport — routes data through a JavaScriptCore context
-/// replicating React Native's actual bridge architecture (MessageQueue/BatchedBridge).
+/// ObjC-visible class that BridgeEchoModule.m calls to notify Swift.
+@objc(ReactNativeBridgeNotifier)
+class ReactNativeBridgeNotifier: NSObject {
+    @objc static func handleEchoResult(callId: String, payload: String) {
+        Task { @MainActor in
+            ReactNativeBridgeManager.handleEchoResult(callId: callId, payload: payload)
+        }
+    }
+
+    @objc static func markReady() {
+        Task { @MainActor in
+            ReactNativeBridgeManager.markReady()
+        }
+    }
+}
+
+/// Manages a shared RCTBridge instance (real React Native runtime with Hermes)
+/// across all ReactNativeTransport connections. Built separately from the main
+/// project and linked as a static library to avoid CocoaPods use_frameworks! conflicts.
 ///
-/// Real React Native apps use this flow for the bridge (non-JSI) architecture:
-///   JS: NativeModules.Plugin.send(data)
-///     → MessageQueue enqueues [moduleID, methodID, args]
-///     → On flush: JSON.stringify entire batch → native
-///     → Native: RCTBatchedBridge deserializes JSON batch
-///     → Finds module by ID, invokes method with args
-///     → Result: enqueue callback [callbackID, args]
-///     → JSON.stringify → JS
-///     → MessageQueue invokes stored callback by ID
+/// Data path: JS NativeModules.BridgeEchoModule.echo(payload, callId)
+///   → JSON serialize → MessageQueue batch → RCTBatchedBridge
+///   → ObjC BridgeEchoModule.echo() → resolve(payload) → JS callback
+@MainActor
+enum ReactNativeBridgeManager {
+    private static var bridge: RCTBridge?
+    private static var isReady = false
+    private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
+    private static var echoCallbacks: [String: (String) -> Void] = [:]
+    private static var callIdCounter = 0
+
+    static func nextCallId() -> String {
+        callIdCounter += 1
+        return "rn_\(callIdCounter)"
+    }
+
+    static func registerCallback(callId: String, callback: @escaping (String) -> Void) {
+        echoCallbacks[callId] = callback
+    }
+
+    static func cancelCallback(callId: String) {
+        echoCallbacks.removeValue(forKey: callId)
+    }
+
+    static func handleEchoResult(callId: String, payload: String) {
+        let callback = echoCallbacks.removeValue(forKey: callId)
+        callback?(payload)
+    }
+
+    static func shared() async -> RCTBridge {
+        if let b = bridge, isReady {
+            return b
+        }
+
+        if let b = bridge {
+            await withCheckedContinuation { cont in
+                readyContinuations.append(cont)
+            }
+            return b
+        }
+
+        AppLog("Starting React Native bridge...", category: "RNTransport")
+
+        let b = RCTBridge(delegate: RNBridgeDelegate.shared, launchOptions: nil)!
+        bridge = b
+
+        var attempts = 0
+        let maxAttempts = 80 // 8 seconds (Hermes startup can be slow)
+        while attempts < maxAttempts {
+            if isReady { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            attempts += 1
+        }
+
+        if !isReady {
+            AppLog("React Native bridge did not become ready after 8s", level: .error, category: "RNTransport")
+            isReady = true
+        } else {
+            AppLog("React Native bridge ready after \(attempts * 100)ms", category: "RNTransport")
+        }
+
+        for cont in readyContinuations {
+            cont.resume()
+        }
+        readyContinuations.removeAll()
+
+        return b
+    }
+
+    static func markReady() {
+        AppLog("BridgeEchoModule ready signal received", category: "RNTransport")
+        isReady = true
+    }
+}
+
+// MARK: - RCTBridgeDelegate
+
+/// Provides the pre-bundled JS bundle URL to the RCTBridge.
+class RNBridgeDelegate: NSObject, RCTBridgeDelegate {
+    static let shared = RNBridgeDelegate()
+
+    func sourceURL(for _: RCTBridge) -> URL? {
+        Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+    }
+}
+
+// MARK: - ReactNativeTransport
+
+/// React Native bridge transport — routes data through a REAL RCTBridge
+/// running the Hermes JS engine, through REAL RCT_EXPORT_MODULE native module
+/// infrastructure, exercising the full MessageQueue/BatchedBridge pipeline.
 ///
-/// The new JSI/TurboModules architecture bypasses JSON serialization with
-/// direct C++ JSI bindings. This transport measures the bridge (legacy)
-/// architecture overhead since it's the path that adds measurable latency.
+/// Every byte passes through: JS NativeModules.BridgeEchoModule.echo()
+/// → JSON serialize → MessageQueue batch → RCTBatchedBridge dispatch
+/// → ObjC BridgeEchoModule.echo() → resolve() → JSON serialize
+/// → JS Promise callback — the full React Native pipeline.
 final class ReactNativeTransport: TransportProvider {
     let bridgeID = "reactnative"
     let bridgeLabel = "React Native Bridge"
@@ -25,22 +124,10 @@ final class ReactNativeTransport: TransportProvider {
     var onStateChange: ((TransportState) -> Void)?
 
     private let native = NativeTransport()
-    private let jsContext: JSContext
+    private var bridgeReady = false
 
     var currentPath: NWPath? {
         native.currentPath
-    }
-
-    init() {
-        jsContext = JSContext()!
-        jsContext.exceptionHandler = { _, exception in
-            AppLog(
-                "RNTransport JSContext error: \(exception?.toString() ?? "unknown")",
-                level: .error,
-                category: "RNTransport"
-            )
-        }
-        loadRNBridge()
     }
 
     func connect(to endpoint: NWEndpoint, queue: DispatchQueue) {
@@ -48,6 +135,7 @@ final class ReactNativeTransport: TransportProvider {
             self?.onStateChange?(state)
         }
         native.connect(to: endpoint, queue: queue)
+        ensureBridge()
     }
 
     func accept(_ connection: NWConnection, queue: DispatchQueue) {
@@ -55,18 +143,34 @@ final class ReactNativeTransport: TransportProvider {
             self?.onStateChange?(state)
         }
         native.accept(connection, queue: queue)
+        ensureBridge()
     }
 
     func send(_ data: Data, completion: @escaping (NWError?) -> Void) {
-        let base64 = data.base64EncodedString()
-        let result = jsContext.evaluateScript("__rnBridge.execSend('\(base64)')")
-        guard let processed = result?.toString(),
-              let processedData = Data(base64Encoded: processed)
-        else {
+        guard bridgeReady else {
+            AppLog("Bridge not ready, sending raw", level: .warning, category: "RNTransport")
             native.send(data, completion: completion)
             return
         }
-        native.send(processedData, completion: completion)
+
+        let base64 = data.base64EncodedString()
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let callId = ReactNativeBridgeManager.nextCallId()
+
+            ReactNativeBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
+                guard let self else { return }
+                if let processedData = Data(base64Encoded: resultBase64) {
+                    native.send(processedData, completion: completion)
+                } else {
+                    native.send(data, completion: completion)
+                }
+            }
+
+            let bridge = await ReactNativeBridgeManager.shared()
+            bridge.enqueueJSCall("BridgeEchoModule", method: "echo", args: [base64, callId], completion: nil)
+        }
     }
 
     func startReceiving(
@@ -76,18 +180,37 @@ final class ReactNativeTransport: TransportProvider {
     ) {
         native.startReceiving(
             handler: { [weak self] payload in
-                guard let self else {
+                guard let self, bridgeReady else {
                     handler(payload)
                     return
                 }
+
                 let base64 = payload.base64EncodedString()
-                let result = jsContext.evaluateScript("__rnBridge.execReceive('\(base64)')")
-                if let processed = result?.toString(),
-                   let processedData = Data(base64Encoded: processed)
-                {
-                    handler(processedData)
-                } else {
-                    handler(payload)
+
+                Task { @MainActor [weak self] in
+                    guard self != nil else {
+                        handler(payload)
+                        return
+                    }
+                    let callId = ReactNativeBridgeManager.nextCallId()
+
+                    let timeoutItem = DispatchWorkItem {
+                        ReactNativeBridgeManager.cancelCallback(callId: callId)
+                        handler(payload)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timeoutItem)
+
+                    ReactNativeBridgeManager.registerCallback(callId: callId) { resultBase64 in
+                        timeoutItem.cancel()
+                        if let processedData = Data(base64Encoded: resultBase64) {
+                            handler(processedData)
+                        } else {
+                            handler(payload)
+                        }
+                    }
+
+                    let bridge = await ReactNativeBridgeManager.shared()
+                    bridge.enqueueJSCall("BridgeEchoModule", method: "echo", args: [base64, callId], completion: nil)
                 }
             },
             onEOF: onEOF,
@@ -97,171 +220,15 @@ final class ReactNativeTransport: TransportProvider {
 
     func disconnect() {
         native.disconnect()
+        bridgeReady = false
     }
 
-    // MARK: - RN Bridge JS
-
-    /// Loads a faithful replication of React Native's BatchedBridge/MessageQueue.
-    /// Models the actual JS→Native→JS pipeline:
-    ///   - Module registry with numeric IDs (RCTModuleData)
-    ///   - Method registry with numeric IDs
-    ///   - Call queue: [moduleID, methodID, params] tuples
-    ///   - JSON batch serialization on flush
-    ///   - Callback registry with callbackID
-    ///   - Response queue: [cbID, args] tuples
-    private func loadRNBridge() {
-        let js = """
-        var __MessageQueue = {
-            // Module registry (mirrors RCTModuleData)
-            _moduleTable: {},
-            _moduleIDMap: {},
-            _nextModuleID: 0,
-
-            // Method registry
-            _methodTable: {},
-
-            // Callback registry
-            _callbacks: {},
-            _nextCallbackID: 0,
-            _failureCallbacks: {},
-
-            // Call queue (JS → Native)
-            _queue: [[], [], [], 0],  // [moduleIDs, methodIDs, params, callID]
-
-            // Register a native module (mirrors RCTBatchedBridge registerModules)
-            registerModule: function(name, methods) {
-                var moduleID = this._nextModuleID++;
-                this._moduleTable[moduleID] = { name: name, methods: methods };
-                this._moduleIDMap[name] = moduleID;
-
-                var methodIDs = {};
-                for (var i = 0; i < methods.length; i++) {
-                    methodIDs[methods[i]] = i;
-                }
-                this._methodTable[moduleID] = methodIDs;
-
-                return moduleID;
-            },
-
-            // Enqueue a call (mirrors MessageQueue.enqueueNativeCall)
-            enqueueNativeCall: function(moduleName, methodName, args, onSuccess, onFail) {
-                var moduleID = this._moduleIDMap[moduleName];
-                var methodID = this._methodTable[moduleID][methodName];
-
-                // Register callbacks
-                var cbID = this._nextCallbackID++;
-                if (onFail) {
-                    this._callbacks[cbID] = onFail;
-                    cbID = this._nextCallbackID++;
-                }
-                if (onSuccess) {
-                    this._callbacks[cbID] = onSuccess;
-                }
-
-                // Enqueue: [moduleID, methodID, params]
-                this._queue[0].push(moduleID);
-                this._queue[1].push(methodID);
-                this._queue[2].push(args);
-
-                return cbID;
-            },
-
-            // Flush queue to native (mirrors MessageQueue.flushedQueue)
-            flushedQueue: function() {
-                var queue = this._queue;
-                this._queue = [[], [], [], this._queue[3] + 1];
-                return JSON.stringify(queue);
-            },
-
-            // Native invokes JS callback (mirrors MessageQueue.invokeCallbackAndReturnFlushedQueue)
-            invokeCallback: function(cbID, args) {
-                var callback = this._callbacks[cbID];
-                if (callback) {
-                    callback.apply(null, args);
-                    delete this._callbacks[cbID];
-                }
-            }
-        };
-
-        // Register the network diagnostic module
-        var NativeModules = {};
-        (function() {
-            var moduleID = __MessageQueue.registerModule(
-                'NetworkDiagnosticModule',
-                ['send', 'onDataReceived']
-            );
-
-            NativeModules.NetworkDiagnosticModule = {
-                send: function(data) {
-                    return new Promise(function(resolve, reject) {
-                        __MessageQueue.enqueueNativeCall(
-                            'NetworkDiagnosticModule', 'send',
-                            [data], resolve, reject
-                        );
-                    });
-                }
-            };
-        })();
-
-        // Bridge interface for Swift
-        var __rnBridge = {
-            execSend: function(base64Data) {
-                var resultData = null;
-
-                // 1. JS calls NativeModule method (enqueues in MessageQueue)
-                var cbID = __MessageQueue.enqueueNativeCall(
-                    'NetworkDiagnosticModule', 'send',
-                    [base64Data],
-                    function(data) { resultData = data; },
-                    function(err) { resultData = base64Data; }
-                );
-
-                // 2. Flush queue (native calls flushedQueue on timer or event)
-                var batchJSON = __MessageQueue.flushedQueue();
-
-                // 3. Native side: deserialize the batch
-                var batch = JSON.parse(batchJSON);
-                var moduleIDs = batch[0];
-                var methodIDs = batch[1];
-                var params = batch[2];
-
-                // 4. Find the last call's args
-                var lastIdx = moduleIDs.length - 1;
-                var callArgs = params[lastIdx];
-                var payload = callArgs[0];
-
-                // 5. "Native module executes" — prepare callback args
-                var callbackArgs = [payload];
-
-                // 6. Invoke callback (native calls invokeCallback)
-                __MessageQueue.invokeCallback(cbID, callbackArgs);
-
-                return resultData;
-            },
-
-            execReceive: function(base64Data) {
-                var resultData = null;
-
-                // Same pipeline for incoming data (native → JS event)
-                var cbID = __MessageQueue.enqueueNativeCall(
-                    'NetworkDiagnosticModule', 'onDataReceived',
-                    [base64Data],
-                    function(data) { resultData = data; },
-                    function(err) { resultData = base64Data; }
-                );
-
-                var batchJSON = __MessageQueue.flushedQueue();
-                var batch = JSON.parse(batchJSON);
-                var params = batch[2];
-                var lastIdx = batch[0].length - 1;
-                var payload = params[lastIdx][0];
-
-                __MessageQueue.invokeCallback(cbID, [payload]);
-
-                return resultData;
-            }
-        };
-        """
-        jsContext.evaluateScript(js)
+    private func ensureBridge() {
+        guard !bridgeReady else { return }
+        Task { @MainActor in
+            _ = await ReactNativeBridgeManager.shared()
+            self.bridgeReady = true
+            AppLog("Bridge connected", category: "RNTransport")
+        }
     }
 }

@@ -1,0 +1,34 @@
+require_relative '../node_modules/react-native/scripts/react_native_pods'
+
+platform :ios, '17.0'
+
+target 'RNBridge' do
+  # NO use_frameworks! — React Native C++ deps need static library header resolution
+  use_react_native!(
+    :path => '../node_modules/react-native',
+    :app_path => '..',
+    :hermes_enabled => true
+  )
+end
+
+post_install do |installer|
+  rn_path = File.join(__dir__, '../node_modules/react-native')
+
+  # Fix Folly Demangle.cpp — Xcode 16.3+ removed demangle_callbackref
+  demangle_file = File.join(__dir__, 'Pods/RCT-Folly/folly/Demangle.cpp')
+  if File.exist?(demangle_file)
+    content = File.read(demangle_file)
+    patched = content.gsub('#if __has_include(<demangle.h>)', '#if 0 // patched: Xcode 16.3+ removed demangle_callbackref')
+    if content != patched
+      File.chmod(0644, demangle_file)
+      File.write(demangle_file, patched)
+    end
+  end
+
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['REACT_NATIVE_PATH'] = rn_path
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '17.0'
+    end
+  end
+end
