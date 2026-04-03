@@ -44,6 +44,7 @@
 		A10032 /* FleetDeviceCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034 /* FleetDeviceCard.swift */; };
 		A10033 /* AnalyticsReportRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10035 /* AnalyticsReportRenderer.swift */; };
 		A10034 /* TestInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10036 /* TestInfoView.swift */; };
+		A10050 /* BridgeInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10050 /* BridgeInfoView.swift */; };
 		A10035 /* LogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10037 /* LogStore.swift */; };
 		A10036 /* ConsoleLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10038 /* ConsoleLogView.swift */; };
 		A10037 /* ReportSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10039 /* ReportSummary.swift */; };
@@ -125,6 +126,7 @@
 		B10034 /* FleetDeviceCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetDeviceCard.swift; sourceTree = "<group>"; };
 		B10035 /* AnalyticsReportRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsReportRenderer.swift; sourceTree = "<group>"; };
 		B10036 /* TestInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestInfoView.swift; sourceTree = "<group>"; };
+		B10050 /* BridgeInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeInfoView.swift; sourceTree = "<group>"; };
 		B10037 /* LogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogStore.swift; sourceTree = "<group>"; };
 		B10038 /* ConsoleLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleLogView.swift; sourceTree = "<group>"; };
 		B10039 /* ReportSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportSummary.swift; sourceTree = "<group>"; };
@@ -274,6 +276,7 @@
 				B10033 /* AgentStatusView.swift */,
 				B10034 /* FleetDeviceCard.swift */,
 				B10036 /* TestInfoView.swift */,
+				B10050 /* BridgeInfoView.swift */,
 				B10038 /* ConsoleLogView.swift */,
 			);
 			path = Views;
@@ -453,6 +456,7 @@
 				A10032 /* FleetDeviceCard.swift in Sources */,
 				A10033 /* AnalyticsReportRenderer.swift in Sources */,
 				A10034 /* TestInfoView.swift in Sources */,
+				A10050 /* BridgeInfoView.swift in Sources */,
 				A10035 /* LogStore.swift in Sources */,
 				A10036 /* ConsoleLogView.swift in Sources */,
 				A10037 /* ReportSummary.swift in Sources */,
