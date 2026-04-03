@@ -84,4 +84,19 @@ enum BridgeRegistry {
     static var enabledBridgeIDs: [String] {
         available.filter(\.enabled).map(\.id)
     }
+
+    /// Check whether a bridge's runtime initialized successfully.
+    /// Returns true for native (always healthy) and for bridges whose JS/Dart
+    /// signaled readiness. Returns false if the bridge timed out during init.
+    @MainActor
+    static func isBridgeHealthy(_ bridgeID: String) -> Bool {
+        switch bridgeID {
+        case "native": true
+        case "cordova": CordovaBridgeManager.isHealthy
+        case "reactnative": ReactNativeBridgeManager.isHealthy
+        case "flutter": FlutterBridge.isHealthy
+        case "capacitor": CapacitorBridgeManager.isHealthy
+        default: false
+        }
+    }
 }

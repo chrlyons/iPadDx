@@ -446,6 +446,13 @@ class ConductorService {
     }
 
     private func executeSelfRun(_ run: TestRun, isSelfA: Bool) async {
+        // Refuse to run if the bridge failed to initialize — results would be invalid
+        if run.bridgeTransport != "native", !BridgeRegistry.isBridgeHealthy(run.bridgeTransport) {
+            log("Bridge \(run.bridgeTransport) not healthy, skipping self run", level: .error)
+            failedRuns.append(run)
+            return
+        }
+
         let agentPeer = isSelfA ? run.deviceB : run.deviceA
         guard let conn = fleet.first(where: { $0.peer.id == agentPeer.id }) else {
             log("Self run: \(agentPeer.name) not found in fleet", level: .error)

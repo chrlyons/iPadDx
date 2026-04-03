@@ -1,71 +1,78 @@
 # Bridge Overhead Testing
 
-> **Status:** Implemented. All phases complete. See [Shortcuts & Limitations](#shortcuts--limitations) for deviations from the original design.
-
 ## Problem Statement
 
-iPadDx currently tests device-to-device connections using native Swift directly on Apple's Network.framework. This gives accurate measurements of the raw network path, but real-world apps like Assess 2.0 don't talk to Network.framework directly — they go through a bridge layer (Cordova, React Native, Flutter, etc.) that adds its own overhead to every message.
-
-When a clinician reports "the connection is slow," we can't tell if the problem is the network or the bridge. iPadDx needs to test through the same bridge the target app uses so we measure what users actually experience — not an idealized version of it.
-
-**Goal:** Run real test traffic through real bridge implementations so reports reflect actual app-level connection quality, not just network-level quality.
+iPadDx tests device-to-device connections using native Swift on Network.framework. Real-world apps like Assess 2.0 go through a bridge layer (Cordova, React Native, Flutter, etc.) that adds overhead to every message. iPadDx tests through the same real bridge runtimes so reports reflect actual app-level connection quality.
 
 ---
 
 ## Bridge Types
 
-All five bridges ship in a single build. Each is selectable in the UI.
+All five bridges ship in a single build, all running **real framework runtimes** (no simulations). Each is selectable in the UI.
 
-| Bridge ID | Technology | Target App Example | Status |
-|-----------|-----------|-------------------|--------|
-| `native` | Direct Swift / Network.framework | iPadDx itself | Baseline |
-| `cordova` | JavaScriptCore + Cordova exec/callback pipeline | Assess 2.0 | Implemented |
-| `reactnative` | JavaScriptCore + RN MessageQueue/BatchedBridge | — | Implemented |
-| `flutter` | StandardMethodCodec binary serialization + thread dispatch | — | Implemented (see shortcuts) |
-| `capacitor` | WKWebView + postMessage IPC | — | Implemented |
+| Bridge ID | Technology | Target App Example |
+|-----------|-----------|-------------------|
+| `native` | Direct Swift / Network.framework | iPadDx itself (baseline) |
+| `cordova` | WKWebView + real cordova.js + CDVPlugin + CDVPluginResult | Assess 2.0 |
+| `reactnative` | RCTBridge + Hermes engine + ObjC RCT_EXPORT_MODULE | — |
+| `flutter` | FlutterEngine + FlutterMethodChannel + AOT Dart isolate | — |
+| `capacitor` | CAPBridgeViewController + CAPPlugin + WKWebView IPC | — |
 
 The `native` bridge is always available and cannot be deselected (it's the baseline for comparison).
+
+### Overhead Characteristics
+
+| Framework | Process Boundary | Serialization | Binary Data | Dominant Overhead |
+|---|---|---|---|---|
+| **Native** | None | None | Raw bytes | Baseline |
+| **Flutter** | None (in-process) | Binary codec | Uint8List (zero-copy) | Thread dispatch |
+| **React Native** | None (in-process) | JSON + batching | Base64 | Batch interval (~5ms) |
+| **Cordova** | Yes (WKWebView) | JSON | Base64 only | IPC + JSON + Base64 |
+| **Capacitor** | Yes (WKWebView) | JSON | Base64 only | IPC + JSON + Base64 |
 
 ---
 
 ## Architecture
 
-### Networking Layer Abstraction
+### Networking Layer
 
-`ConnectionManager` delegates all network operations to a `TransportProvider`. It no longer touches `NWConnection` directly.
+`ConnectionManager` delegates all network operations to a `TransportProvider`.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    TestSuiteRunner                       │
-│              (unchanged — runs test phases)              │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────┐
-│                  ConnectionManager                       │
-│       (message encode/decode, state machine)             │
-│       Delegates send/receive to TransportProvider        │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-     ┌─────────────────┼──────────────────────────┐
-     │                 │                          │
-┌────▼────┐  ┌────────▼────────┐  ┌──────────────▼──────────────┐
-│ Native  │  │    Cordova      │  │  ReactNative / Flutter /    │
-│Transport│  │   Transport     │  │  Capacitor Transports       │
-│         │  │                 │  │                             │
-│NWConn   │  │JSContext→NWConn │  │JSContext/WKWebView/Codec    │
-│(direct) │  │(exec/callback)  │  │      →NWConn               │
-└─────────┘  └─────────────────┘  └─────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│              TestSuiteRunner                  │
+└──────────────────┬───────────────────────────┘
+                   │
+┌──────────────────▼───────────────────────────┐
+│            ConnectionManager                  │
+│     (encode/decode, state machine)            │
+│     Delegates send/receive to transport       │
+└──────────────────┬───────────────────────────┘
+                   │
+    ┌──────────────┼──────────────┬──────────────┐
+    │              │              │              │
+┌───▼───┐  ┌──────▼──────┐  ┌───▼────┐  ┌──────▼──────┐
+│Native │  │  Cordova    │  │Flutter │  │  Capacitor  │
+│       │  │  (WKWebView │  │(Engine │  │  (CAPBridge │
+│NWConn │  │  + CDVPlugin│  │+ Dart) │  │  + WKWebView│
+│direct │  │  + cordova. │  │        │  │  + CAPPlugin│
+│       │  │  js)        │  │        │  │             │
+└───────┘  └─────────────┘  └────────┘  └─────────────┘
+                   │
+            ┌──────▼──────┐
+            │ReactNative  │
+            │(RCTBridge   │
+            │+ Hermes     │
+            │+ ObjC NM)   │
+            └─────────────┘
 ```
 
 ### TransportProvider Protocol
-
-File: `iPadDx/Networking/TransportProvider.swift`
 
 ```swift
 protocol TransportProvider: AnyObject {
     var bridgeID: String { get }
     var bridgeLabel: String { get }
-
     func connect(to endpoint: NWEndpoint, queue: DispatchQueue)
     func accept(_ connection: NWConnection, queue: DispatchQueue)
     func send(_ data: Data, completion: @escaping (NWError?) -> Void)
@@ -73,35 +80,71 @@ protocol TransportProvider: AnyObject {
                         onEOF: @escaping () -> Void,
                         onError: @escaping (NWError) -> Void)
     func disconnect()
-
     var currentPath: NWPath? { get }
     var onStateChange: ((TransportState) -> Void)? { get set }
 }
 ```
 
-### Bridge Transport Implementations
+---
 
-**CordovaTransport** (`iPadDx/Networking/CordovaTransport.swift`)
-- Embeds a real `JSContext` (JavaScriptCore framework)
-- JS replicates the actual Cordova pipeline: `cordova.exec()` → command queue → `fetchMessages()` batch flush → JSON serialize/deserialize → `callbackFromNative()` dispatch
-- Models `CDVPlugin`/`CDVCommandDelegate` callback patterns
-- Send: Swift → base64 → JS exec() → command queue → JSON serialize batch → JSON parse → callback → base64 → Swift → NWConnection
-- Receive: NWConnection → Swift → base64 → JS event dispatch → JSON serialize/parse → callback → base64 → Swift
+## Bridge Implementations
 
-**ReactNativeTransport** (`iPadDx/Networking/ReactNativeTransport.swift`)
-- Embeds a real `JSContext` (JavaScriptCore framework)
-- JS replicates RN's `MessageQueue`/`BatchedBridge` architecture: module registry with numeric moduleIDs/methodIDs, `enqueueNativeCall()` batching, `flushedQueue()` JSON serialization, `invokeCallback()` dispatch
-- Models the bridge (legacy) architecture, not JSI/TurboModules — the bridge is the path that adds measurable overhead
+### Cordova (WKWebView + CDVPlugin)
 
-**FlutterTransport** (`iPadDx/Networking/FlutterTransport.swift`)
-- Implements Flutter's `StandardMethodCodec` binary serialization in Swift (matching the actual encoding format: type tags, variable-length size encoding, method call and envelope encoding)
-- Adds double `DispatchQueue` thread hop simulating Flutter's UI thread → platform thread → UI thread context switches
-- **Does NOT embed the Dart VM** — see [Shortcuts](#shortcuts--limitations)
+- Real WKWebView running real `cordova.js` (from CapacitorCordova)
+- Real `CDVPlugin` subclass (`CordovaEchoPlugin`) with `CDVPluginResult` + `CDVInvokedUrlCommand`
+- Real `CDVCommandDelegate` implementation delivering results via `evaluateJavaScript(nativeCallback)`
+- `WKScriptMessageHandler` receives `cordova.exec()` calls from JS
 
-**CapacitorTransport** (`iPadDx/Networking/CapacitorTransport.swift`)
-- Embeds a real `WKWebView` — the actual technology Capacitor uses
-- Cross-process IPC via `postMessage` / `WKScriptMessageHandler` / `evaluateJavaScript` is genuine (WebKit process boundary)
-- JS replicates `Capacitor.toNative()`/`fromNative()` pipeline with callbackId registry, plugin call serialization, and event dispatch
+```
+Send: Swift → base64 → WKWebView evaluateJavaScript("echoBridge()") → [WebKit IPC]
+  → cordova.exec() → webkit.messageHandlers.bridge.postMessage() → [WebKit IPC]
+  → WKScriptMessageHandler → CDVInvokedUrlCommand → CordovaEchoPlugin.echo()
+  → CDVPluginResult → evaluateJavaScript(nativeCallback) → [WebKit IPC]
+  → JS callback → base64 → Swift → NWConnection
+```
+
+### React Native (RCTBridge + Hermes)
+
+- Real `RCTBridge` running the Hermes JS engine (AOT bytecode)
+- Real ObjC native module (`BridgeEchoModule.m`) with `RCT_EXPORT_MODULE()` + `RCT_EXPORT_METHOD()`
+- Built in separate Xcode project to avoid `use_frameworks!` conflict (see [Build Notes](#react-native-separate-build-project))
+- Pre-bundled `main.jsbundle` via Metro, `hermes.xcframework` embedded
+
+```
+Send: Swift → base64 → bridge.enqueueJSCall("BridgeEchoModule", "echo")
+  → Hermes JS thread → BatchedBridge callable module dispatch
+  → NativeModules.BridgeEchoModule.echo() → RCTBatchedBridge
+  → ObjC BridgeEchoModule.echo() → resolve(base64)
+  → ReactNativeBridgeNotifier → Swift callback → NWConnection
+```
+
+### Flutter (FlutterEngine + Dart)
+
+- Real `FlutterEngine` running a headless Dart isolate (AOT compiled)
+- Real `FlutterMethodChannel` with `StandardMethodCodec` binary serialization
+- Dart handler echoes data back through the channel
+
+```
+Send: Swift → FlutterStandardTypedData → channel.invokeMethod("echo")
+  → StandardMethodCodec encode → Dart VM thread dispatch
+  → Dart MethodChannel handler → echo Uint8List back
+  → StandardMethodCodec encode result → platform thread callback → Swift → NWConnection
+```
+
+### Capacitor (CAPBridgeViewController + CAPPlugin)
+
+- Real `CAPBridgeViewController` with real Capacitor native-bridge.js
+- Real `CAPPlugin` subclass (`BridgeEchoPlugin`) registered via `bridge.registerPluginInstance()`
+- Cross-process WKWebView IPC (WebContent process boundary)
+
+```
+Send: Swift → base64 → evaluateJavaScript("echoBridge()") → [WebKit IPC]
+  → JS Capacitor.Plugins.BridgeEchoPlugin.echo() → Capacitor.toNative() → [WebKit IPC]
+  → WKScriptMessageHandler → CapacitorBridge → BridgeEchoPlugin.echo()
+  → CAPPluginCall.resolve() → evaluateJavaScript(fromNative) → [WebKit IPC]
+  → JS callback → Swift → NWConnection
+```
 
 ---
 
@@ -111,7 +154,7 @@ protocol TransportProvider: AnyObject {
 
 ```swift
 struct TestSuiteConfig: Codable {
-    // ... existing phase toggles ...
+    // ... phase toggles ...
     var bridgeTransports: [String] = ["native"]
 }
 ```
@@ -131,7 +174,7 @@ struct TestRun: Identifiable, Equatable {
 
 ### Queue Ordering
 
-When multiple bridges are selected, the queue interleaves bridges across pairs to prevent thermal throttling from back-to-back runs on the same devices:
+When multiple bridges are selected, the queue interleaves bridges across pairs to prevent thermal throttling:
 
 ```
 A→B [native]
@@ -148,30 +191,11 @@ B→C [cordova]
 
 ### Standalone Mode (TestSuiteView)
 
-Bridge transport toggle section below phase toggles. Native is always on. Each additional bridge adds one more sequential run. Summary shows "This test will run 2x (once per bridge)".
+Bridge transport toggle section below phase toggles. Native is always on. Each additional bridge adds one more sequential run.
 
 ### Conductor Mode (ConductorDashboardView)
 
-Same bridge toggle section in queue controls. `generateAllPairs()` creates `P * B` TestRuns. Manual pair addition creates one TestRun per selected bridge. Queue list shows bridge variant as a tag on non-native runs.
-
----
-
-## Report Changes
-
-- `TestReport.bridgeTransport: String?` — nil for old reports (backward compatible)
-- `ReportEntity.bridgeTransport: String = "native"` — column default handles migration
-- `ReportSummary.bridgeTransport: String` — always populated
-- CSV exports include bridge column (summary, analytics with comparison sections)
-- PDF analytics includes "Bridge Overhead Analysis" section with delta vs native
-- Report list and analytics views have bridge filter picker
-
----
-
-## Orchestration Protocol
-
-- `orchestrateTest(..., bridgeTransport: String = "native")` — agents create ConnectionManager with specified bridge
-- `agentCapabilities(supportedBridges: [String])` — sent on agent mode entry, conductor stores on DeviceConnection
-- `DeviceConnection.supportedBridges: [String] = ["native"]`
+Same bridge toggle section. `generateAllPairs()` creates `P * B` TestRuns. Queue list shows bridge variant as a tag on non-native runs.
 
 ---
 
@@ -184,7 +208,7 @@ User selects bridges → taps Run Test
   → for each bridge (sequential):
       1. Set bridgeTransportOverride on runner
       2. Run full suite (warm-up + all phases)
-      3. Save report (intermediate reports saved immediately)
+      3. Save report
       4. Reset runner, 2-second settle delay
   → Show results
 ```
@@ -200,14 +224,57 @@ Conductor selects bridges → All Pairs → Run Queue
   → Report returned to conductor
 ```
 
+### Orchestration Protocol
+
+- `orchestrateTest(..., bridgeTransport: String = "native")` — agents create ConnectionManager with specified bridge
+- `agentCapabilities(supportedBridges: [String])` — sent on agent mode entry, conductor stores on DeviceConnection
+- `DeviceConnection.supportedBridges: [String] = ["native"]`
+
 ---
 
-## Data Migration
+## Reports & Storage
 
-- `TestReport.bridgeTransport` is `String?` — old JSON decodes to nil
-- `ReportEntity.bridgeTransport` defaults to `"native"` via SwiftData column default
-- All queries use `?? "native"` fallback
-- `orchestrateTest` has `bridgeTransport: String = "native"` default — old agents ignore the field
+### Report Schema
+
+- `TestReport.bridgeTransport: String?` — nil for old reports (backward compatible)
+- `ReportEntity.bridgeTransport: String = "native"` — column default handles migration
+- `ReportSummary.bridgeTransport: String` — always populated
+
+### ReportStore Queries
+
+All queries operate on the in-memory `summaries` array:
+
+```swift
+func summaries(forBridge bridge: String) -> [ReportSummary]
+func summaries(forChipPair local: String, remote: String, bridge: String? = nil) -> [ReportSummary]
+func availableBridgeTransports() -> [String]
+func bridgeComparison(local: String, remote: String) -> [BridgeComparisonRow]
+```
+
+### CSV Export
+
+- **Single report** — bridge transport line in header
+- **Summary CSV** — "Bridge Transport" column between Remote OS and Grade
+- **Analytics CSV** — bridge comparison section (per-bridge metrics with delta vs native), per-pair and per-chip breakdowns with bridge dimension (only when multiple bridges present)
+
+### PDF Analytics
+
+`AnalyticsReportRenderer` adds a "Bridge Overhead Analysis" section when multiple bridges are present: per-bridge comparison table with delta vs native baseline, per-pair bridge breakdown.
+
+### View Integration
+
+- **ReportListView** — bridge filter picker, bridge tag on non-native rows
+- **ReportDetailView** — bridge transport badge in grade header
+- **ReportAnalyticsView** — bridge filter, overhead comparison chart with delta vs native
+- **ReportComparisonView** — bridge transport in headers, highlights when bridges differ
+- **ConductorDashboardView** — bridge tag on queue items and completed results
+
+### Migration
+
+- Old `ReportEntity` records get `bridgeTransport = "native"` (column default)
+- Old `rawJSON` decodes `bridgeTransport` to `nil` — all queries use `?? "native"` fallback
+- Old `orchestrateTest` messages lack `bridgeTransport` — parameter default handles it
+- No data loss, no re-processing needed
 
 ---
 
@@ -215,53 +282,56 @@ Conductor selects bridges → All Pairs → Run Queue
 
 1. **Bridge on both sides.** Both controller AND responder use the bridge transport. Matches real-world usage.
 
-2. **JSContext lifecycle.** Each transport instance creates its own JSContext. A new transport is created per ConnectionManager, so each test run gets a fresh context. This isolates bridge state between runs.
+2. **Bridge lifecycle.** All four bridge runtimes (FlutterEngine, RCTBridge, CAPBridgeViewController, CordovaBridgeManager) are singletons pre-warmed at app launch and reused across connections. Each transport instance wraps a fresh NativeTransport for the network connection while sharing the bridge runtime.
 
-3. **Single app build.** All bridge transports ship in one build. Binary size is not a concern for an internal diagnostic tool.
+3. **Single app build.** All bridge transports ship in one build.
 
 4. **Agents must be pre-installed.** All iPads need the same build. `agentCapabilities` handles version mismatches.
 
-5. **Warm-up per bridge run.** Each `runFullSuite()` call includes its own warm-up. Standalone mode calls it once per bridge.
+5. **Warm-up per bridge run.** Each `runFullSuite()` call includes its own warm-up.
 
 ---
 
-## Shortcuts & Limitations
+## React Native: Separate Build Project
 
-These are deviations from the original design or areas where the implementation approximates rather than replicates the real-world bridge.
+React Native cannot share a CocoaPods workspace with Capacitor due to a fundamental `use_frameworks!` incompatibility:
 
-### FlutterTransport: No Dart VM
+- **Capacitor** requires `use_frameworks!` (Swift pod with custom module maps)
+- **React Native** 0.79+'s C++ internals (Folly, Yoga, cxxreact, JSI, Hermes) break under framework imports — platform-specific headers use header maps incompatible with framework search paths
 
-The original design called for embedding the Dart runtime. Flutter's engine is a compiled C++ binary (~40MB) that requires the Flutter SDK to build. Embedding it would require adding Flutter as a framework dependency.
+**Solution:** Build React Native in a completely separate Xcode project (`Bridges/rn_bridge/ios/RNBridge.xcodeproj`), merge all static libraries into `libReactNative.a`, and embed alongside `hermes.xcframework`.
 
-**What we do instead:** Replicate the two dominant overhead sources:
-1. **StandardMethodCodec binary serialization** — implemented in Swift matching Flutter's actual encoding format (type tags, variable-length size encoding, method call and envelope framing)
-2. **Platform thread dispatch** — double `DispatchQueue` hop simulating Flutter's UI thread → platform thread → UI thread context switches
+The separate project's Podfile also patches Folly's `Demangle.cpp` for Xcode 16.3+ compatibility.
 
-**What's missing:** The actual Dart VM boundary crossing. In a real Flutter app, data crosses from native (Objective-C/Swift) into the Dart isolate and back. Our implementation measures serialization + thread dispatch but not the Dart runtime overhead itself.
+```bash
+cd Bridges/rn_bridge
+npm install
+npx react-native bundle \
+  --entry-file index.js \
+  --platform ios \
+  --dev false \
+  --bundle-output ../../iPadDx/Resources/main.jsbundle
+cd ios
+pod install
+xcodebuild -workspace RNBridge.xcworkspace -scheme RNBridge -sdk iphoneos -configuration Release
+# Merge static libs → libReactNative.a, copy hermes.xcframework
+```
 
-**Impact:** FlutterTransport overhead measurements will underestimate real Flutter app overhead. The serialization and thread dispatch are the largest contributors, but the Dart VM adds additional cost.
+---
 
-### CordovaTransport: Simplified Bridge Shim
+## Known Limitations
 
-The JS shim faithfully models Cordova's `exec()` → command queue → `fetchMessages()` → callback pipeline. However, it does not include:
-- The full CDVPlugin class hierarchy
-- CDVInvokedUrlCommand parsing
-- Actual Cordova plugin lifecycle (pluginInitialize, onReset, etc.)
-- WKWebView message handler bridge (real modern Cordova uses WKWebView, our implementation uses JSContext directly)
+### ReactNativeTransport: Classic Bridge Only
 
-**Impact:** JSContext is faster than WKWebView for the same JS operations (no cross-process IPC). Real Cordova overhead on modern iOS (WKWebView-based) would be higher than what CordovaTransport measures. The CapacitorTransport, which uses real WKWebView, gives a better approximation of the WKWebView process boundary cost.
-
-### ReactNativeTransport: Bridge Architecture Only
-
-Models the legacy bridge (MessageQueue/BatchedBridge) architecture. Does not model the newer JSI/TurboModules architecture, which bypasses JSON serialization with direct C++ JSI bindings. Apps using the new architecture would have significantly lower bridge overhead.
+Measures the legacy bridge (MessageQueue/BatchedBridge/JSON serialization) architecture. Does not model the newer JSI/TurboModules architecture, which bypasses JSON serialization with direct C++ JSI bindings.
 
 ### No "Bridge One Side Only" Toggle
 
-The design mentions a toggle to bridge only one side for deeper debugging. This was not implemented — both sides always use the same bridge transport.
+Both sides always use the same bridge transport. A toggle to bridge only one side (for isolating sender vs receiver overhead) was not implemented.
 
 ### Standalone Progress UI
 
-The design calls for "Run 1/2 — Native" progress display during multi-bridge execution. The current implementation runs bridges sequentially but doesn't show which bridge run is active in the progress UI.
+Runs bridges sequentially but doesn't show which bridge run is active (e.g., "Run 1/2 — Native").
 
 ---
 
@@ -271,16 +341,22 @@ The design calls for "Run 1/2 — Native" progress display during multi-bridge e
 |---|---|
 | `Networking/TransportProvider.swift` | Protocol + BridgeRegistry + TransportState |
 | `Networking/NativeTransport.swift` | Direct NWConnection (baseline) |
-| `Networking/CordovaTransport.swift` | JavaScriptCore + Cordova bridge |
-| `Networking/ReactNativeTransport.swift` | JavaScriptCore + RN MessageQueue |
-| `Networking/FlutterTransport.swift` | StandardMethodCodec + thread dispatch |
-| `Networking/CapacitorTransport.swift` | WKWebView + postMessage IPC |
+| `Networking/CordovaTransport.swift` | Real WKWebView + cordova.js + CDVPlugin |
+| `Networking/ReactNativeTransport.swift` | Real RCTBridge + Hermes + ObjC native module |
+| `Networking/FlutterTransport.swift` | Real FlutterEngine + FlutterMethodChannel + Dart |
+| `Networking/CapacitorTransport.swift` | Real CAPBridgeViewController + CAPPlugin |
+| `Networking/BridgeEchoModule.m` | ObjC React Native native module (RCT_EXPORT_MODULE) |
 | `Networking/ConnectionManager.swift` | Delegates to TransportProvider |
+| `iPadDx-Bridging-Header.h` | ObjC→Swift bridging header for React Native types |
+| `Bridges/flutter_bridge/` | Flutter module (Dart echo handler) |
+| `Bridges/rn_bridge/` | React Native mini app (JS + separate build project) |
+| `Bridges/cordova_bridge/www/` | Cordova web assets (index.html + cordova.js) |
+| `Bridges/capacitor_bridge/www/` | Capacitor web assets (index.html) |
 | `Models/TestReport.swift` | `bridgeTransport: String?` field |
 | `Models/TestSuiteConfig.swift` | `bridgeTransports: [String]` field |
-| `Models/DiagnosticMessage.swift` | Updated orchestrateTest + agentCapabilities |
-| `Models/DeviceConnection.swift` | `supportedBridges` field |
 | `Models/ReportEntity.swift` | `bridgeTransport` column |
+| `Models/ReportSummary.swift` | `BridgeComparisonRow` struct |
+| `Services/ReportStore.swift` | Query methods, export formats, bridge columns |
 | `Services/ConductorService.swift` | TestRun queue, bridge-aware execution |
 | `Services/AgentService.swift` | Creates ConnectionManager with bridge |
 | `Services/AnalyticsReportRenderer.swift` | PDF bridge overhead section |

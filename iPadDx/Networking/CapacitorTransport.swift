@@ -9,6 +9,7 @@ import WebKit
 enum CapacitorBridgeManager {
     private static var viewController: CAPBridgeViewController?
     private static var isReady = false
+    static var isHealthy = false
     private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
     private static var echoCallbacks: [String: (String) -> Void] = [:]
     private static var callIdCounter = 0
@@ -62,10 +63,11 @@ enum CapacitorBridgeManager {
 
         if !isReady {
             AppLog("Capacitor bridge did not become ready after 5s", level: .error, category: "CapacitorTransport")
-            // Mark ready anyway to unblock — the JS may still load later
             isReady = true
+            isHealthy = false
         } else {
             AppLog("Capacitor bridge ready after \(attempts * 100)ms", category: "CapacitorTransport")
+            isHealthy = true
         }
 
         for cont in readyContinuations {
@@ -78,6 +80,7 @@ enum CapacitorBridgeManager {
 
     static func markReady() {
         isReady = true
+        isHealthy = true
     }
 }
 
@@ -146,6 +149,7 @@ final class CapacitorTransport: TransportProvider {
 
     private let native = NativeTransport()
     private var bridgeReady = false
+    private var pendingCallIds: Set<String> = []
 
     var currentPath: NWPath? {
         native.currentPath
@@ -179,8 +183,10 @@ final class CapacitorTransport: TransportProvider {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let callId = CapacitorBridgeManager.nextCallId()
+            pendingCallIds.insert(callId)
 
             CapacitorBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
+                self?.pendingCallIds.remove(callId)
                 guard let self else { return }
                 if let processedData = Data(base64Encoded: resultBase64) {
                     native.send(processedData, completion: completion)
@@ -191,11 +197,12 @@ final class CapacitorTransport: TransportProvider {
 
             let vc = await CapacitorBridgeManager.shared()
             let js = "echoBridge('\(base64)', '\(callId)');"
-            vc.webView?.evaluateJavaScript(js) { _, error in
+            vc.webView?.evaluateJavaScript(js) { [weak self] _, error in
                 if let error {
                     AppLog("JS eval error: \(error)", level: .error, category: "CapacitorTransport")
                     CapacitorBridgeManager.cancelCallback(callId: callId)
-                    self.native.send(data, completion: completion)
+                    self?.pendingCallIds.remove(callId)
+                    self?.native.send(data, completion: completion)
                 }
             }
         }
@@ -216,21 +223,24 @@ final class CapacitorTransport: TransportProvider {
                 let base64 = payload.base64EncodedString()
 
                 Task { @MainActor [weak self] in
-                    guard self != nil else {
+                    guard let self else {
                         handler(payload)
                         return
                     }
                     let callId = CapacitorBridgeManager.nextCallId()
+                    pendingCallIds.insert(callId)
 
                     // Timeout: if WKWebView doesn't respond in 500ms, deliver raw
-                    let timeoutItem = DispatchWorkItem {
+                    let timeoutItem = DispatchWorkItem { [weak self] in
                         CapacitorBridgeManager.cancelCallback(callId: callId)
+                        self?.pendingCallIds.remove(callId)
                         handler(payload)
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timeoutItem)
 
-                    CapacitorBridgeManager.registerCallback(callId: callId) { resultBase64 in
+                    CapacitorBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
                         timeoutItem.cancel()
+                        self?.pendingCallIds.remove(callId)
                         if let processedData = Data(base64Encoded: resultBase64) {
                             handler(processedData)
                         } else {
@@ -240,7 +250,11 @@ final class CapacitorTransport: TransportProvider {
 
                     let vc = await CapacitorBridgeManager.shared()
                     let js = "echoBridge('\(base64)', '\(callId)');"
-                    vc.webView?.evaluateJavaScript(js, completionHandler: nil)
+                    vc.webView?.evaluateJavaScript(js) { _, error in
+                        if let error {
+                            AppLog("JS eval error (recv): \(error)", level: .error, category: "CapacitorTransport")
+                        }
+                    }
                 }
             },
             onEOF: onEOF,
@@ -251,6 +265,11 @@ final class CapacitorTransport: TransportProvider {
     func disconnect() {
         native.disconnect()
         bridgeReady = false
+        let ids = pendingCallIds
+        pendingCallIds.removeAll()
+        Task { @MainActor in
+            ids.forEach { CapacitorBridgeManager.cancelCallback(callId: $0) }
+        }
     }
 
     private func ensureBridge() {

@@ -8,6 +8,7 @@ import Network
 enum FlutterBridge {
     private static var engine: FlutterEngine?
     private static var isRunning = false
+    static var isHealthy = false
     private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
 
     /// Get the shared engine, starting it if needed.
@@ -67,8 +68,10 @@ enum FlutterBridge {
                 level: .error,
                 category: "FlutterTransport"
             )
+            isHealthy = false
         } else {
             AppLog("FlutterEngine ready after \(attempts * 100)ms", category: "FlutterTransport")
+            isHealthy = true
         }
 
         isRunning = true

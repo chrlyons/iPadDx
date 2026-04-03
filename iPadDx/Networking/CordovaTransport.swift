@@ -15,6 +15,8 @@ import WebKit
 enum CordovaBridgeManager {
     private static var webView: WKWebView?
     private static var isReady = false
+    /// True if the bridge became ready via JS signal; false if it timed out.
+    static var isHealthy = false
     private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
     private static var echoCallbacks: [String: (String) -> Void] = [:]
     private static var callIdCounter = 0
@@ -101,8 +103,10 @@ enum CordovaBridgeManager {
         if !isReady {
             AppLog("Cordova bridge did not become ready after 5s", level: .error, category: "CordovaTransport")
             isReady = true
+            isHealthy = false
         } else {
             AppLog("Cordova bridge ready after \(attempts * 100)ms", category: "CordovaTransport")
+            isHealthy = true
         }
 
         for cont in readyContinuations {
@@ -115,6 +119,7 @@ enum CordovaBridgeManager {
 
     static func markReady() {
         isReady = true
+        isHealthy = true
     }
 }
 
@@ -303,6 +308,7 @@ final class CordovaTransport: TransportProvider {
 
     private let native = NativeTransport()
     private var bridgeReady = false
+    private var pendingCallIds: Set<String> = []
 
     var currentPath: NWPath? {
         native.currentPath
@@ -336,8 +342,10 @@ final class CordovaTransport: TransportProvider {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let callId = CordovaBridgeManager.nextCallId()
+            pendingCallIds.insert(callId)
 
             CordovaBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
+                self?.pendingCallIds.remove(callId)
                 guard let self else { return }
                 if let processedData = Data(base64Encoded: resultBase64) {
                     native.send(processedData, completion: completion)
@@ -348,11 +356,12 @@ final class CordovaTransport: TransportProvider {
 
             let wv = await CordovaBridgeManager.shared()
             let js = "echoBridge('\(base64)', '\(callId)');"
-            wv.evaluateJavaScript(js) { _, error in
+            wv.evaluateJavaScript(js) { [weak self] _, error in
                 if let error {
                     AppLog("JS eval error: \(error)", level: .error, category: "CordovaTransport")
                     CordovaBridgeManager.cancelCallback(callId: callId)
-                    self.native.send(data, completion: completion)
+                    self?.pendingCallIds.remove(callId)
+                    self?.native.send(data, completion: completion)
                 }
             }
         }
@@ -373,21 +382,24 @@ final class CordovaTransport: TransportProvider {
                 let base64 = payload.base64EncodedString()
 
                 Task { @MainActor [weak self] in
-                    guard self != nil else {
+                    guard let self else {
                         handler(payload)
                         return
                     }
                     let callId = CordovaBridgeManager.nextCallId()
+                    pendingCallIds.insert(callId)
 
                     // Timeout: if WKWebView doesn't respond in 500ms, deliver raw
-                    let timeoutItem = DispatchWorkItem {
+                    let timeoutItem = DispatchWorkItem { [weak self] in
                         CordovaBridgeManager.cancelCallback(callId: callId)
+                        self?.pendingCallIds.remove(callId)
                         handler(payload)
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timeoutItem)
 
-                    CordovaBridgeManager.registerCallback(callId: callId) { resultBase64 in
+                    CordovaBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
                         timeoutItem.cancel()
+                        self?.pendingCallIds.remove(callId)
                         if let processedData = Data(base64Encoded: resultBase64) {
                             handler(processedData)
                         } else {
@@ -397,7 +409,11 @@ final class CordovaTransport: TransportProvider {
 
                     let wv = await CordovaBridgeManager.shared()
                     let js = "echoBridge('\(base64)', '\(callId)');"
-                    wv.evaluateJavaScript(js, completionHandler: nil)
+                    wv.evaluateJavaScript(js) { _, error in
+                        if let error {
+                            AppLog("JS eval error (recv): \(error)", level: .error, category: "CordovaTransport")
+                        }
+                    }
                 }
             },
             onEOF: onEOF,
@@ -408,6 +424,11 @@ final class CordovaTransport: TransportProvider {
     func disconnect() {
         native.disconnect()
         bridgeReady = false
+        let ids = pendingCallIds
+        pendingCallIds.removeAll()
+        Task { @MainActor in
+            ids.forEach { CordovaBridgeManager.cancelCallback(callId: $0) }
+        }
     }
 
     private func ensureBridge() {

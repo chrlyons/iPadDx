@@ -198,6 +198,11 @@ struct TestSuiteView: View {
                     // Run once per selected bridge transport
                     let bridges = config.bridgeTransports
                     for (index, bridge) in bridges.enumerated() {
+                        // Skip bridges that failed to initialize — data would be invalid
+                        if bridge != "native", !BridgeRegistry.isBridgeHealthy(bridge) {
+                            AppLog("Skipping \(bridge) — bridge not healthy", level: .error, category: "TestSuite")
+                            continue
+                        }
                         runner.bridgeTransportOverride = bridge
                         let report = await runner.runFullSuite()
                         // Save intermediate reports (all but last) immediately

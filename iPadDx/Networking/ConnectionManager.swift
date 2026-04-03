@@ -205,8 +205,9 @@ class ConnectionManager {
         transport.startReceiving(
             handler: { [weak self] payload in
                 guard let self else { return }
-                _totalBytesReceived += payload.count + 4
+                let size = payload.count + 4
                 Task { @MainActor in
+                    self._totalBytesReceived += size
                     self.receiveHandler?(payload)
                 }
             },

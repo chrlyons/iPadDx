@@ -28,6 +28,7 @@ class ReactNativeBridgeNotifier: NSObject {
 enum ReactNativeBridgeManager {
     private static var bridge: RCTBridge?
     private static var isReady = false
+    static var isHealthy = false
     private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
     private static var echoCallbacks: [String: (String) -> Void] = [:]
     private static var callIdCounter = 0
@@ -78,8 +79,10 @@ enum ReactNativeBridgeManager {
         if !isReady {
             AppLog("React Native bridge did not become ready after 8s", level: .error, category: "RNTransport")
             isReady = true
+            isHealthy = false
         } else {
             AppLog("React Native bridge ready after \(attempts * 100)ms", category: "RNTransport")
+            isHealthy = true
         }
 
         for cont in readyContinuations {
@@ -93,6 +96,7 @@ enum ReactNativeBridgeManager {
     static func markReady() {
         AppLog("BridgeEchoModule ready signal received", category: "RNTransport")
         isReady = true
+        isHealthy = true
     }
 }
 
@@ -125,6 +129,7 @@ final class ReactNativeTransport: TransportProvider {
 
     private let native = NativeTransport()
     private var bridgeReady = false
+    private var pendingCallIds: Set<String> = []
 
     var currentPath: NWPath? {
         native.currentPath
@@ -158,8 +163,10 @@ final class ReactNativeTransport: TransportProvider {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let callId = ReactNativeBridgeManager.nextCallId()
+            pendingCallIds.insert(callId)
 
             ReactNativeBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
+                self?.pendingCallIds.remove(callId)
                 guard let self else { return }
                 if let processedData = Data(base64Encoded: resultBase64) {
                     native.send(processedData, completion: completion)
@@ -188,20 +195,23 @@ final class ReactNativeTransport: TransportProvider {
                 let base64 = payload.base64EncodedString()
 
                 Task { @MainActor [weak self] in
-                    guard self != nil else {
+                    guard let self else {
                         handler(payload)
                         return
                     }
                     let callId = ReactNativeBridgeManager.nextCallId()
+                    pendingCallIds.insert(callId)
 
-                    let timeoutItem = DispatchWorkItem {
+                    let timeoutItem = DispatchWorkItem { [weak self] in
                         ReactNativeBridgeManager.cancelCallback(callId: callId)
+                        self?.pendingCallIds.remove(callId)
                         handler(payload)
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timeoutItem)
 
-                    ReactNativeBridgeManager.registerCallback(callId: callId) { resultBase64 in
+                    ReactNativeBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
                         timeoutItem.cancel()
+                        self?.pendingCallIds.remove(callId)
                         if let processedData = Data(base64Encoded: resultBase64) {
                             handler(processedData)
                         } else {
@@ -221,6 +231,11 @@ final class ReactNativeTransport: TransportProvider {
     func disconnect() {
         native.disconnect()
         bridgeReady = false
+        let ids = pendingCallIds
+        pendingCallIds.removeAll()
+        Task { @MainActor in
+            ids.forEach { ReactNativeBridgeManager.cancelCallback(callId: $0) }
+        }
     }
 
     private func ensureBridge() {

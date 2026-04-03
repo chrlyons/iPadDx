@@ -155,6 +155,13 @@ class AgentService {
     // MARK: - Test Execution
 
     private func executeTest(targetName: String, config: TestSuiteConfig, bridgeTransport: String = "native") async {
+        // Refuse to run if the bridge failed to initialize — results would be invalid
+        if bridgeTransport != "native", !BridgeRegistry.isBridgeHealthy(bridgeTransport) {
+            AppLog("Bridge \(bridgeTransport) not healthy, refusing test", level: .error, category: "Agent")
+            sendStatus("failed", detail: "Bridge \(bridgeTransport) failed to initialize")
+            return
+        }
+
         testGeneration += 1
         let myGeneration = testGeneration
 
