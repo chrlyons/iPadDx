@@ -2,41 +2,53 @@ import Charts
 import SwiftUI
 
 struct ReportDetailView: View {
-    let report: TestReport
+    let reportID: UUID
+    var preloadedReport: TestReport?
     @Environment(ReportStore.self) private var store
+    @State private var report: TestReport?
     @State private var exportItem: ExportItem?
 
+    /// Convenience init for direct report access (e.g., from conductor completed reports).
+    init(report: TestReport) {
+        reportID = report.id
+        preloadedReport = report
+    }
+
+    /// On-demand loading init (e.g., from report list).
+    init(reportID: UUID) {
+        self.reportID = reportID
+        preloadedReport = nil
+    }
+
     var body: some View {
+        Group {
+            if let report {
+                reportContent(report)
+            } else {
+                ProgressView("Loading report…")
+                    .task {
+                        report = preloadedReport ?? store.loadFullReport(id: reportID)
+                    }
+            }
+        }
+    }
+
+    private func reportContent(_ report: TestReport) -> some View {
         ScrollView {
             VStack(spacing: 16) {
-                // Header
-                gradeHeader
+                gradeHeader(report)
+                devicePairCard(report)
 
-                // Device pair
-                devicePairCard
-
-                // Latency chart
                 if !report.results.latencyBurst.samples.isEmpty {
-                    latencyChartCard
+                    latencyChartCard(report)
                 }
 
-                // Latency stats
-                latencyCard
-
-                // Throughput
-                throughputCard
-
-                // Jitter
-                jitterCard
-
-                // Packet loss
-                packetLossCard
-
-                // Latency under load
-                latencyUnderLoadCard
-
-                // System metrics
-                systemMetricsCard
+                latencyCard(report)
+                throughputCard(report)
+                jitterCard(report)
+                packetLossCard(report)
+                latencyUnderLoadCard(report)
+                systemMetricsCard(report)
             }
             .padding()
         }
@@ -60,7 +72,7 @@ struct ReportDetailView: View {
         }
     }
 
-    private var gradeHeader: some View {
+    private func gradeHeader(_ report: TestReport) -> some View {
         HStack {
             VStack(alignment: .leading) {
                 Text("Overall Grade")
@@ -70,6 +82,12 @@ struct ReportDetailView: View {
                     .font(.largeTitle)
                     .fontWeight(.bold)
                     .foregroundStyle(gradeColor(report.results.overallGrade))
+                if let bridge = report.bridgeTransport, bridge != "native" {
+                    Text(bridge)
+                        .font(.caption).fontWeight(.medium)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.orange.opacity(0.12), in: Capsule())
+                }
             }
             Spacer()
             VStack(alignment: .trailing) {
@@ -86,7 +104,7 @@ struct ReportDetailView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private var devicePairCard: some View {
+    private func devicePairCard(_ report: TestReport) -> some View {
         HStack {
             deviceColumn("Sender (Controller)", report.localDevice)
             Spacer()
@@ -105,7 +123,7 @@ struct ReportDetailView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private var latencyChartCard: some View {
+    private func latencyChartCard(_ report: TestReport) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "chart.xyaxis.line")
@@ -133,7 +151,7 @@ struct ReportDetailView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private var latencyCard: some View {
+    private func latencyCard(_ report: TestReport) -> some View {
         resultCard("Latency Burst", icon: "bolt.fill", color: .blue) {
             let l = report.results.latencyBurst
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 5), spacing: 8) {
@@ -146,7 +164,7 @@ struct ReportDetailView: View {
         }
     }
 
-    private var throughputCard: some View {
+    private func throughputCard(_ report: TestReport) -> some View {
         resultCard("Throughput", icon: "arrow.up.arrow.down.circle.fill", color: .purple) {
             let t = report.results.sustainedThroughput
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
@@ -157,7 +175,7 @@ struct ReportDetailView: View {
         }
     }
 
-    private var jitterCard: some View {
+    private func jitterCard(_ report: TestReport) -> some View {
         resultCard("Jitter", icon: "waveform.path", color: .orange) {
             let j = report.results.jitterMeasurement
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
@@ -168,7 +186,7 @@ struct ReportDetailView: View {
         }
     }
 
-    private var packetLossCard: some View {
+    private func packetLossCard(_ report: TestReport) -> some View {
         resultCard("Packet Loss", icon: "exclamationmark.triangle.fill", color: .red) {
             let p = report.results.packetLossStress
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
@@ -180,7 +198,7 @@ struct ReportDetailView: View {
         }
     }
 
-    private var latencyUnderLoadCard: some View {
+    private func latencyUnderLoadCard(_ report: TestReport) -> some View {
         resultCard("Latency Under Load", icon: "flame.fill", color: .orange) {
             let l = report.results.latencyUnderLoad
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
@@ -196,7 +214,7 @@ struct ReportDetailView: View {
         }
     }
 
-    private var systemMetricsCard: some View {
+    private func systemMetricsCard(_ report: TestReport) -> some View {
         resultCard("System Metrics", icon: "cpu", color: .indigo) {
             let s = report.results.systemMetrics
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {

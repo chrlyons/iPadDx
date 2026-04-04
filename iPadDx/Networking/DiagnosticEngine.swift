@@ -148,7 +148,7 @@ class DiagnosticEngine {
             onRemoteDisconnect?()
 
         case .roleAssignment, .orchestrateTest, .orchestrationStatus,
-             .orchestrationReport, .orchestrationCancel:
+             .orchestrationReport, .orchestrationCancel, .agentCapabilities:
             onOrchestration?(message)
         }
 

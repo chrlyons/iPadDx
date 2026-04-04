@@ -23,3 +23,37 @@ Pods/
 # Swift Package Manager
 .build/
 Package.resolved
+
+# Embedded frameworks (built from source — see Bridges/)
+Frameworks/
+
+# Flutter module build artifacts
+Bridges/flutter_bridge/.dart_tool/
+Bridges/flutter_bridge/.android/
+Bridges/flutter_bridge/.ios/
+Bridges/flutter_bridge/build/
+Bridges/flutter_bridge/.idea/
+Bridges/flutter_bridge/.metadata
+Bridges/flutter_bridge/*.iml
+
+# Capacitor bridge npm artifacts
+Bridges/capacitor_bridge/node_modules/
+Bridges/capacitor_bridge/package-lock.json
+
+# Cordova bridge — cordova.js is copied from node_modules at build time
+Bridges/cordova_bridge/www/cordova.js
+iPadDx/Resources/cordova_www/cordova.js
+
+# React Native bridge build artifacts
+Bridges/rn_bridge/node_modules/
+Bridges/rn_bridge/package-lock.json
+Bridges/rn_bridge/ios/Pods/
+Bridges/rn_bridge/ios/build/
+Bridges/rn_bridge/ios/*.xcworkspace
+iPadDx/Resources/main.jsbundle
+
+# CocoaPods (built from Podfile — root workspace)
+*.xcworkspace
+
+# Reports (generated at runtime)
+reports/

@@ -4,7 +4,8 @@ import SwiftData
 @MainActor
 @Observable
 class ReportStore {
-    var reports: [TestReport] = []
+    /// Lightweight summaries — always in memory, drives list/analytics views.
+    var summaries: [ReportSummary] = []
 
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
@@ -13,7 +14,6 @@ class ReportStore {
         do {
             let schema = Schema([ReportEntity.self])
             let config = ModelConfiguration("iPadDxReports", isStoredInMemoryOnly: false)
-            // Allow lightweight migration so schema changes don't wipe data
             modelContainer = try ModelContainer(
                 for: schema,
                 migrationPlan: nil,
@@ -22,7 +22,6 @@ class ReportStore {
             modelContext = modelContainer.map { ModelContext($0) }
         } catch {
             AppLog("SwiftData init failed: \(error), deleting old store and retrying", level: .error, category: "Store")
-            // Delete ALL store files so we can start fresh
             if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
                 let fm = FileManager.default
                 let files = (try? fm.contentsOfDirectory(at: appSupport, includingPropertiesForKeys: nil)) ?? []
@@ -43,24 +42,24 @@ class ReportStore {
         loadAll()
     }
 
+    // MARK: - CRUD
+
     func save(_ report: TestReport, source: String = "local") {
-        // Save to SwiftData
         if let context = modelContext {
             let entity = ReportEntity(from: report, source: source)
             context.insert(entity)
             try? context.save()
         }
 
-        // Keep in-memory list updated
-        if !reports.contains(where: { $0.id == report.id }) {
-            reports.insert(report, at: 0)
+        if !summaries.contains(where: { $0.id == report.id }) {
+            let summary = ReportSummary(from: report, source: source)
+            summaries.insert(summary, at: 0)
         }
     }
 
-    func delete(_ report: TestReport) {
+    func delete(_ id: UUID) {
         if let context = modelContext {
-            let reportID = report.id
-            let predicate = #Predicate<ReportEntity> { $0.reportID == reportID }
+            let predicate = #Predicate<ReportEntity> { $0.reportID == id }
             let descriptor = FetchDescriptor<ReportEntity>(predicate: predicate)
             if let entities = try? context.fetch(descriptor) {
                 for entity in entities {
@@ -69,29 +68,100 @@ class ReportStore {
                 try? context.save()
             }
         }
-        reports.removeAll { $0.id == report.id }
+        summaries.removeAll { $0.id == id }
+    }
+
+    func delete(_ report: TestReport) {
+        delete(report.id)
     }
 
     func loadAll() {
         guard let context = modelContext else { return }
         let descriptor = FetchDescriptor<ReportEntity>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         guard let entities = try? context.fetch(descriptor) else { return }
-        reports = entities.compactMap { $0.toTestReport() }
+        summaries = entities.map { $0.toSummary() }
     }
 
-    // MARK: - Queries
-
-    func reports(forChipPair local: String, remote: String) -> [TestReport] {
-        reports.filter { $0.localDevice.chipFamily == local && $0.remoteDevice.chipFamily == remote }
+    /// Load full report on demand (detail view, export, comparison).
+    func loadFullReport(id: UUID) -> TestReport? {
+        guard let context = modelContext else { return nil }
+        let predicate = #Predicate<ReportEntity> { $0.reportID == id }
+        let descriptor = FetchDescriptor<ReportEntity>(predicate: predicate)
+        guard let entity = try? context.fetch(descriptor).first else { return nil }
+        return entity.toTestReport()
     }
 
-    func reports(fromSource source: String) -> [TestReport] {
+    /// Load multiple full reports in a single batch fetch (for export, comparison).
+    func loadFullReports(ids: Set<UUID>) -> [TestReport] {
+        guard let context = modelContext, !ids.isEmpty else { return [] }
+        let idArray = Array(ids)
+        let predicate = #Predicate<ReportEntity> { idArray.contains($0.reportID) }
+        let descriptor = FetchDescriptor<ReportEntity>(predicate: predicate)
+        guard let entities = try? context.fetch(descriptor) else { return [] }
+        return entities.compactMap { $0.toTestReport() }
+    }
+
+    /// Load all full reports matching current summaries (for export).
+    func loadAllFullReports() -> [TestReport] {
+        loadFullReports(ids: Set(summaries.map(\.id)))
+    }
+
+    // MARK: - Queries (on summaries)
+
+    func summaries(forChipPair local: String, remote: String, bridge: String? = nil) -> [ReportSummary] {
+        summaries.filter {
+            $0.localChip == local &&
+                $0.remoteChip == remote &&
+                (bridge == nil || $0.bridgeTransport == bridge)
+        }
+    }
+
+    /// All summaries for a given bridge transport.
+    func summaries(forBridge bridge: String) -> [ReportSummary] {
+        summaries.filter { $0.bridgeTransport == bridge }
+    }
+
+    /// All distinct bridge transports that have saved reports.
+    func availableBridgeTransports() -> [String] {
+        Array(Set(summaries.map(\.bridgeTransport))).sorted()
+    }
+
+    /// Compare metrics across bridges for the same device pair.
+    func bridgeComparison(local: String, remote: String) -> [BridgeComparisonRow] {
+        let pairSummaries = summaries(forChipPair: local, remote: remote)
+        let grouped = Dictionary(grouping: pairSummaries) { $0.bridgeTransport }
+        return grouped.map { bridge, items in
+            let n = Double(items.count)
+            return BridgeComparisonRow(
+                bridge: bridge,
+                reportCount: items.count,
+                avgLatency: items.map(\.latencyAvg).reduce(0, +) / n,
+                avgJitter: items.map(\.jitterAvg).reduce(0, +) / n,
+                avgPacketLoss: items.map(\.packetLossPercent).reduce(0, +) / n,
+                avgThroughput: items.map(\.throughputBps).reduce(0, +) / n,
+                avgGradeScore: items.map { BridgeComparisonRow.gradeScore($0.overallGrade) }.reduce(0, +) / n
+            )
+        }.sorted { $0.bridge < $1.bridge }
+    }
+
+    func reports(fromSource source: String, bridge: String? = nil) -> [TestReport] {
         guard let context = modelContext else { return [] }
-        let predicate = #Predicate<ReportEntity> { $0.source == source }
-        let descriptor = FetchDescriptor<ReportEntity>(
-            predicate: predicate,
-            sortBy: [SortDescriptor(\.date, order: .reverse)]
-        )
+        let descriptor: FetchDescriptor<ReportEntity>
+        if let bridge {
+            let predicate = #Predicate<ReportEntity> {
+                $0.source == source && $0.bridgeTransport == bridge
+            }
+            descriptor = FetchDescriptor(
+                predicate: predicate,
+                sortBy: [SortDescriptor(\.date, order: .reverse)]
+            )
+        } else {
+            let predicate = #Predicate<ReportEntity> { $0.source == source }
+            descriptor = FetchDescriptor(
+                predicate: predicate,
+                sortBy: [SortDescriptor(\.date, order: .reverse)]
+            )
+        }
         guard let entities = try? context.fetch(descriptor) else { return [] }
         return entities.compactMap { $0.toTestReport() }
     }
@@ -120,7 +190,7 @@ class ReportStore {
     }
 
     func importRemoteReport(_ report: TestReport) {
-        guard !reports.contains(where: { $0.id == report.id }) else { return }
+        guard !summaries.contains(where: { $0.id == report.id }) else { return }
         save(report, source: "remote")
     }
 
@@ -128,12 +198,13 @@ class ReportStore {
 
     func exportCSV(for report: TestReport) -> URL? {
         let r = report.results
+        let bridgeLine = report.bridgeTransport.map { "Bridge Transport,\($0)\n" } ?? ""
         let csv = """
         iPadDx Test Report
         Date,\(ISO8601DateFormatter().string(from: report.date))
         Duration,\(String(format: "%.1f", report.durationSeconds))s
         Overall Grade,\(r.overallGrade)
-
+        \(bridgeLine)
         Local Device
         Name,\(report.localDevice.name)
         Model,\(report.localDevice.displayModel)
@@ -197,7 +268,6 @@ class ReportStore {
     // swiftlint:disable function_body_length
     func exportSummaryCSV(for reports: [TestReport]) -> URL? {
         let headers = [
-            // Device info
             "Date",
             "Local Name",
             "Local Model",
@@ -209,35 +279,29 @@ class ReportStore {
             "Remote Model #",
             "Remote Chip",
             "Remote OS",
-            // Overall
+            "Bridge Transport",
             "Grade",
             "Duration (s)",
-            // Latency
             "Latency Min (ms)",
             "Latency Max (ms)",
             "Latency Avg (ms)",
             "Latency Median (ms)",
             "Latency P95 (ms)",
             "Latency Samples",
-            // Throughput
             "Throughput (MB/s)",
             "Throughput Bytes",
             "Throughput Duration (s)",
-            // Jitter
             "Jitter Avg (ms)",
             "Jitter Max (ms)",
             "Jitter Samples",
-            // Packet Loss
             "PL Sent",
             "PL Received",
             "PL Loss %",
             "PL Duration (s)",
-            // Latency Under Load
             "Load Baseline Avg (ms)",
             "Load Under Load Avg (ms)",
             "Load Degradation %",
             "Load Samples",
-            // System
             "Battery Start %",
             "Battery End %",
             "Battery Drain %",
@@ -245,7 +309,6 @@ class ReportStore {
             "Avg CPU %",
             "Peak Memory (MB)",
             "Thermal State",
-            // Responder System
             "Resp Peak CPU %",
             "Resp Avg CPU %",
             "Resp Peak Memory (MB)",
@@ -260,7 +323,6 @@ class ReportStore {
             let t = r.results
             let s = t.systemMetrics
             let row: [String] = [
-                // Device info
                 ISO8601DateFormatter().string(from: r.date),
                 csvEscape(r.localDevice.name),
                 csvEscape(r.localDevice.displayModel),
@@ -272,35 +334,29 @@ class ReportStore {
                 csvEscape(r.remoteDevice.modelNumber),
                 r.remoteDevice.chipFamily,
                 r.remoteDevice.osVersion,
-                // Overall
+                r.bridgeTransport ?? "native",
                 t.overallGrade,
                 String(format: "%.1f", r.durationSeconds),
-                // Latency
                 String(format: "%.2f", t.latencyBurst.min),
                 String(format: "%.2f", t.latencyBurst.max),
                 String(format: "%.2f", t.latencyBurst.avg),
                 String(format: "%.2f", t.latencyBurst.median),
                 String(format: "%.2f", t.latencyBurst.p95),
                 "\(t.latencyBurst.sampleCount)",
-                // Throughput
                 String(format: "%.2f", t.sustainedThroughput.bytesPerSecond / 1_000_000),
                 "\(t.sustainedThroughput.totalBytes)",
                 String(format: "%.2f", t.sustainedThroughput.durationSeconds),
-                // Jitter
                 String(format: "%.2f", t.jitterMeasurement.averageJitter),
                 String(format: "%.2f", t.jitterMeasurement.maxJitter),
                 "\(t.jitterMeasurement.sampleCount)",
-                // Packet Loss
                 "\(t.packetLossStress.sent)",
                 "\(t.packetLossStress.received)",
                 String(format: "%.1f", t.packetLossStress.lostPercent),
                 String(format: "%.2f", t.packetLossStress.durationSeconds),
-                // Latency Under Load
                 String(format: "%.2f", t.latencyUnderLoad.baselineAvg),
                 String(format: "%.2f", t.latencyUnderLoad.underLoadAvg),
                 String(format: "%.1f", t.latencyUnderLoad.degradationPercent),
                 "\(t.latencyUnderLoad.sampleCount)",
-                // System
                 s.batteryStart >= 0 ? "\(Int(s.batteryStart * 100))" : "",
                 s.batteryEnd >= 0 ? "\(Int(s.batteryEnd * 100))" : "",
                 String(format: "%.2f", s.batteryDrainPercent),
@@ -308,7 +364,6 @@ class ReportStore {
                 String(format: "%.1f", s.avgCpuUsage),
                 String(format: "%.0f", s.peakMemoryMB),
                 s.thermalStateDuringTest,
-                // Responder System
                 t.responderMetrics.map { String(format: "%.1f", $0.peakCpuUsage) } ?? "",
                 t.responderMetrics.map { String(format: "%.1f", $0.avgCpuUsage) } ?? "",
                 t.responderMetrics.map { String(format: "%.0f", $0.peakMemoryMB) } ?? "",
@@ -349,11 +404,14 @@ class ReportStore {
         let earliest = reports.map(\.date).min()!
         let latest = reports.map(\.date).max()!
 
+        let bridges = Array(Set(reports.map { $0.bridgeTransport ?? "native" })).sorted()
+
         sections.append("""
         iPadDx Analytics Report
         Generated,\(dateFormatter.string(from: Date()))
         Date Range,\(dateFormatter.string(from: earliest)) — \(dateFormatter.string(from: latest))
         Total Reports,\(reports.count)
+        Bridge Transports,"\(bridges.joined(separator: ", "))"
 
         Summary
         Metric,Average,Min,Max,Median
@@ -386,56 +444,133 @@ class ReportStore {
             .joined(separator: "\n"))
         """)
 
-        // Section 3: Per-pair breakdown
+        // Section 3: Bridge Comparison (only if multiple bridges)
+        if bridges.count > 1 {
+            var bridgeRows = [
+                "Bridge,Reports,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),Excellent,Good,Fair,Poor",
+            ]
+            for bridge in bridges {
+                let br = reports.filter { ($0.bridgeTransport ?? "native") == bridge }
+                let bn = Double(br.count)
+                guard bn > 0 else { continue }
+                let row = [
+                    bridge,
+                    "\(br.count)",
+                    f(br.map(\.results.latencyBurst.avg).reduce(0, +) / bn),
+                    f(br.map(\.results.latencyBurst.p95).reduce(0, +) / bn),
+                    f(br.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / bn / 1_000_000),
+                    f(br.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / bn),
+                    f(br.map(\.results.packetLossStress.lostPercent).reduce(0, +) / bn),
+                    f(br.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / bn),
+                    "\(br.filter { $0.results.overallGrade == "Excellent" }.count)",
+                    "\(br.filter { $0.results.overallGrade == "Good" }.count)",
+                    "\(br.filter { $0.results.overallGrade == "Fair" }.count)",
+                    "\(br.filter { $0.results.overallGrade == "Poor" }.count)",
+                ]
+                bridgeRows.append(row.joined(separator: ","))
+            }
+            sections.append("Bridge Comparison\n" + bridgeRows.joined(separator: "\n"))
+        }
+
+        // Section 4: Per-pair breakdown (with bridge column)
         let grouped = Dictionary(grouping: reports) {
             "\($0.localDevice.chipFamily) vs \($0.remoteDevice.chipFamily)"
         }
-        var pairRows =
-            [
+        var pairRows: [String]
+        if bridges.count > 1 {
+            pairRows = [
+                "Pair,Bridge,Count,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),Excellent,Good,Fair,Poor",
+            ]
+            for (pair, pairReports) in grouped.sorted(by: { $0.key < $1.key }) {
+                let byBridge = Dictionary(grouping: pairReports) { $0.bridgeTransport ?? "native" }
+                for bridge in byBridge.keys.sorted() {
+                    let br = byBridge[bridge]!
+                    let n = Double(br.count)
+                    let row = [
+                        csvEscape(pair), bridge, "\(br.count)",
+                        f(br.map(\.results.latencyBurst.avg).reduce(0, +) / n),
+                        f(br.map(\.results.latencyBurst.p95).reduce(0, +) / n),
+                        f(br.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
+                        f(br.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
+                        f(br.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
+                        f(br.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                        "\(br.filter { $0.results.overallGrade == "Excellent" }.count)",
+                        "\(br.filter { $0.results.overallGrade == "Good" }.count)",
+                        "\(br.filter { $0.results.overallGrade == "Fair" }.count)",
+                        "\(br.filter { $0.results.overallGrade == "Poor" }.count)",
+                    ]
+                    pairRows.append(row.joined(separator: ","))
+                }
+            }
+        } else {
+            pairRows = [
                 "Pair,Count,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),Excellent,Good,Fair,Poor",
             ]
-        for (pair, pairReports) in grouped.sorted(by: { $0.key < $1.key }) {
-            let n = Double(pairReports.count)
-            let row = [
-                csvEscape(pair),
-                "\(pairReports.count)",
-                f(pairReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
-                f(pairReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
-                f(pairReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
-                f(pairReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
-                f(pairReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
-                f(pairReports.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
-                "\(pairReports.filter { $0.results.overallGrade == "Excellent" }.count)",
-                "\(pairReports.filter { $0.results.overallGrade == "Good" }.count)",
-                "\(pairReports.filter { $0.results.overallGrade == "Fair" }.count)",
-                "\(pairReports.filter { $0.results.overallGrade == "Poor" }.count)",
-            ]
-            pairRows.append(row.joined(separator: ","))
+            for (pair, pairReports) in grouped.sorted(by: { $0.key < $1.key }) {
+                let n = Double(pairReports.count)
+                let row = [
+                    csvEscape(pair), "\(pairReports.count)",
+                    f(pairReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
+                    f(pairReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
+                    f(pairReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
+                    f(pairReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
+                    f(pairReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
+                    f(pairReports.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                    "\(pairReports.filter { $0.results.overallGrade == "Excellent" }.count)",
+                    "\(pairReports.filter { $0.results.overallGrade == "Good" }.count)",
+                    "\(pairReports.filter { $0.results.overallGrade == "Fair" }.count)",
+                    "\(pairReports.filter { $0.results.overallGrade == "Poor" }.count)",
+                ]
+                pairRows.append(row.joined(separator: ","))
+            }
         }
         sections.append("Per-Pair Breakdown\n" + pairRows.joined(separator: "\n"))
 
-        // Section 4: Per-chip summary (as sender and receiver)
+        // Section 5: Per-chip summary (with bridge dimension if multiple)
         let chips = Set(reports.flatMap { [$0.localDevice.chipFamily, $0.remoteDevice.chipFamily] }).sorted()
-        var chipRows = ["Chip,As Sender (count),Sender Avg Latency (ms),As Receiver (count),Receiver Avg Latency (ms)"]
-        for chip in chips {
-            let asSender = reports.filter { $0.localDevice.chipFamily == chip }
-            let asReceiver = reports.filter { $0.remoteDevice.chipFamily == chip }
-            let senderAvg = asSender.isEmpty ? 0 : asSender.map(\.results.latencyBurst.avg)
-                .reduce(0, +) / Double(asSender.count)
-            let receiverAvg = asReceiver.isEmpty ? 0 : asReceiver.map(\.results.latencyBurst.avg)
-                .reduce(0, +) / Double(asReceiver.count)
-            chipRows.append("\(chip),\(asSender.count),\(f(senderAvg)),\(asReceiver.count),\(f(receiverAvg))")
+        if bridges.count > 1 {
+            var chipRows =
+                ["Chip,Bridge,As Sender (count),Sender Avg Latency (ms),As Receiver (count),Receiver Avg Latency (ms)"]
+            for chip in chips {
+                for bridge in bridges {
+                    let asSender = reports
+                        .filter { $0.localDevice.chipFamily == chip && ($0.bridgeTransport ?? "native") == bridge }
+                    let asReceiver = reports
+                        .filter { $0.remoteDevice.chipFamily == chip && ($0.bridgeTransport ?? "native") == bridge }
+                    let senderAvg = asSender.isEmpty ? 0 : asSender.map(\.results.latencyBurst.avg)
+                        .reduce(0, +) / Double(asSender.count)
+                    let receiverAvg = asReceiver.isEmpty ? 0 : asReceiver.map(\.results.latencyBurst.avg)
+                        .reduce(0, +) / Double(asReceiver.count)
+                    chipRows
+                        .append(
+                            "\(chip),\(bridge),\(asSender.count),\(f(senderAvg)),\(asReceiver.count),\(f(receiverAvg))"
+                        )
+                }
+            }
+            sections.append("Per-Chip Summary\n" + chipRows.joined(separator: "\n"))
+        } else {
+            var chipRows =
+                ["Chip,As Sender (count),Sender Avg Latency (ms),As Receiver (count),Receiver Avg Latency (ms)"]
+            for chip in chips {
+                let asSender = reports.filter { $0.localDevice.chipFamily == chip }
+                let asReceiver = reports.filter { $0.remoteDevice.chipFamily == chip }
+                let senderAvg = asSender.isEmpty ? 0 : asSender.map(\.results.latencyBurst.avg)
+                    .reduce(0, +) / Double(asSender.count)
+                let receiverAvg = asReceiver.isEmpty ? 0 : asReceiver.map(\.results.latencyBurst.avg)
+                    .reduce(0, +) / Double(asReceiver.count)
+                chipRows.append("\(chip),\(asSender.count),\(f(senderAvg)),\(asReceiver.count),\(f(receiverAvg))")
+            }
+            sections.append("Per-Chip Summary\n" + chipRows.joined(separator: "\n"))
         }
-        sections.append("Per-Chip Summary\n" + chipRows.joined(separator: "\n"))
 
-        // Section 5: Failed tests
+        // Section 6: Failed tests
         let failed = reports.filter { $0.results.latencyBurst.sampleCount == 0 }
         if !failed.isEmpty {
-            var failRows = ["Date,Local,Remote,Grade,Errors"]
+            var failRows = ["Date,Local,Remote,Bridge,Grade,Errors"]
             for r in failed {
                 failRows
                     .append(
-                        "\(ISO8601DateFormatter().string(from: r.date)),\(csvEscape(r.localDevice.shortDescription)),\(csvEscape(r.remoteDevice.shortDescription)),\(r.results.overallGrade),\(csvEscape(r.errors?.joined(separator: "; ") ?? ""))"
+                        "\(ISO8601DateFormatter().string(from: r.date)),\(csvEscape(r.localDevice.shortDescription)),\(csvEscape(r.remoteDevice.shortDescription)),\(r.bridgeTransport ?? "native"),\(r.results.overallGrade),\(csvEscape(r.errors?.joined(separator: "; ") ?? ""))"
                     )
             }
             sections.append("Failed Tests (\(failed.count))\n" + failRows.joined(separator: "\n"))

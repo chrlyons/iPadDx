@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body>
+<script>
+// Shim: cordova.js's platform module calls Capacitor.getPlatform()
+window.Capacitor = { getPlatform: function() { return 'ios'; } };
+window._nativeReady = true;
+</script>
+<script src="cordova.js"></script>
+<script>
+// Define empty plugin list so cordova's pluginloader fires onPluginsReady
+cordova.define('cordova/plugin_list', function(require, exports, module) {
+    module.exports = [];
+});
+
+// Signal readiness directly via the message handler — do NOT rely on
+// the complex deviceready event chain (which needs DOMContentLoaded +
+// onNativeReady + onPluginsReady + onCordovaReady all joined).
+// This fires as soon as cordova.exec is available.
+window.webkit.messageHandlers.bridge.postMessage({
+    type: 'cordova',
+    callbackId: 'INVALID',
+    service: 'BridgePlugin',
+    action: 'ready',
+    actionArgs: []
+});
+
+// Called from native via evaluateJavaScript to send data through the real
+// Cordova bridge: cordova.exec() -> JSON serialize -> postMessage IPC ->
+// WKScriptMessageHandler -> CDVInvokedUrlCommand -> CDVPlugin -> CDVPluginResult
+function echoBridge(base64Data, callId) {
+    cordova.exec(
+        function(result) { /* native handles result via handleEchoResult */ },
+        function(err) { console.error('Cordova echo error:', err); },
+        'BridgePlugin',
+        'echo',
+        [base64Data, callId]
+    );
+}
+</script>
+</body>
+</html>

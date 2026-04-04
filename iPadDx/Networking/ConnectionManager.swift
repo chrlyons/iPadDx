@@ -51,7 +51,6 @@ enum ConnectionSecurity {
 
 @Observable
 class ConnectionManager {
-    var connection: NWConnection?
     var isConnected: Bool = false
     private(set) var totalBytesSent: Int = 0
     private var _totalBytesReceived: Int = 0
@@ -65,32 +64,46 @@ class ConnectionManager {
     private var readyContinuation: CheckedContinuation<Bool, Never>?
     let label: String
 
-    init(label: String = "unnamed") {
+    /// The bridge transport this connection uses.
+    let bridgeTransport: String
+
+    /// The transport provider that handles actual network operations.
+    private let transport: TransportProvider
+
+    init(label: String = "unnamed", bridgeTransport: String = "native") {
         self.label = label
+        if let resolved = BridgeRegistry.transport(for: bridgeTransport) {
+            self.bridgeTransport = bridgeTransport
+            transport = resolved
+        } else {
+            AppLog(
+                "Bridge '\(bridgeTransport)' unavailable, falling back to native",
+                level: .warning,
+                category: "CM:\(label)"
+            )
+            self.bridgeTransport = "native"
+            transport = NativeTransport()
+        }
     }
 
     func connect(to endpoint: NWEndpoint, handler: @escaping (Data) -> Void) {
         receiveHandler = handler
-        let params = ConnectionSecurity.tlsParameters()
-        let conn = NWConnection(to: endpoint, using: params)
-        connection = conn
-        AppLog("connect to \(endpoint)", category: "CM:\(label)")
-        setupConnection(conn)
-        conn.start(queue: queue)
+        AppLog("connect to \(endpoint) [\(bridgeTransport)]", category: "CM:\(label)")
+        setupTransportCallbacks()
+        transport.connect(to: endpoint, queue: queue)
     }
 
     func accept(_ conn: NWConnection, handler: @escaping (Data) -> Void) {
         receiveHandler = handler
-        connection = conn
-        AppLog("accept \(conn.endpoint)", category: "CM:\(label)")
-        setupConnection(conn)
-        conn.start(queue: queue)
+        AppLog("accept \(conn.endpoint) [\(bridgeTransport)]", category: "CM:\(label)")
+        setupTransportCallbacks()
+        transport.accept(conn, queue: queue)
     }
 
     func send(_ message: DiagnosticMessage) {
-        guard let conn = connection, isConnected else {
+        guard isConnected else {
             AppLog(
-                "send DROPPED (connected=\(isConnected), conn=\(connection != nil))",
+                "send DROPPED (connected=\(isConnected))",
                 level: .warning,
                 category: "CM:\(label)"
             )
@@ -99,11 +112,11 @@ class ConnectionManager {
         do {
             let data = try message.encode()
             totalBytesSent += data.count
-            conn.send(content: data, completion: .contentProcessed { error in
+            transport.send(data) { error in
                 if let error {
                     AppLog("Send error: \(error)", level: .error, category: "CM")
                 }
-            })
+            }
         } catch {
             AppLog("Encode error: \(error)", level: .error, category: "CM")
         }
@@ -111,8 +124,7 @@ class ConnectionManager {
 
     func disconnect() {
         AppLog("disconnect called", category: "CM:\(label)")
-        connection?.cancel()
-        connection = nil
+        transport.disconnect()
         Task { @MainActor in
             isConnected = false
         }
@@ -155,18 +167,17 @@ class ConnectionManager {
     }
 
     var currentPath: NWPath? {
-        connection?.currentPath
+        transport.currentPath
     }
 
     // MARK: - Private
 
-    private func setupConnection(_ conn: NWConnection) {
-        conn.stateUpdateHandler = { [weak self] state in
+    private func setupTransportCallbacks() {
+        // Wire transport state changes → ConnectionManager state
+        transport.onStateChange = { [weak self] state in
             Task { @MainActor in
                 guard let self else { return }
                 switch state {
-                case .setup:
-                    AppLog("state: setup", category: "CM:\(self.label)")
                 case .preparing:
                     AppLog("state: preparing", category: "CM:\(self.label)")
                 case .ready:
@@ -186,8 +197,8 @@ class ConnectionManager {
                         self.isConnected = false
                         self.onConnectionLost?()
                     }
-                case .cancelled:
-                    AppLog("state: cancelled", category: "CM:\(self.label)")
+                case .disconnected:
+                    AppLog("state: disconnected", category: "CM:\(self.label)")
                     if let continuation = self.readyContinuation {
                         self.readyContinuation = nil
                         continuation.resume(returning: false)
@@ -196,96 +207,40 @@ class ConnectionManager {
                         self.isConnected = false
                         self.onConnectionLost?()
                     }
-                case let .waiting(error):
-                    AppLog("state: waiting — \(error)", level: .warning, category: "CM:\(self.label)")
-                @unknown default:
-                    AppLog("state: unknown", category: "CM:\(self.label)")
                 }
             }
         }
 
-        conn.pathUpdateHandler = { [weak self] path in
-            AppLog(
-                "path: \(path.status), ifaces: \(path.availableInterfaces.map { "\($0.type)" })",
-                category: "CM:\(self?.label ?? "?")"
-            )
-        }
-
-        startReceiving(conn)
-    }
-
-    private func startReceiving(_ conn: NWConnection) {
-        // Read 4-byte length prefix
-        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
-
-            if let error {
-                AppLog("Receive error: \(error)", level: .error, category: "CM:\(label)")
+        // Wire transport receive → ConnectionManager receive handler
+        transport.startReceiving(
+            handler: { [weak self] payload in
+                guard let self else { return }
+                let size = payload.count + 4
                 Task { @MainActor in
+                    self._totalBytesReceived += size
+                    self.receiveHandler?(payload)
+                }
+            },
+            onEOF: { [weak self] in
+                AppLog("Receive complete (EOF)", category: "CM:\(self?.label ?? "?")")
+                Task { @MainActor in
+                    guard let self else { return }
                     if self.isConnected {
                         self.isConnected = false
                         self.onConnectionLost?()
                     }
                 }
-                return
-            }
-
-            guard let lengthData = data, lengthData.count == 4 else {
-                if isComplete {
-                    AppLog("Receive complete (EOF)", category: "CM:\(label)")
-                    Task { @MainActor in
-                        if self.isConnected {
-                            self.isConnected = false
-                            self.onConnectionLost?()
-                        }
-                    }
-                } else {
-                    startReceiving(conn)
-                }
-                return
-            }
-
-            let length = lengthData.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-
-            // Read message payload
-            conn
-                .receive(
-                    minimumIncompleteLength: Int(length),
-                    maximumLength: Int(length)
-                ) { [weak self] payload, _, isComplete2, error in
+            },
+            onError: { [weak self] error in
+                AppLog("Receive error: \(error)", level: .error, category: "CM:\(self?.label ?? "?")")
+                Task { @MainActor in
                     guard let self else { return }
-
-                    if let error {
-                        AppLog("Payload receive error: \(error)", level: .error, category: "CM:\(label)")
-                        Task { @MainActor in
-                            if self.isConnected {
-                                self.isConnected = false
-                                self.onConnectionLost?()
-                            }
-                        }
-                        return
-                    }
-
-                    if let payload {
-                        _totalBytesReceived += payload.count + 4
-                        Task { @MainActor in
-                            self.receiveHandler?(payload)
-                        }
-                    }
-
-                    // Always continue receiving as long as the connection isn't done
-                    if isComplete2 {
-                        AppLog("Payload receive complete (EOF)", category: "CM:\(label)")
-                        Task { @MainActor in
-                            if self.isConnected {
-                                self.isConnected = false
-                                self.onConnectionLost?()
-                            }
-                        }
-                    } else {
-                        startReceiving(conn)
+                    if self.isConnected {
+                        self.isConnected = false
+                        self.onConnectionLost?()
                     }
                 }
-        }
+            }
+        )
     }
 }

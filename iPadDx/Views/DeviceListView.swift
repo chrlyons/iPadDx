@@ -140,8 +140,22 @@ struct DeviceListView: View {
                         }
                     }
                 }
+                Button {
+                    detailSelection = .bridges
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.triangle.branch")
+                            .foregroundStyle(.purple)
+                        Text("Bridge Transport Info")
+                        Spacer()
+                        if detailSelection == .bridges {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
             } header: {
-                Text("Tests")
+                Text("Info")
             }
 
             Section {

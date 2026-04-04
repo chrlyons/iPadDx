@@ -6,6 +6,17 @@ struct iPadDxApp: App {
     @State private var bonjourService = BonjourService()
     @State private var reportStore = ReportStore()
 
+    init() {
+        // Pre-warm bridge engines in the background so they're ready
+        // before any bridge transport test needs them.
+        Task { @MainActor in
+            _ = await FlutterBridge.sharedEngine()
+            _ = await CapacitorBridgeManager.shared()
+            _ = await CordovaBridgeManager.shared()
+            _ = await ReactNativeBridgeManager.shared()
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

@@ -19,6 +19,10 @@ class DeviceConnection: Identifiable {
     var currentTestPartner: String?
     var testProgress: Double = 0
     var testPhase: String = ""
+    /// Timestamp of last orchestration status update from the agent.
+    var lastStatusUpdate: Date = .distantPast
+    /// Bridges this agent supports. Populated from agentCapabilities message.
+    var supportedBridges: [String] = ["native"]
 
     init(peer: PeerDevice, connectionManager: ConnectionManager) {
         id = peer.id

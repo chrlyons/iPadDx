@@ -18,6 +18,7 @@ class AgentService {
     private var testRunner: TestSuiteRunner?
     private let serviceType = "_ipadconn._tcp"
     private var testGeneration: Int = 0
+    private var activeBridgeTransport: String = "native"
 
     func configure(conductorConnection: ConnectionManager, conductorName: String) {
         self.conductorConnection = conductorConnection
@@ -27,7 +28,7 @@ class AgentService {
 
     func handleOrchestration(_ message: DiagnosticMessage) {
         switch message {
-        case let .orchestrateTest(targetDeviceName, configJSON, role):
+        case let .orchestrateTest(targetDeviceName, configJSON, role, bridgeTransport):
             let config = (try? JSONDecoder().decode(TestSuiteConfig.self, from: configJSON)) ?? .default
             if role == "responder" {
                 // Clean up any previous partner connection
@@ -37,10 +38,13 @@ class AgentService {
                 // Prepare to accept incoming connection — don't initiate
                 status = .connecting
                 testPartnerName = targetDeviceName
+                activeBridgeTransport = bridgeTransport
                 sendStatus("preparing", detail: "Waiting for \(targetDeviceName) to connect")
             } else {
                 // Controller — initiate connection and run tests
-                Task { await executeTest(targetName: targetDeviceName, config: config) }
+                Task {
+                    await executeTest(targetName: targetDeviceName, config: config, bridgeTransport: bridgeTransport)
+                }
             }
 
         case .orchestrationCancel:
@@ -62,6 +66,7 @@ class AgentService {
         status = .idle
         testPartnerName = ""
         testProgress = 0
+        activeBridgeTransport = "native"
         sendStatus("cancelled", detail: "Test cancelled by conductor")
     }
 
@@ -81,7 +86,7 @@ class AgentService {
         partnerConnection?.disconnect()
         partnerConnection = nil
 
-        let manager = ConnectionManager(label: "agent-responder")
+        let manager = ConnectionManager(label: "agent-responder", bridgeTransport: activeBridgeTransport)
         partnerConnection = manager
 
         let metrics = DiagnosticMetrics()
@@ -94,19 +99,26 @@ class AgentService {
             }
         }
 
-        // When the partner disconnects after test, notify conductor and reset
+        // When the partner disconnects, determine if it's normal completion or a real failure.
+        // The controller disconnects after finishing the test — that's expected for responders.
+        // Only report failure if we were still connecting (never got to test).
         manager.onConnectionLost = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                let wasActive = self.status == .testing || self.status == .connecting
+                let wasConnecting = self.status == .connecting
                 self.partnerEngine?.stop()
                 self.partnerEngine = nil
                 self.partnerConnection = nil
-                self.status = .idle
                 self.testPartnerName = ""
                 self.testProgress = 0
-                if wasActive {
-                    self.sendStatus("failed", detail: "Partner disconnected during test")
+                if wasConnecting {
+                    // Never got to test — real failure
+                    self.status = .failed
+                    self.sendStatus("failed", detail: "Partner disconnected before test started")
+                } else {
+                    // Was testing — controller finished and disconnected (normal)
+                    self.status = .idle
+                    self.sendStatus("completed", detail: "Responder finished")
                 }
             }
         }
@@ -114,8 +126,8 @@ class AgentService {
         testGeneration += 1
         let myGeneration = testGeneration
 
-        status = .testing
-        sendStatus("testing", detail: "Responding to \(testPartnerName)")
+        status = .connecting
+        sendStatus("connecting", detail: "Handshaking with \(testPartnerName)")
 
         Task {
             let ready = await manager.waitForReady(timeout: 15)
@@ -129,6 +141,8 @@ class AgentService {
                 sendStatus("failed", detail: "Partner connection timed out")
                 return
             }
+            status = .testing
+            sendStatus("testing", detail: "Responding to \(testPartnerName)")
             engine.start()
         }
     }
@@ -142,7 +156,14 @@ class AgentService {
 
     // MARK: - Test Execution
 
-    private func executeTest(targetName: String, config: TestSuiteConfig) async {
+    private func executeTest(targetName: String, config: TestSuiteConfig, bridgeTransport: String = "native") async {
+        // Refuse to run if the bridge failed to initialize — results would be invalid
+        if bridgeTransport != "native", !BridgeRegistry.isBridgeHealthy(bridgeTransport) {
+            AppLog("Bridge \(bridgeTransport) not healthy, refusing test", level: .error, category: "Agent")
+            sendStatus("failed", detail: "Bridge \(bridgeTransport) failed to initialize")
+            return
+        }
+
         testGeneration += 1
         let myGeneration = testGeneration
 
@@ -157,7 +178,7 @@ class AgentService {
             name: targetName, type: serviceType, domain: "local.", interface: nil
         )
 
-        let manager = ConnectionManager(label: "agent-controller->\(targetName)")
+        let manager = ConnectionManager(label: "agent-controller->\(targetName)", bridgeTransport: bridgeTransport)
         partnerConnection = manager
 
         let metrics = DiagnosticMetrics()
@@ -197,8 +218,14 @@ class AgentService {
         status = .testing
         sendStatus("running", detail: "Starting test suite")
 
-        // Wait for peer info exchange
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        // Wait for peer info to arrive (up to 5 seconds, check every 200ms)
+        for _ in 0 ..< 25 {
+            if metrics.peerDeviceName != nil { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        if metrics.peerDeviceName == nil {
+            AppLog("Peer info not received after 5s, proceeding with Unknown", level: .warning, category: "Agent")
+        }
 
         let runner = TestSuiteRunner(connectionManager: manager, metrics: metrics)
         runner.config = config

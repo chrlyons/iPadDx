@@ -15,6 +15,31 @@ struct TestPair: Identifiable, Equatable {
     }
 }
 
+/// A single test run: a device pair + bridge transport.
+/// When multiple bridges are selected, each pair generates one TestRun per bridge.
+struct TestRun: Identifiable, Equatable {
+    let id = UUID()
+    let pair: TestPair
+    let bridgeTransport: String
+
+    var label: String {
+        if bridgeTransport == "native" { return pair.label }
+        return "\(pair.label) [\(bridgeTransport)]"
+    }
+
+    var deviceA: PeerDevice {
+        pair.deviceA
+    }
+
+    var deviceB: PeerDevice {
+        pair.deviceB
+    }
+
+    static func == (lhs: TestRun, rhs: TestRun) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 enum QueueStatus: Equatable {
     case idle
     case running(pairIndex: Int, total: Int)
@@ -50,15 +75,18 @@ struct ConductorEvent: Identifiable {
 class ConductorService {
     var fleet: [DeviceConnection] = []
     var includeSelf: Bool = false
-    var testQueue: [TestPair] = []
+    var testQueue: [TestRun] = []
     var queueStatus: QueueStatus = .idle
     var completedCount: Int = 0
     var completedReports: [TestReport] = []
-    var failedPairs: [TestPair] = []
+    var failedRuns: [TestRun] = []
     var runningPairs: [String] = []
     var eventLog: [ConductorEvent] = []
     private var cancelRequested = false
     private var activeTasks: [UUID: Task<Void, Never>] = [:]
+
+    /// Selected bridge transports for queue generation.
+    var selectedBridges: [String] = ["native"]
 
     private let serviceType = "_ipadconn._tcp"
     private var listener: NWListener?
@@ -88,8 +116,8 @@ class ConductorService {
     // MARK: - Fleet Management
 
     func connectToDevice(_ peer: PeerDevice) {
-        // Check if already in fleet (connected or connecting)
-        guard !fleet.contains(where: { $0.peer.name == peer.name }) else { return }
+        // Check if already in fleet by ID or name (covers reconnects and multi-interface discovery)
+        guard !fleet.contains(where: { $0.peer.id == peer.id || $0.peer.name == peer.name }) else { return }
 
         // Reset stale state from a previous failed attempt
         peer.connectionState = .connecting
@@ -198,11 +226,13 @@ class ConductorService {
 
     func addPair(_ deviceA: PeerDevice, _ deviceB: PeerDevice) {
         let pair = TestPair(deviceA: deviceA, deviceB: deviceB)
-        testQueue.append(pair)
+        for bridge in selectedBridges {
+            testQueue.append(TestRun(pair: pair, bridgeTransport: bridge))
+        }
     }
 
-    func removePair(_ pair: TestPair) {
-        testQueue.removeAll { $0.id == pair.id }
+    func removeRun(_ run: TestRun) {
+        testQueue.removeAll { $0.id == run.id }
     }
 
     func generateAllPairs() {
@@ -211,9 +241,31 @@ class ConductorService {
         if let sp = selfPeer {
             allPeers.insert(sp, at: 0)
         }
+        // Generate all permutations for each selected bridge.
+        // Interleave bridges to avoid running same pair back-to-back with different bridges.
+        var pairs: [TestPair] = []
         for i in 0 ..< allPeers.count {
             for j in 0 ..< allPeers.count where i != j {
-                testQueue.append(TestPair(deviceA: allPeers[i], deviceB: allPeers[j]))
+                pairs.append(TestPair(deviceA: allPeers[i], deviceB: allPeers[j]))
+            }
+        }
+        // Interleave bridges across pairs to prevent thermal throttling:
+        // A→B [native], C→A [native], A→B [cordova], B→C [native], C→A [cordova], ...
+        if selectedBridges.count <= 1 {
+            for pair in pairs {
+                testQueue.append(TestRun(pair: pair, bridgeTransport: selectedBridges.first ?? "native"))
+            }
+        } else {
+            // Build per-bridge queues, then interleave
+            var bridgeQueues: [[TestRun]] = selectedBridges.map { bridge in
+                pairs.map { TestRun(pair: $0, bridgeTransport: bridge) }
+            }
+            while bridgeQueues.contains(where: { !$0.isEmpty }) {
+                for i in 0 ..< bridgeQueues.count {
+                    if !bridgeQueues[i].isEmpty {
+                        testQueue.append(bridgeQueues[i].removeFirst())
+                    }
+                }
             }
         }
     }
@@ -249,11 +301,11 @@ class ConductorService {
         let total = testQueue.count
         queueStatus = .running(pairIndex: 0, total: total)
         completedReports.removeAll()
-        failedPairs.removeAll()
+        failedRuns.removeAll()
         completedCount = 0
         runningPairs.removeAll()
 
-        // Process queue — launch pairs in parallel when devices are available
+        // Process queue — launch runs in parallel when devices are available
         var remaining = testQueue
         activeTasks.removeAll()
 
@@ -261,7 +313,7 @@ class ConductorService {
             // Check for cancellation
             if cancelRequested {
                 log(
-                    "Cancelling \(remaining.count) remaining pairs, waiting for \(activeTasks.count) active",
+                    "Cancelling \(remaining.count) remaining runs, waiting for \(activeTasks.count) active",
                     level: .warning
                 )
                 remaining.removeAll()
@@ -274,79 +326,80 @@ class ConductorService {
                 activeTasks.removeAll()
                 break
             }
-            // Prune pairs where a device has gone offline
-            let deadPairs = remaining.filter { pair in
-                let isSelfA = pair.deviceA.id == selfDeviceID
-                let isSelfB = pair.deviceB.id == selfDeviceID
-                if !isSelfA, fleet.first(where: { $0.peer.id == pair.deviceA.id }) == nil { return true }
-                if !isSelfB, fleet.first(where: { $0.peer.id == pair.deviceB.id }) == nil { return true }
+            // Prune runs where a device has gone offline
+            let deadRuns = remaining.filter { run in
+                let isSelfA = run.deviceA.id == selfDeviceID
+                let isSelfB = run.deviceB.id == selfDeviceID
+                if !isSelfA, fleet.first(where: { $0.peer.id == run.deviceA.id }) == nil { return true }
+                if !isSelfB, fleet.first(where: { $0.peer.id == run.deviceB.id }) == nil { return true }
                 return false
             }
-            for pair in deadPairs {
-                remaining.removeAll { $0.id == pair.id }
+            for run in deadRuns {
+                remaining.removeAll { $0.id == run.id }
                 completedCount += 1
-                log("Skipped \(pair.label) — device offline", level: .warning)
+                log("Skipped \(run.label) — device offline", level: .warning)
             }
 
-            // Find pairs where both devices are idle
+            // Find runs where both devices are idle
             var launched = false
-            for (index, pair) in remaining.enumerated() {
-                let isSelfA = pair.deviceA.id == selfDeviceID
-                let isSelfB = pair.deviceB.id == selfDeviceID
+            for (index, run) in remaining.enumerated() {
+                let isSelfA = run.deviceA.id == selfDeviceID
+                let isSelfB = run.deviceB.id == selfDeviceID
 
                 let devicesAvailable: Bool
                 if isSelfA || isSelfB {
-                    let agentPeer = isSelfA ? pair.deviceB : pair.deviceA
+                    let agentPeer = isSelfA ? run.deviceB : run.deviceA
                     let conn = fleet.first { $0.peer.id == agentPeer.id }
                     devicesAvailable = !selfBusy && conn?.agentStatus == .idle
                 } else {
-                    let connA = fleet.first { $0.peer.id == pair.deviceA.id }
-                    let connB = fleet.first { $0.peer.id == pair.deviceB.id }
+                    let connA = fleet.first { $0.peer.id == run.deviceA.id }
+                    let connB = fleet.first { $0.peer.id == run.deviceB.id }
                     devicesAvailable = connA?.agentStatus == .idle && connB?.agentStatus == .idle
                 }
 
                 if devicesAvailable {
-                    let pair = remaining.remove(at: index)
-                    runningPairs.append(pair.label)
+                    let run = remaining.remove(at: index)
+                    runningPairs.append(run.label)
 
-                    // Mark devices as busy BEFORE launching the task so the
-                    // scheduler won't double-book them on the next iteration
-                    let isSelfA2 = pair.deviceA.id == selfDeviceID
-                    let isSelfB2 = pair.deviceB.id == selfDeviceID
+                    // Mark devices as busy BEFORE launching the task
+                    let isSelfA2 = run.deviceA.id == selfDeviceID
+                    let isSelfB2 = run.deviceB.id == selfDeviceID
                     if isSelfA2 || isSelfB2 {
                         selfBusy = true
-                        let agentPeer2 = isSelfA2 ? pair.deviceB : pair.deviceA
+                        let agentPeer2 = isSelfA2 ? run.deviceB : run.deviceA
                         if let conn2 = fleet.first(where: { $0.peer.id == agentPeer2.id }) {
                             conn2.agentStatus = .testing
+                            conn2.lastStatusUpdate = Date()
                         }
                     } else {
-                        if let cA = fleet.first(where: { $0.peer.id == pair.deviceA.id }) {
+                        if let cA = fleet.first(where: { $0.peer.id == run.deviceA.id }) {
                             cA.agentStatus = .testing
+                            cA.lastStatusUpdate = Date()
                         }
-                        if let cB = fleet.first(where: { $0.peer.id == pair.deviceB.id }) {
+                        if let cB = fleet.first(where: { $0.peer.id == run.deviceB.id }) {
                             cB.agentStatus = .testing
+                            cB.lastStatusUpdate = Date()
                         }
                     }
 
                     let task = Task { [weak self] in
-                        await self?.executePair(pair)
+                        await self?.executeRun(run)
                         await MainActor.run {
                             self?.completedCount += 1
-                            self?.runningPairs.removeAll { $0 == pair.label }
+                            self?.runningPairs.removeAll { $0 == run.label }
                             self?.queueStatus = .running(
                                 pairIndex: self?.completedCount ?? 0,
                                 total: total
                             )
                         }
                     }
-                    activeTasks[pair.id] = task
+                    activeTasks[run.id] = task
                     launched = true
                     break // Re-evaluate from top after launching
                 }
             }
 
             if !launched {
-                // No pairs can launch right now — wait for an active one to finish
                 if let (id, task) = activeTasks.first {
                     await task.value
                     activeTasks.removeValue(forKey: id)
@@ -382,59 +435,74 @@ class ConductorService {
         cancelRequested = false
     }
 
-    // MARK: - Pair Execution
+    // MARK: - Run Execution
 
-    private func executePair(_ pair: TestPair) async {
-        let isSelfA = pair.deviceA.id == selfDeviceID
-        let isSelfB = pair.deviceB.id == selfDeviceID
+    private func executeRun(_ run: TestRun) async {
+        let isSelfA = run.deviceA.id == selfDeviceID
+        let isSelfB = run.deviceB.id == selfDeviceID
 
         if isSelfA || isSelfB {
-            await executeSelfPair(pair, isSelfA: isSelfA)
+            await executeSelfRun(run, isSelfA: isSelfA)
         } else {
-            await executeRemotePair(pair)
+            await executeRemoteRun(run)
         }
     }
 
-    private func executeSelfPair(_ pair: TestPair, isSelfA: Bool) async {
-        let agentPeer = isSelfA ? pair.deviceB : pair.deviceA
-        guard let conn = fleet.first(where: { $0.peer.id == agentPeer.id }) else {
-            log("Self pair: \(agentPeer.name) not found in fleet", level: .error)
+    private func executeSelfRun(_ run: TestRun, isSelfA: Bool) async {
+        // Refuse to run if the bridge failed to initialize — results would be invalid
+        if run.bridgeTransport != "native", !BridgeRegistry.isBridgeHealthy(run.bridgeTransport) {
+            log("Bridge \(run.bridgeTransport) not healthy, skipping self run", level: .error)
+            failedRuns.append(run)
             return
         }
 
-        let direction = isSelfA ? "Conductor → \(agentPeer.name)" : "\(agentPeer.name) → Conductor"
-        log("Starting self pair: \(direction)")
+        let agentPeer = isSelfA ? run.deviceB : run.deviceA
+        guard let conn = fleet.first(where: { $0.peer.id == agentPeer.id }) else {
+            log("Self run: \(agentPeer.name) not found in fleet", level: .error)
+            return
+        }
+
+        let bridgeTag = run.bridgeTransport == "native" ? "" : " [\(run.bridgeTransport)]"
+        let direction = isSelfA ? "Conductor → \(agentPeer.name)\(bridgeTag)" : "\(agentPeer.name) → Conductor\(bridgeTag)"
+        log("Starting self run: \(direction)")
 
         selfBusy = true
         conn.agentStatus = .testing
+        conn.lastStatusUpdate = Date()
         conn.currentTestPartner = isSelfA ? "→ Conductor" : "Conductor →"
+        conn.testProgress = 0
+        conn.testPhase = ""
 
         if isSelfA {
             let runner = TestSuiteRunner(connectionManager: conn.connectionManager, metrics: conn.peer.metrics)
+            runner.bridgeTransportOverride = run.bridgeTransport
             if let engine = conn.diagnosticEngine { engine.testSuiteRunner = runner }
             let report = await runner.runFullSuite()
             if let report {
-                completedReports.append(report)
-                log("Self pair completed: \(direction) — \(report.results.overallGrade)", level: .success)
+                // In self-run where conductor is sender (isSelfA):
+                // localDevice = conductor (self), remoteDevice = the agent
+                completedReports.append(patchDeviceInfo(in: report, controllerConn: nil, responderConn: conn))
+                log("Self run completed: \(direction) — \(report.results.overallGrade)", level: .success)
             } else {
-                log("Self pair failed: \(direction) — no report generated", level: .error)
-                failedPairs.append(pair)
+                log("Self run failed: \(direction) — no report generated", level: .error)
+                failedRuns.append(run)
             }
             if let engine = conn.diagnosticEngine { engine.testSuiteRunner = nil }
         } else {
             let config = TestSuiteConfig.default
             if let configData = try? JSONEncoder().encode(config) {
                 conn.connectionManager.send(.orchestrateTest(
-                    targetDeviceName: conductorBonjourName, configJSON: configData, role: "controller"
+                    targetDeviceName: conductorBonjourName, configJSON: configData,
+                    role: "controller", bridgeTransport: run.bridgeTransport
                 ))
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 let completed = await waitForTestCompletion(connection: conn, timeout: 180)
                 if completed {
-                    log("Self pair completed: \(direction)", level: .success)
+                    log("Self run completed: \(direction)", level: .success)
                 } else {
                     let reason = conn.connectionManager.isConnected ? "timed out" : "device disconnected"
-                    log("Self pair failed: \(direction) — \(reason)", level: .error)
-                    failedPairs.append(pair)
+                    log("Self run failed: \(direction) — \(reason)", level: .error)
+                    failedRuns.append(run)
                     if conn.connectionManager.isConnected {
                         conn.connectionManager.send(.orchestrationCancel)
                     }
@@ -442,86 +510,98 @@ class ConductorService {
             }
         }
 
-        // Settle delay — let agent clean up partner connections before reuse
+        // Settle delay
         try? await Task.sleep(nanoseconds: 2_000_000_000)
 
         if conn.connectionManager.isConnected {
             conn.agentStatus = .idle
             conn.currentTestPartner = nil
+            conn.testProgress = 0
+            conn.testPhase = ""
         }
         selfBusy = false
     }
 
-    private func executeRemotePair(_ pair: TestPair) async {
-        guard let connA = fleet.first(where: { $0.peer.id == pair.deviceA.id }),
-              let connB = fleet.first(where: { $0.peer.id == pair.deviceB.id })
+    private func executeRemoteRun(_ run: TestRun) async {
+        guard let connA = fleet.first(where: { $0.peer.id == run.deviceA.id }),
+              let connB = fleet.first(where: { $0.peer.id == run.deviceB.id })
         else {
-            log("Remote pair: devices not found in fleet", level: .error)
+            log("Remote run: devices not found in fleet", level: .error)
             return
         }
 
         let config = TestSuiteConfig.default
         guard let configData = try? JSONEncoder().encode(config) else { return }
 
-        let label = "\(pair.deviceA.name) → \(pair.deviceB.name)"
-        log("Starting remote pair: \(label)")
+        let bridgeTag = run.bridgeTransport == "native" ? "" : " [\(run.bridgeTransport)]"
+        let label = "\(run.deviceA.name) → \(run.deviceB.name)\(bridgeTag)"
+        log("Starting remote run: \(label)")
 
         connA.agentStatus = .testing
-        connA.currentTestPartner = pair.deviceB.name
+        connA.lastStatusUpdate = Date()
+        connA.currentTestPartner = run.deviceB.name
+        connA.testProgress = 0
+        connA.testPhase = ""
         connB.agentStatus = .testing
-        connB.currentTestPartner = pair.deviceA.name
+        connB.lastStatusUpdate = Date()
+        connB.currentTestPartner = run.deviceA.name
+        connB.testProgress = 0
+        connB.testPhase = ""
 
         // Use Bonjour names (not display names) for device discovery
-        let nameA = pair.deviceA.bonjourName ?? pair.deviceA.name
-        let nameB = pair.deviceB.bonjourName ?? pair.deviceB.name
+        let nameA = run.deviceA.bonjourName ?? run.deviceA.name
+        let nameB = run.deviceB.bonjourName ?? run.deviceB.name
 
         connB.connectionManager.send(.orchestrateTest(
-            targetDeviceName: nameA, configJSON: configData, role: "responder"
+            targetDeviceName: nameA, configJSON: configData,
+            role: "responder", bridgeTransport: run.bridgeTransport
         ))
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         connA.connectionManager.send(.orchestrateTest(
-            targetDeviceName: nameB, configJSON: configData, role: "controller"
+            targetDeviceName: nameB, configJSON: configData,
+            role: "controller", bridgeTransport: run.bridgeTransport
         ))
 
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         let completed = await waitForTestCompletion(connection: connA, timeout: 180)
 
         if completed {
-            log("Remote pair completed: \(label)", level: .success)
+            log("Remote run completed: \(label)", level: .success)
         } else {
             let reason = connA.connectionManager.isConnected ? "timed out" : "device disconnected"
-            log("Remote pair failed: \(label) — \(reason)", level: .error)
-            failedPairs.append(pair)
+            log("Remote run failed: \(label) — \(reason)", level: .error)
+            failedRuns.append(run)
         }
 
-        // Cancel responder if test failed
         if !completed {
             if connA.connectionManager.isConnected { connA.connectionManager.send(.orchestrationCancel) }
             if connB.connectionManager.isConnected { connB.connectionManager.send(.orchestrationCancel) }
         }
 
-        // Wait for responder (connB) to also finish — it may still be responding
-        // even after the controller reports done
+        // Wait for responder (connB) to finish
         if connB.agentStatus == .testing {
-            log("Waiting for responder \(pair.deviceB.name) to finish...", level: .info)
-            for _ in 0 ..< 20 { // up to 10 seconds
+            log("Waiting for responder \(run.deviceB.name) to finish...", level: .info)
+            for _ in 0 ..< 20 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 if connB.agentStatus != .testing { break }
                 if !connB.connectionManager.isConnected { break }
             }
         }
 
-        // Settle delay — let agent clean up partner connections before reuse
+        // Settle delay
         try? await Task.sleep(nanoseconds: 2_000_000_000)
 
-        // Release both devices
         if connA.connectionManager.isConnected {
             connA.agentStatus = .idle
             connA.currentTestPartner = nil
+            connA.testProgress = 0
+            connA.testPhase = ""
         }
         if connB.connectionManager.isConnected {
             connB.agentStatus = .idle
             connB.currentTestPartner = nil
+            connB.testProgress = 0
+            connB.testPhase = ""
         }
     }
 
@@ -533,6 +613,7 @@ class ConductorService {
         switch message {
         case let .orchestrationStatus(phase, detail):
             connection.testPhase = detail
+            connection.lastStatusUpdate = Date()
             if phase == "failed" {
                 log("\(connection.peer.name): \(detail)", level: .error)
             } else if phase == "completed" {
@@ -549,8 +630,20 @@ class ConductorService {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             if let report = try? decoder.decode(TestReport.self, from: reportJSON) {
-                completedReports.append(report)
+                // The controller agent sent this report. Its partner is the responder.
+                let partnerName = connection.currentTestPartner
+                let responderConn = fleet.first { $0.peer.name == partnerName }
+                let patched = patchDeviceInfo(
+                    in: report,
+                    controllerConn: connection,
+                    responderConn: responderConn
+                )
+                completedReports.append(patched)
             }
+
+        case let .agentCapabilities(supportedBridges):
+            connection.supportedBridges = supportedBridges
+            log("\(connection.peer.name) supports bridges: \(supportedBridges.joined(separator: ", "))")
 
         default:
             break
@@ -568,6 +661,15 @@ class ConductorService {
                 connection.agentStatus = .failed
                 return false
             }
+            // Detect stale agent — no status update for 30s while supposedly testing
+            if connection.agentStatus == .testing,
+               Date().timeIntervalSince(connection.lastStatusUpdate) > 30
+            {
+                log("\(connection.peer.name) unresponsive for 30s", level: .error)
+                connection.agentStatus = .failed
+                connection.testPhase = "Agent unresponsive"
+                return false
+            }
         }
         return false
     }
@@ -577,6 +679,56 @@ class ConductorService {
               let pct = Int(detail[range].dropLast())
         else { return nil }
         return Double(pct) / 100
+    }
+
+    // MARK: - Report Patching
+
+    /// The controller agent builds its report from a fresh peer-to-peer connection whose
+    /// .peerInfo() exchange may not complete in time (5s timeout). The conductor already
+    /// has authoritative device info from its fleet connections, so patch any "Unknown"
+    /// fields before storing the report.
+    ///
+    /// Uses orchestration context (which connection sent the report and who its partner was)
+    /// rather than name matching, since the report's device names may themselves be "Unknown".
+    private func patchDeviceInfo(
+        in report: TestReport,
+        controllerConn: DeviceConnection?,
+        responderConn: DeviceConnection?
+    ) -> TestReport {
+        // report.localDevice = the controller agent (the one that ran the test suite)
+        // report.remoteDevice = the responder agent (the peer it connected to)
+        let patchedLocal = patchDevice(report.localDevice, from: controllerConn)
+        let patchedRemote = patchDevice(report.remoteDevice, from: responderConn)
+
+        guard patchedLocal != report.localDevice || patchedRemote != report.remoteDevice else {
+            return report
+        }
+
+        return TestReport(
+            id: report.id,
+            date: report.date,
+            localDevice: patchedLocal,
+            remoteDevice: patchedRemote,
+            results: report.results,
+            durationSeconds: report.durationSeconds,
+            errors: report.errors,
+            skippedPhases: report.skippedPhases,
+            bridgeTransport: report.bridgeTransport
+        )
+    }
+
+    private func patchDevice(_ info: DeviceInfo, from conn: DeviceConnection?) -> DeviceInfo {
+        guard let conn else { return info }
+        let metrics = conn.peer.metrics
+        let needsPatch = info.name == "Unknown" || info.model == "Unknown" || info.osVersion == "Unknown"
+        guard needsPatch else { return info }
+
+        return DeviceInfo(
+            name: info.name != "Unknown" ? info.name : metrics.peerDeviceName ?? conn.peer.name,
+            model: info.model != "Unknown" ? info.model : metrics.peerModel ?? conn.peer.model ?? "Unknown",
+            modelNumber: !info.modelNumber.isEmpty ? info.modelNumber : metrics.peerModelNumber ?? "",
+            osVersion: info.osVersion != "Unknown" ? info.osVersion : metrics.peerOSVersion ?? "Unknown"
+        )
     }
 
     // MARK: - Event Log
