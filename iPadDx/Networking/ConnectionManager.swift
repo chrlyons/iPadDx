@@ -72,8 +72,18 @@ class ConnectionManager {
 
     init(label: String = "unnamed", bridgeTransport: String = "native") {
         self.label = label
-        self.bridgeTransport = bridgeTransport
-        transport = BridgeRegistry.transport(for: bridgeTransport) ?? NativeTransport()
+        if let resolved = BridgeRegistry.transport(for: bridgeTransport) {
+            self.bridgeTransport = bridgeTransport
+            transport = resolved
+        } else {
+            AppLog(
+                "Bridge '\(bridgeTransport)' unavailable, falling back to native",
+                level: .warning,
+                category: "CM:\(label)"
+            )
+            self.bridgeTransport = "native"
+            transport = NativeTransport()
+        }
     }
 
     func connect(to endpoint: NWEndpoint, handler: @escaping (Data) -> Void) {

@@ -91,9 +91,14 @@ class ReportStore {
         return entity.toTestReport()
     }
 
-    /// Load multiple full reports (for export, comparison).
+    /// Load multiple full reports in a single batch fetch (for export, comparison).
     func loadFullReports(ids: Set<UUID>) -> [TestReport] {
-        ids.compactMap { loadFullReport(id: $0) }
+        guard let context = modelContext, !ids.isEmpty else { return [] }
+        let idArray = Array(ids)
+        let predicate = #Predicate<ReportEntity> { idArray.contains($0.reportID) }
+        let descriptor = FetchDescriptor<ReportEntity>(predicate: predicate)
+        guard let entities = try? context.fetch(descriptor) else { return [] }
+        return entities.compactMap { $0.toTestReport() }
     }
 
     /// Load all full reports matching current summaries (for export).

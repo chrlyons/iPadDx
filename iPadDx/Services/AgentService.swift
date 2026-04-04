@@ -126,8 +126,8 @@ class AgentService {
         testGeneration += 1
         let myGeneration = testGeneration
 
-        status = .testing
-        sendStatus("testing", detail: "Responding to \(testPartnerName)")
+        status = .connecting
+        sendStatus("connecting", detail: "Handshaking with \(testPartnerName)")
 
         Task {
             let ready = await manager.waitForReady(timeout: 15)
@@ -141,6 +141,8 @@ class AgentService {
                 sendStatus("failed", detail: "Partner connection timed out")
                 return
             }
+            status = .testing
+            sendStatus("testing", detail: "Responding to \(testPartnerName)")
             engine.start()
         }
     }

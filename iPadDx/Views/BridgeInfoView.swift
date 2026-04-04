@@ -146,9 +146,11 @@ struct BridgeInfoView: View {
             Label("Runtime Status", systemImage: "checkmark.shield")
                 .font(.headline)
 
-            Text("All bridge runtimes are pre-warmed at app launch. Status shows whether the runtime initialized successfully.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(
+                "All bridge runtimes are pre-warmed at app launch. Status shows whether the runtime initialized successfully."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             VStack(spacing: 6) {
                 ForEach(BridgeRegistry.available, id: \.id) { info in
@@ -272,11 +274,20 @@ struct BridgeInfoView: View {
             Label("How Bridge Testing Works", systemImage: "gearshape.2")
                 .font(.headline)
 
-            step(number: 1, text: "Each bridge runtime is pre-warmed at app launch so startup time doesn't affect measurements")
-            step(number: 2, text: "When a bridge is selected, every message passes through the real framework runtime before hitting the network")
+            step(
+                number: 1,
+                text: "Each bridge runtime is pre-warmed at app launch so startup time doesn't affect measurements"
+            )
+            step(
+                number: 2,
+                text: "When a bridge is selected, every message passes through the real framework runtime before hitting the network"
+            )
             step(number: 3, text: "Both sides of the connection use the same bridge — matching how real apps work")
             step(number: 4, text: "The overhead delta vs Native baseline reveals how much latency the framework adds")
-            step(number: 5, text: "Reports include which bridge was used, enabling cross-bridge comparison in analytics")
+            step(
+                number: 5,
+                text: "Reports include which bridge was used, enabling cross-bridge comparison in analytics"
+            )
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -303,9 +314,11 @@ struct BridgeInfoView: View {
             Label("Overhead Comparison", systemImage: "chart.bar")
                 .font(.headline)
 
-            Text("Typical overhead added by each bridge on top of the native baseline. Actual values depend on device, payload size, and network conditions.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(
+                "Typical overhead added by each bridge on top of the native baseline. Actual values depend on device, payload size, and network conditions."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             VStack(spacing: 6) {
                 overheadRow("Native", "+0%", .green, 0)
@@ -315,10 +328,12 @@ struct BridgeInfoView: View {
                 overheadRow("Cordova", "+100-110%", .orange, 1.05)
             }
 
-            Text("WKWebView-based bridges (Cordova, Capacitor) have the highest overhead due to cross-process IPC. In-process bridges (Flutter, React Native) are faster but still add serialization and thread dispatch costs.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .italic()
+            Text(
+                "WKWebView-based bridges (Cordova, Capacitor) have the highest overhead due to cross-process IPC. In-process bridges (Flutter, React Native) are faster but still add serialization and thread dispatch costs."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .italic()
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))

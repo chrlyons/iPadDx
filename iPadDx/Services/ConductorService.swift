@@ -369,13 +369,16 @@ class ConductorService {
                         let agentPeer2 = isSelfA2 ? run.deviceB : run.deviceA
                         if let conn2 = fleet.first(where: { $0.peer.id == agentPeer2.id }) {
                             conn2.agentStatus = .testing
+                            conn2.lastStatusUpdate = Date()
                         }
                     } else {
                         if let cA = fleet.first(where: { $0.peer.id == run.deviceA.id }) {
                             cA.agentStatus = .testing
+                            cA.lastStatusUpdate = Date()
                         }
                         if let cB = fleet.first(where: { $0.peer.id == run.deviceB.id }) {
                             cB.agentStatus = .testing
+                            cB.lastStatusUpdate = Date()
                         }
                     }
 
@@ -465,6 +468,7 @@ class ConductorService {
 
         selfBusy = true
         conn.agentStatus = .testing
+        conn.lastStatusUpdate = Date()
         conn.currentTestPartner = isSelfA ? "→ Conductor" : "Conductor →"
         conn.testProgress = 0
         conn.testPhase = ""
@@ -534,10 +538,12 @@ class ConductorService {
         log("Starting remote run: \(label)")
 
         connA.agentStatus = .testing
+        connA.lastStatusUpdate = Date()
         connA.currentTestPartner = run.deviceB.name
         connA.testProgress = 0
         connA.testPhase = ""
         connB.agentStatus = .testing
+        connB.lastStatusUpdate = Date()
         connB.currentTestPartner = run.deviceA.name
         connB.testProgress = 0
         connB.testPhase = ""

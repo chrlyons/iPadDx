@@ -126,7 +126,7 @@ final class NativeTransport: TransportProvider {
                 return
             }
 
-            let length = lengthData.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+            let length = lengthData.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian }
 
             conn.receive(
                 minimumIncompleteLength: Int(length),
