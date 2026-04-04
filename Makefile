@@ -59,6 +59,36 @@ format-check: ## Check formatting without modifying files
 		echo "SwiftFormat not installed. Run: brew install swiftformat"; \
 	fi
 
+test: ## Run unit tests on iPad simulator with coverage
+	xcodebuild test \
+		-workspace iPadDx.xcworkspace \
+		-scheme $(SCHEME) \
+		-destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M4)' \
+		-enableCodeCoverage YES \
+		-resultBundlePath build/TestResults.xcresult \
+		2>&1 | xcbeautify || true
+	@echo ""
+	@echo "=== Coverage Report ==="
+	@xcrun xccov view --report --only-targets build/TestResults.xcresult 2>/dev/null || \
+		echo "(Install xcbeautify: brew install xcbeautify)"
+	@echo ""
+	@echo "Test results saved to build/TestResults.xcresult"
+	@echo "Open in Xcode: open build/TestResults.xcresult"
+
+test-ci: ## Run tests without xcbeautify (for CI)
+	xcodebuild test \
+		-workspace iPadDx.xcworkspace \
+		-scheme $(SCHEME) \
+		-destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M4)' \
+		-enableCodeCoverage YES \
+		-resultBundlePath build/TestResults.xcresult \
+		2>&1 | tail -30
+	xcrun xccov view --report --only-targets build/TestResults.xcresult
+
+coverage: ## View coverage report from last test run
+	@xcrun xccov view --report --only-targets build/TestResults.xcresult 2>/dev/null || \
+		echo "No test results found. Run 'make test' first."
+
 check: typecheck lint format-check ## Run all checks (typecheck + lint + format)
 
 fix: lint-fix format ## Auto-fix lint issues and format code

@@ -196,7 +196,7 @@ class CordovaBridgeNavigationDelegate: NSObject, WKNavigationDelegate {
 
 /// Real Cordova plugin that echoes data back through the bridge.
 /// Subclasses CDVPlugin and uses CDVPluginResult + CDVCommandDelegate — the same
-/// infrastructure that every Cordova plugin (including Q-Interactive Assess) uses.
+/// infrastructure that every Cordova plugin
 class CordovaEchoPlugin: CDVPlugin {
     @objc func echo(_ command: CDVInvokedUrlCommand) {
         let payload = command.arguments?[0] as? String ?? ""

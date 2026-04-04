@@ -62,6 +62,12 @@
 		E6444C74DDD0C5C2BEFF34FC /* Flutter.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 3BE2CF21553EAAC520DFE458 /* Flutter.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F1A2B3C4D5E6F70819203142 /* cordova_www in Resources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F70819203143 /* cordova_www */; };
 		FC5CC90E7F875EFC0500C301 /* hermes.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 32DB46677C72C84022DA9303 /* hermes.xcframework */; };
+		A20001 /* DiagnosticMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20001 /* DiagnosticMessageTests.swift */; };
+		A20002 /* TestReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20002 /* TestReportTests.swift */; };
+		A20003 /* TestSuiteConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20003 /* TestSuiteConfigTests.swift */; };
+		A20004 /* DiagnosticMetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20004 /* DiagnosticMetricsTests.swift */; };
+		A20005 /* iPadCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20005 /* iPadCatalogTests.swift */; };
+		A20006 /* ReportSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20006 /* ReportSummaryTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -79,6 +85,24 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXContainerItemProxy section */
+		CIP0001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = H10001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F10001;
+			remoteInfo = iPadDx;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		DEP0001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F10001 /* iPadDx */;
+			targetProxy = CIP0001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXFileReference section */
 		1D148EEE53F5E87EF688EEE2 /* capacitor_www */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; name = capacitor_www; path = iPadDx/Resources/capacitor_www; sourceTree = "<group>"; };
@@ -141,6 +165,13 @@
 		F1A2B3C4D5E6F70819203143 /* cordova_www */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; name = cordova_www; path = iPadDx/Resources/cordova_www; sourceTree = "<group>"; };
 		FBC8EB8792AA0DC67925E88C /* BridgeEchoModule.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = BridgeEchoModule.m; sourceTree = "<group>"; };
 		FD3442C6EFB9D527CA2128FC /* Pods-iPadDx.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-iPadDx.release.xcconfig"; path = "Target Support Files/Pods-iPadDx/Pods-iPadDx.release.xcconfig"; sourceTree = "<group>"; };
+		B20001 /* DiagnosticMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticMessageTests.swift; sourceTree = "<group>"; };
+		B20002 /* TestReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestReportTests.swift; sourceTree = "<group>"; };
+		B20003 /* TestSuiteConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSuiteConfigTests.swift; sourceTree = "<group>"; };
+		B20004 /* DiagnosticMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticMetricsTests.swift; sourceTree = "<group>"; };
+		B20005 /* iPadCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadCatalogTests.swift; sourceTree = "<group>"; };
+		B20006 /* ReportSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportSummaryTests.swift; sourceTree = "<group>"; };
+		C10002 /* iPadDxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iPadDxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -151,8 +182,14 @@
 				A55C21F82BDA6BB4994328F3 /* Flutter.xcframework in Frameworks */,
 				E26C4AD941ADDC3163802C76 /* App.xcframework in Frameworks */,
 				28F3B92F98ADE72AC8AFAB44 /* Pods_iPadDx.framework in Frameworks */,
-				23017BA8FD68124AD07F9C80 /* libReactNative.a in Frameworks */,
 				FC5CC90E7F875EFC0500C301 /* hermes.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -203,6 +240,7 @@
 			isa = PBXGroup;
 			children = (
 				E10002 /* iPadDx */,
+				E10008 /* iPadDxTests */,
 				E10006 /* Products */,
 				6CD4546AD2CD0DD675816586 /* Frameworks */,
 				536829509C70E227C32CB884 /* Pods */,
@@ -287,8 +325,22 @@
 			children = (
 				C10001 /* iPadDx.app */,
 				3D5862413E7B3BC8E4ABA34F /* ReactNativeBridge.framework */,
+				C10002 /* iPadDxTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E10008 /* iPadDxTests */ = {
+			isa = PBXGroup;
+			children = (
+				B20001 /* DiagnosticMessageTests.swift */,
+				B20002 /* TestReportTests.swift */,
+				B20003 /* TestSuiteConfigTests.swift */,
+				B20004 /* DiagnosticMetricsTests.swift */,
+				B20005 /* iPadCatalogTests.swift */,
+				B20006 /* ReportSummaryTests.swift */,
+			);
+			path = iPadDxTests;
 			sourceTree = "<group>";
 		};
 		E10007 /* Services */ = {
@@ -329,6 +381,23 @@
 			productReference = C10001 /* iPadDx.app */;
 			productType = "com.apple.product-type.application";
 		};
+		F10002 /* iPadDxTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = G10007 /* Build configuration list for PBXNativeTarget "iPadDxTests" */;
+			buildPhases = (
+				D10004 /* Sources */,
+				D10005 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DEP0001 /* PBXTargetDependency */,
+			);
+			name = iPadDxTests;
+			productName = iPadDxTests;
+			productReference = C10002 /* iPadDxTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -341,6 +410,10 @@
 				TargetAttributes = {
 					F10001 = {
 						CreatedOnToolsVersion = 15.0;
+					};
+					F10002 = {
+						CreatedOnToolsVersion = 16.3;
+						TestTargetID = F10001;
 					};
 				};
 			};
@@ -358,6 +431,7 @@
 			projectRoot = "";
 			targets = (
 				F10001 /* iPadDx */,
+				F10002 /* iPadDxTests */,
 			);
 		};
 /* End PBXProject section */
@@ -466,6 +540,19 @@
 				A10041 /* ReactNativeTransport.swift in Sources */,
 				A10042 /* FlutterTransport.swift in Sources */,
 				A10043 /* CapacitorTransport.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A20001 /* DiagnosticMessageTests.swift in Sources */,
+				A20002 /* TestReportTests.swift in Sources */,
+				A20003 /* TestSuiteConfigTests.swift in Sources */,
+				A20004 /* DiagnosticMetricsTests.swift in Sources */,
+				A20005 /* iPadCatalogTests.swift in Sources */,
+				A20006 /* ReportSummaryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -603,6 +690,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				"EXCLUDED_SOURCE_FILE_NAMES[sdk=iphonesimulator*]" = "BridgeEchoModule.m";
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",
@@ -629,7 +717,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(inherited)",
 					"\"$(PROJECT_DIR)/Frameworks/ReactNative\"",
 				);
@@ -644,10 +732,22 @@
 					"-framework CoreServices",
 					"-framework Accelerate",
 				);
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+					"-lReactNative",
+					"-framework AudioToolbox",
+					"-framework MobileCoreServices",
+					"-framework JavaScriptCore",
+					"-framework CoreServices",
+					"-framework Accelerate",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.christianlyons.ipadconnection;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "iPadDx/iPadDx-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
@@ -665,6 +765,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				"EXCLUDED_SOURCE_FILE_NAMES[sdk=iphonesimulator*]" = "BridgeEchoModule.m";
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Frameworks",
@@ -691,7 +792,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(inherited)",
 					"\"$(PROJECT_DIR)/Frameworks/ReactNative\"",
 				);
@@ -706,6 +807,17 @@
 					"-framework CoreServices",
 					"-framework Accelerate",
 				);
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+					"-lReactNative",
+					"-framework AudioToolbox",
+					"-framework MobileCoreServices",
+					"-framework JavaScriptCore",
+					"-framework CoreServices",
+					"-framework Accelerate",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.christianlyons.ipadconnection;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -714,6 +826,58 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "iPadDx/iPadDx-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+		G10008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7D940F19EA9DC092A8AF7268 /* Pods-iPadDx.debug.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z86ZAY4JRW;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.christianlyons.ipadconnection.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/iPadDx.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/iPadDx";
+			};
+			name = Debug;
+		};
+		G10009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = FD3442C6EFB9D527CA2128FC /* Pods-iPadDx.release.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z86ZAY4JRW;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.christianlyons.ipadconnection.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/iPadDx.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/iPadDx";
 			};
 			name = Release;
 		};
@@ -734,6 +898,15 @@
 			buildConfigurations = (
 				G10005 /* Debug */,
 				G10006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		G10007 /* Build configuration list for PBXNativeTarget "iPadDxTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				G10008 /* Debug */,
+				G10009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

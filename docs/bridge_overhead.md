@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-iPadDx tests device-to-device connections using native Swift on Network.framework. Real-world apps like Assess 2.0 go through a bridge layer (Cordova, React Native, Flutter, etc.) that adds overhead to every message. iPadDx tests through the same real bridge runtimes so reports reflect actual app-level connection quality.
+iPadDx tests device-to-device connections using native Swift on Network.framework. Real-world apps  go through a bridge layer (Cordova, React Native, Flutter, etc.) that adds overhead to every message. iPadDx tests through the same real bridge runtimes so reports reflect actual app-level connection quality.
 
 ---
 
@@ -13,7 +13,7 @@ All five bridges ship in a single build, all running **real framework runtimes**
 | Bridge ID | Technology | Target App Example |
 |-----------|-----------|-------------------|
 | `native` | Direct Swift / Network.framework | iPadDx itself (baseline) |
-| `cordova` | WKWebView + real cordova.js + CDVPlugin + CDVPluginResult | Assess 2.0 |
+| `cordova` | WKWebView + real cordova.js + CDVPlugin + CDVPluginResult | — |
 | `reactnative` | RCTBridge + Hermes engine + ObjC RCT_EXPORT_MODULE | — |
 | `flutter` | FlutterEngine + FlutterMethodChannel + AOT Dart isolate | — |
 | `capacitor` | CAPBridgeViewController + CAPPlugin + WKWebView IPC | — |

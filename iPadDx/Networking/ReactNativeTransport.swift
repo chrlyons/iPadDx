@@ -26,7 +26,9 @@ class ReactNativeBridgeNotifier: NSObject {
 ///   → ObjC BridgeEchoModule.echo() → resolve(payload) → JS callback
 @MainActor
 enum ReactNativeBridgeManager {
-    private static var bridge: RCTBridge?
+    #if !targetEnvironment(simulator)
+        private static var bridge: RCTBridge?
+    #endif
     private static var isReady = false
     static var isHealthy = false
     private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
@@ -51,47 +53,49 @@ enum ReactNativeBridgeManager {
         callback?(payload)
     }
 
-    static func shared() async -> RCTBridge {
-        if let b = bridge, isReady {
-            return b
-        }
-
-        if let b = bridge {
-            await withCheckedContinuation { cont in
-                readyContinuations.append(cont)
+    #if !targetEnvironment(simulator)
+        static func shared() async -> RCTBridge {
+            if let b = bridge, isReady {
+                return b
             }
+
+            if let b = bridge {
+                await withCheckedContinuation { cont in
+                    readyContinuations.append(cont)
+                }
+                return b
+            }
+
+            AppLog("Starting React Native bridge...", category: "RNTransport")
+
+            let b = RCTBridge(delegate: RNBridgeDelegate.shared, launchOptions: nil)!
+            bridge = b
+
+            var attempts = 0
+            let maxAttempts = 80 // 8 seconds (Hermes startup can be slow)
+            while attempts < maxAttempts {
+                if isReady { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                attempts += 1
+            }
+
+            if !isReady {
+                AppLog("React Native bridge did not become ready after 8s", level: .error, category: "RNTransport")
+                isReady = true
+                isHealthy = false
+            } else {
+                AppLog("React Native bridge ready after \(attempts * 100)ms", category: "RNTransport")
+                isHealthy = true
+            }
+
+            for cont in readyContinuations {
+                cont.resume()
+            }
+            readyContinuations.removeAll()
+
             return b
         }
-
-        AppLog("Starting React Native bridge...", category: "RNTransport")
-
-        let b = RCTBridge(delegate: RNBridgeDelegate.shared, launchOptions: nil)!
-        bridge = b
-
-        var attempts = 0
-        let maxAttempts = 80 // 8 seconds (Hermes startup can be slow)
-        while attempts < maxAttempts {
-            if isReady { break }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            attempts += 1
-        }
-
-        if !isReady {
-            AppLog("React Native bridge did not become ready after 8s", level: .error, category: "RNTransport")
-            isReady = true
-            isHealthy = false
-        } else {
-            AppLog("React Native bridge ready after \(attempts * 100)ms", category: "RNTransport")
-            isHealthy = true
-        }
-
-        for cont in readyContinuations {
-            cont.resume()
-        }
-        readyContinuations.removeAll()
-
-        return b
-    }
+    #endif
 
     static func markReady() {
         AppLog("BridgeEchoModule ready signal received", category: "RNTransport")
@@ -102,14 +106,16 @@ enum ReactNativeBridgeManager {
 
 // MARK: - RCTBridgeDelegate
 
-/// Provides the pre-bundled JS bundle URL to the RCTBridge.
-class RNBridgeDelegate: NSObject, RCTBridgeDelegate {
-    static let shared = RNBridgeDelegate()
+#if !targetEnvironment(simulator)
+    /// Provides the pre-bundled JS bundle URL to the RCTBridge.
+    class RNBridgeDelegate: NSObject, RCTBridgeDelegate {
+        static let shared = RNBridgeDelegate()
 
-    func sourceURL(for _: RCTBridge) -> URL? {
-        Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+        func sourceURL(for _: RCTBridge) -> URL? {
+            Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+        }
     }
-}
+#endif
 
 // MARK: - ReactNativeTransport
 
@@ -152,32 +158,37 @@ final class ReactNativeTransport: TransportProvider {
     }
 
     func send(_ data: Data, completion: @escaping (NWError?) -> Void) {
-        guard bridgeReady else {
-            AppLog("Bridge not ready, sending raw", level: .warning, category: "RNTransport")
+        #if targetEnvironment(simulator)
+            // RN bridge not available on simulator — pass through to native
             native.send(data, completion: completion)
-            return
-        }
-
-        let base64 = data.base64EncodedString()
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let callId = ReactNativeBridgeManager.nextCallId()
-            pendingCallIds.insert(callId)
-
-            ReactNativeBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
-                self?.pendingCallIds.remove(callId)
-                guard let self else { return }
-                if let processedData = Data(base64Encoded: resultBase64) {
-                    native.send(processedData, completion: completion)
-                } else {
-                    native.send(data, completion: completion)
-                }
+        #else
+            guard bridgeReady else {
+                AppLog("Bridge not ready, sending raw", level: .warning, category: "RNTransport")
+                native.send(data, completion: completion)
+                return
             }
 
-            let bridge = await ReactNativeBridgeManager.shared()
-            bridge.enqueueJSCall("BridgeEchoModule", method: "echo", args: [base64, callId], completion: nil)
-        }
+            let base64 = data.base64EncodedString()
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let callId = ReactNativeBridgeManager.nextCallId()
+                pendingCallIds.insert(callId)
+
+                ReactNativeBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
+                    self?.pendingCallIds.remove(callId)
+                    guard let self else { return }
+                    if let processedData = Data(base64Encoded: resultBase64) {
+                        native.send(processedData, completion: completion)
+                    } else {
+                        native.send(data, completion: completion)
+                    }
+                }
+
+                let bridge = await ReactNativeBridgeManager.shared()
+                bridge.enqueueJSCall("BridgeEchoModule", method: "echo", args: [base64, callId], completion: nil)
+            }
+        #endif
     }
 
     func startReceiving(
@@ -185,47 +196,56 @@ final class ReactNativeTransport: TransportProvider {
         onEOF: @escaping () -> Void,
         onError: @escaping (NWError) -> Void
     ) {
-        native.startReceiving(
-            handler: { [weak self] payload in
-                guard let self, bridgeReady else {
-                    handler(payload)
-                    return
-                }
-
-                let base64 = payload.base64EncodedString()
-
-                Task { @MainActor [weak self] in
-                    guard let self else {
+        #if targetEnvironment(simulator)
+            native.startReceiving(handler: handler, onEOF: onEOF, onError: onError)
+        #else
+            native.startReceiving(
+                handler: { [weak self] payload in
+                    guard let self, bridgeReady else {
                         handler(payload)
                         return
                     }
-                    let callId = ReactNativeBridgeManager.nextCallId()
-                    pendingCallIds.insert(callId)
 
-                    let timeoutItem = DispatchWorkItem { [weak self] in
-                        ReactNativeBridgeManager.cancelCallback(callId: callId)
-                        self?.pendingCallIds.remove(callId)
-                        handler(payload)
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timeoutItem)
+                    let base64 = payload.base64EncodedString()
 
-                    ReactNativeBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
-                        timeoutItem.cancel()
-                        self?.pendingCallIds.remove(callId)
-                        if let processedData = Data(base64Encoded: resultBase64) {
-                            handler(processedData)
-                        } else {
+                    Task { @MainActor [weak self] in
+                        guard let self else {
+                            handler(payload)
+                            return
+                        }
+                        let callId = ReactNativeBridgeManager.nextCallId()
+                        pendingCallIds.insert(callId)
+
+                        let timeoutItem = DispatchWorkItem { [weak self] in
+                            ReactNativeBridgeManager.cancelCallback(callId: callId)
+                            self?.pendingCallIds.remove(callId)
                             handler(payload)
                         }
-                    }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timeoutItem)
 
-                    let bridge = await ReactNativeBridgeManager.shared()
-                    bridge.enqueueJSCall("BridgeEchoModule", method: "echo", args: [base64, callId], completion: nil)
-                }
-            },
-            onEOF: onEOF,
-            onError: onError
-        )
+                        ReactNativeBridgeManager.registerCallback(callId: callId) { [weak self] resultBase64 in
+                            timeoutItem.cancel()
+                            self?.pendingCallIds.remove(callId)
+                            if let processedData = Data(base64Encoded: resultBase64) {
+                                handler(processedData)
+                            } else {
+                                handler(payload)
+                            }
+                        }
+
+                        let bridge = await ReactNativeBridgeManager.shared()
+                        bridge.enqueueJSCall(
+                            "BridgeEchoModule",
+                            method: "echo",
+                            args: [base64, callId],
+                            completion: nil
+                        )
+                    }
+                },
+                onEOF: onEOF,
+                onError: onError
+            )
+        #endif
     }
 
     func disconnect() {
@@ -240,10 +260,12 @@ final class ReactNativeTransport: TransportProvider {
 
     private func ensureBridge() {
         guard !bridgeReady else { return }
-        Task { @MainActor in
-            _ = await ReactNativeBridgeManager.shared()
-            self.bridgeReady = true
-            AppLog("Bridge connected", category: "RNTransport")
-        }
+        #if !targetEnvironment(simulator)
+            Task { @MainActor in
+                _ = await ReactNativeBridgeManager.shared()
+                self.bridgeReady = true
+                AppLog("Bridge connected", category: "RNTransport")
+            }
+        #endif
     }
 }
