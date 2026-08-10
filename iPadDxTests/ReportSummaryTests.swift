@@ -2,19 +2,45 @@ import XCTest
 @testable import iPadDx
 
 final class ReportSummaryTests: XCTestCase {
-
     private func makeReport(bridgeTransport: String? = "native") -> TestReport {
         TestReport(
             id: UUID(),
             date: Date(),
-            localDevice: DeviceInfo(name: "iPad A", model: "iPad Pro 13-inch (M4)", modelNumber: "iPad16,5", osVersion: "18.4"),
-            remoteDevice: DeviceInfo(name: "iPad B", model: "iPad mini (6th gen)", modelNumber: "iPad14,1", osVersion: "17.5"),
+            localDevice: DeviceInfo(
+                name: "iPad A",
+                model: "iPad Pro 13-inch (M4)",
+                modelNumber: "iPad16,5",
+                osVersion: "18.4"
+            ),
+            remoteDevice: DeviceInfo(
+                name: "iPad B",
+                model: "iPad mini (6th gen)",
+                modelNumber: "iPad14,1",
+                osVersion: "17.5"
+            ),
             results: TestSuiteResults(
-                latencyBurst: LatencyBurstResult(min: 2.0, max: 15.0, avg: 5.5, median: 4.8, p95: 12.0, sampleCount: 100, samples: []),
-                sustainedThroughput: ThroughputResult(bytesPerSecond: 5_000_000, totalBytes: 10_000_000, durationSeconds: 2.0),
+                latencyBurst: LatencyBurstResult(
+                    min: 2.0,
+                    max: 15.0,
+                    avg: 5.5,
+                    median: 4.8,
+                    p95: 12.0,
+                    sampleCount: 100,
+                    samples: []
+                ),
+                sustainedThroughput: ThroughputResult(
+                    bytesPerSecond: 5_000_000,
+                    totalBytes: 10_000_000,
+                    durationSeconds: 2.0
+                ),
                 jitterMeasurement: JitterResult(averageJitter: 3.2, maxJitter: 8.5, sampleCount: 150),
                 packetLossStress: PacketLossResult(sent: 500, received: 498, lostPercent: 0.4, durationSeconds: 5.0),
-                latencyUnderLoad: LatencyUnderLoadResult(baselineAvg: 5.0, underLoadAvg: 12.0, degradationPercent: 140.0, sampleCount: 50),
+                latencyUnderLoad: LatencyUnderLoadResult(
+                    baselineAvg: 5.0,
+                    underLoadAvg: 12.0,
+                    degradationPercent: 140.0,
+                    sampleCount: 50
+                ),
                 systemMetrics: SystemMetricsResult(
                     batteryStart: 0.85, batteryEnd: 0.83, batteryDrainPercent: 2.0,
                     peakCpuUsage: 45.0, avgCpuUsage: 25.0, peakMemoryMB: 128.0,

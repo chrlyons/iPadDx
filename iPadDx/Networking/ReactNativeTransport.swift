@@ -32,25 +32,25 @@ enum ReactNativeBridgeManager {
     private static var isReady = false
     static var isHealthy = false
     private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
-    private static var echoCallbacks: [String: (String) -> Void] = [:]
-    private static var callIdCounter = 0
+    private static var registry = BridgeCallbackRegistry(prefix: "rn")
 
     static func nextCallId() -> String {
-        callIdCounter += 1
-        return "rn_\(callIdCounter)"
+        registry.nextCallId()
     }
 
     static func registerCallback(callId: String, callback: @escaping (String) -> Void) {
-        echoCallbacks[callId] = callback
+        registry.register(
+            callId: callId,
+            callback: callback
+        )
     }
 
     static func cancelCallback(callId: String) {
-        echoCallbacks.removeValue(forKey: callId)
+        registry.cancel(callId: callId)
     }
 
     static func handleEchoResult(callId: String, payload: String) {
-        let callback = echoCallbacks.removeValue(forKey: callId)
-        callback?(payload)
+        registry.handle(callId: callId, payload: payload)
     }
 
     #if !targetEnvironment(simulator)
@@ -71,21 +71,15 @@ enum ReactNativeBridgeManager {
             let b = RCTBridge(delegate: RNBridgeDelegate.shared, launchOptions: nil)!
             bridge = b
 
-            var attempts = 0
-            let maxAttempts = 80 // 8 seconds (Hermes startup can be slow)
-            while attempts < maxAttempts {
-                if isReady { break }
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                attempts += 1
-            }
-
-            if !isReady {
+            if let attempt = await waitForBridgeReady(isReady: { isReady }, maxAttempts: 80) {
+                AppLog("React Native bridge ready after \(attempt * 100)ms", category: "RNTransport")
+                isHealthy = true
+            } else {
                 AppLog("React Native bridge did not become ready after 8s", level: .error, category: "RNTransport")
+                // Mark init completed so subsequent shared() callers take the fast path
+                // and don't deadlock on an un-resumable continuation.
                 isReady = true
                 isHealthy = false
-            } else {
-                AppLog("React Native bridge ready after \(attempts * 100)ms", category: "RNTransport")
-                isHealthy = true
             }
 
             for cont in readyContinuations {

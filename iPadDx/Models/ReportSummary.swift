@@ -56,12 +56,16 @@ struct ReportSummary: Identifiable {
     }
 
     var localDisplayModel: String {
-        if localModel.isEmpty || localModel == "Unknown" { return localModelNumber }
+        if localModel.isEmpty || localModel == "Unknown" {
+            return localModelNumber
+        }
         return localModel
     }
 
     var remoteDisplayModel: String {
-        if remoteModel.isEmpty || remoteModel == "Unknown" { return remoteModelNumber }
+        if remoteModel.isEmpty || remoteModel == "Unknown" {
+            return remoteModelNumber
+        }
         return remoteModel
     }
 

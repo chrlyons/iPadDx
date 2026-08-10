@@ -1,5 +1,19 @@
 import UIKit
 
+/// Fixed light-appearance palette for PDF output.
+/// A PDF must look identical regardless of the device's appearance, so nothing here
+/// may be a trait-dependent system color (UIColor.label and friends resolve to
+/// near-white in dark mode and would render as invisible text on the page).
+private enum PDFPalette {
+    static let page = UIColor.white
+    static let title = UIColor(white: 0.05, alpha: 1)
+    static let body = UIColor(white: 0.25, alpha: 1)
+    static let secondary = UIColor(white: 0.45, alpha: 1)
+    static let separator = UIColor(white: 0.75, alpha: 1)
+    static let headerFill = UIColor(white: 0.91, alpha: 1)
+    static let rowBorder = UIColor(white: 0.85, alpha: 1)
+}
+
 /// Renders a formatted PDF analytics report from test data
 enum AnalyticsReportRenderer {
     // MARK: - Public
@@ -33,7 +47,7 @@ enum AnalyticsReportRenderer {
             cursor.drawText(
                 "Generated \(dateFormatter.string(from: Date()))",
                 font: .systemFont(ofSize: 10),
-                color: .secondaryLabel,
+                color: PDFPalette.secondary,
                 width: contentWidth
             )
 
@@ -42,7 +56,7 @@ enum AnalyticsReportRenderer {
             cursor.drawText(
                 "\(reports.count) reports — \(dateFormatter.string(from: earliest)) to \(dateFormatter.string(from: latest))",
                 font: .systemFont(ofSize: 10),
-                color: .secondaryLabel,
+                color: PDFPalette.secondary,
                 width: contentWidth
             )
             cursor.y += 16
@@ -57,6 +71,15 @@ enum AnalyticsReportRenderer {
             drawGradeTable(reports: reports, cursor: &cursor, width: contentWidth)
             cursor.y += 20
 
+            // Trends (a regression needs at least 3 reports)
+            if reports.count >= 3 {
+                cursor.drawSectionHeader("Trends", width: contentWidth)
+                drawTrendTable(reports: reports, cursor: &cursor, width: contentWidth)
+                cursor.y += 10
+                drawPerPairTrendTable(reports: reports, cursor: &cursor, width: contentWidth)
+                cursor.y += 20
+            }
+
             // Per-pair breakdown
             cursor.drawSectionHeader("Performance by Device Pair", width: contentWidth)
             drawPairTable(reports: reports, cursor: &cursor, width: contentWidth)
@@ -68,8 +91,13 @@ enum AnalyticsReportRenderer {
             cursor.y += 20
 
             // Per-OS version
-            cursor.drawSectionHeader("Performance by iPadOS Version", width: contentWidth)
+            cursor.drawSectionHeader("Performance by OS Version", width: contentWidth)
             drawOSVersionTable(reports: reports, cursor: &cursor, width: contentWidth)
+            cursor.y += 20
+
+            // Per-OS pair (controller OS → responder OS)
+            cursor.drawSectionHeader("Performance by OS Version Pair", width: contentWidth)
+            drawOSPairTable(reports: reports, cursor: &cursor, width: contentWidth)
             cursor.y += 20
 
             // Responder vs Controller system metrics comparison
@@ -106,7 +134,7 @@ enum AnalyticsReportRenderer {
             drawAllTestsTable(reports: reports, cursor: &cursor, width: contentWidth)
         }
 
-        let fileName = "iPadDx_Analytics_\(reports.count)_reports.pdf"
+        let fileName = "iPadDx_Analytics_\(reports.count)_reports_\(ReportExporter.fileStamp()).pdf"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         try? data.write(to: url)
         return url
@@ -246,10 +274,10 @@ enum AnalyticsReportRenderer {
             let ctrlMem = devReports.map(\.results.systemMetrics.peakMemoryMB).reduce(0, +) / n
             let respMem = devReports.compactMap(\.results.responderMetrics?.peakMemoryMB).reduce(0, +) / n
             let respDrain = devReports.compactMap(\.results.responderMetrics?.batteryDrainPercent).reduce(0, +) / n
-            // Worst thermal across responder reports
-            let thermalOrder = ["Nominal", "Fair", "Serious", "Critical"]
+            // Worst thermal across responder reports. An unrecognized state ranks worst,
+            // never best — we must not report an unknown state as "Nominal".
             let worstThermal = devReports.compactMap(\.results.responderMetrics?.thermalStateDuringTest)
-                .max(by: { (thermalOrder.firstIndex(of: $0) ?? 0) < (thermalOrder.firstIndex(of: $1) ?? 0) }) ?? "—"
+                .max(by: { thermalRank($0) < thermalRank($1) }) ?? "—"
 
             cursor.drawTableRow(
                 [
@@ -272,7 +300,7 @@ enum AnalyticsReportRenderer {
     private static func drawOSVersionTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
         let cols: [CGFloat] = [0.18, 0.08, 0.12, 0.12, 0.12, 0.12, 0.12, 0.14]
         cursor.drawTableRow(
-            ["iPadOS", "#", "Lat (ms)", "P95 (ms)", "Thru (MB/s)", "Jitter (ms)", "Loss (%)", "Fail Rate (%)"],
+            ["OS", "#", "Lat (ms)", "P95 (ms)", "Thru (MB/s)", "Jitter (ms)", "Loss (%)", "Fail Rate (%)"],
             columnWidths: cols, totalWidth: width, isHeader: true
         )
 
@@ -298,6 +326,39 @@ enum AnalyticsReportRenderer {
                     f(vReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
                     f(vReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
                     f(vReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
+                    f(Double(failCount) / n * 100),
+                ],
+                columnWidths: cols, totalWidth: width, isHeader: false
+            )
+        }
+    }
+
+    // MARK: - OS Version Pair
+
+    private static func drawOSPairTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
+        let cols: [CGFloat] = [0.25, 0.07, 0.11, 0.11, 0.11, 0.11, 0.11, 0.13]
+        cursor.drawTableRow(
+            ["OS Pair", "#", "Lat (ms)", "P95 (ms)", "Thru (MB/s)", "Jitter (ms)", "Loss (%)", "Fail Rate (%)"],
+            columnWidths: cols, totalWidth: width, isHeader: true
+        )
+
+        let grouped = Dictionary(grouping: reports) {
+            "\($0.localDevice.osVersion) \u{2192} \($0.remoteDevice.osVersion)"
+        }
+
+        for (pair, pairReports) in grouped.sorted(by: { $0.key < $1.key }) {
+            let n = Double(pairReports.count)
+            let failCount = pairReports
+                .filter { $0.results.overallGrade == "Poor" || $0.results.overallGrade == "Fair" }.count
+            cursor.drawTableRow(
+                [
+                    pair,
+                    "\(pairReports.count)",
+                    f(pairReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
+                    f(pairReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
+                    f(pairReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
+                    f(pairReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
+                    f(pairReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
                     f(Double(failCount) / n * 100),
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
@@ -466,6 +527,139 @@ enum AnalyticsReportRenderer {
         }
     }
 
+    // MARK: - Trends
+
+    /// The real observation window the regressions were fitted over.
+    private static func trendPeriod(for reports: [TestReport]) -> String {
+        TrendAnalyzer.describePeriod(dates: reports.map(\.date))
+    }
+
+    private static func trendMetrics() -> [(name: String, value: (TestReport) -> Double, lowerIsBetter: Bool)] {
+        [
+            (name: "Avg Latency", value: { $0.results.latencyBurst.avg }, lowerIsBetter: true),
+            (name: "P95 Latency", value: { $0.results.latencyBurst.p95 }, lowerIsBetter: true),
+            (
+                name: "Throughput",
+                value: { $0.results.sustainedThroughput.bytesPerSecond / 1_000_000 },
+                lowerIsBetter: false
+            ),
+            (name: "Jitter", value: { $0.results.jitterMeasurement.averageJitter }, lowerIsBetter: true),
+            (name: "Packet Loss", value: { $0.results.packetLossStress.lostPercent }, lowerIsBetter: true),
+        ]
+    }
+
+    private static func drawTrendTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
+        let cols: [CGFloat] = [0.24, 0.16, 0.16, 0.16, 0.28]
+        cursor.drawTableRow(
+            ["Metric", "Direction", "Change", "Confidence", "Period"],
+            columnWidths: cols, totalWidth: width, isHeader: true
+        )
+
+        let period = trendPeriod(for: reports)
+        for metric in trendMetrics() {
+            let samples = reports.map { (date: $0.date, value: metric.value($0)) }
+            guard let trend = TrendAnalyzer.analyzeTrend(
+                samples: samples,
+                metric: metric.name,
+                lowerIsBetter: metric.lowerIsBetter,
+                period: period
+            ) else { continue }
+            cursor.drawTableRow(
+                [
+                    trend.metric,
+                    trend.isFlat ? "Flat" : trend.direction.rawValue.capitalized,
+                    trend.isFlat ? "no variation" : String(format: "%+.1f%%", trend.changePercent),
+                    trend.isFlat ? "—" : String(format: "%.0f%%", trend.confidence * 100),
+                    trend.period,
+                ],
+                columnWidths: cols, totalWidth: width, isHeader: false
+            )
+        }
+    }
+
+    /// Per-pair trends — "which pairs are getting worse", degrading pairs first.
+    private static func drawPerPairTrendTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
+        cursor.drawText("Trends by Device Pair", font: .systemFont(ofSize: 10, weight: .medium), width: width)
+
+        let cols: [CGFloat] = [0.24, 0.07, 0.15, 0.13, 0.15, 0.13, 0.13]
+        cursor.drawTableRow(
+            ["Pair", "#", "Latency", "Lat Δ", "Throughput", "Thru Δ", "Confidence"],
+            columnWidths: cols, totalWidth: width, isHeader: true
+        )
+
+        let grouped = Dictionary(grouping: reports) {
+            "\($0.localDevice.chipFamily) \u{2192} \($0.remoteDevice.chipFamily)"
+        }
+
+        struct PairTrend {
+            let pair: String
+            let count: Int
+            let latency: TrendResult
+            let throughput: TrendResult?
+        }
+
+        var rows: [PairTrend] = []
+        for (pair, pairReports) in grouped {
+            let period = trendPeriod(for: pairReports)
+            guard let latency = TrendAnalyzer.analyzeTrend(
+                samples: pairReports.map { (date: $0.date, value: $0.results.latencyBurst.avg) },
+                metric: "Avg Latency", lowerIsBetter: true, period: period
+            ) else { continue }
+            let throughput = TrendAnalyzer.analyzeTrend(
+                samples: pairReports
+                    .map { (date: $0.date, value: $0.results.sustainedThroughput.bytesPerSecond / 1_000_000) },
+                metric: "Throughput", lowerIsBetter: false, period: period
+            )
+            rows.append(PairTrend(pair: pair, count: pairReports.count, latency: latency, throughput: throughput))
+        }
+
+        guard !rows.isEmpty else {
+            cursor.drawTableRow(
+                ["No pair has the 3+ reports a trend needs.", "", "", "", "", "", ""],
+                columnWidths: cols, totalWidth: width, isHeader: false
+            )
+            return
+        }
+
+        // Degrading first, then the largest movement.
+        let sorted = rows.sorted { lhs, rhs in
+            let lhsRank = trendRank(lhs.latency.direction)
+            let rhsRank = trendRank(rhs.latency.direction)
+            if lhsRank != rhsRank {
+                return lhsRank < rhsRank
+            }
+            return abs(lhs.latency.changePercent) > abs(rhs.latency.changePercent)
+        }
+        for row in sorted {
+            cursor.drawTableRow(
+                [
+                    row.pair,
+                    "\(row.count)",
+                    row.latency.isFlat ? "Flat" : row.latency.direction.rawValue.capitalized,
+                    row.latency.isFlat ? "—" : String(format: "%+.1f%%", row.latency.changePercent),
+                    row.throughput.map { $0.isFlat ? "Flat" : $0.direction.rawValue.capitalized } ?? "—",
+                    row.throughput.map { $0.isFlat ? "—" : String(format: "%+.1f%%", $0.changePercent) } ?? "—",
+                    row.latency.isFlat ? "—" : String(format: "%.0f%%", row.latency.confidence * 100),
+                ],
+                columnWidths: cols, totalWidth: width, isHeader: false
+            )
+        }
+    }
+
+    /// Worsening pairs sort first.
+    private static func trendRank(_ direction: TrendDirection) -> Int {
+        switch direction {
+        case .degrading: 0
+        case .stable: 1
+        case .improving: 2
+        }
+    }
+
+    private static func thermalRank(_ state: String) -> Int {
+        let order = ["Nominal", "Fair", "Serious", "Critical"]
+        return order.firstIndex(of: state) ?? order.count
+    }
+
     private static func f(_ value: Double) -> String {
         String(format: "%.1f", value)
     }
@@ -493,6 +687,10 @@ private struct Cursor {
 
     mutating func beginPage() {
         context.beginPage()
+        // Explicit page fill — without it the page is transparent and dark viewers
+        // (or dark-mode Quick Look) show light text on a dark ground.
+        PDFPalette.page.setFill()
+        UIBezierPath(rect: pageRect).fill()
         y = margin
     }
 
@@ -505,7 +703,7 @@ private struct Cursor {
     mutating func drawText(
         _ text: String,
         font: UIFont = .systemFont(ofSize: 10),
-        color: UIColor = .label,
+        color: UIColor = PDFPalette.title,
         width: CGFloat
     ) {
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
@@ -527,7 +725,7 @@ private struct Cursor {
         let path = UIBezierPath()
         path.move(to: CGPoint(x: x, y: y))
         path.addLine(to: CGPoint(x: x + width, y: y))
-        UIColor.separator.setStroke()
+        PDFPalette.separator.setStroke()
         path.lineWidth = 0.5
         path.stroke()
         y += 8
@@ -546,11 +744,11 @@ private struct Cursor {
         ensureSpace(rowHeight + 2)
 
         let font: UIFont = isHeader ? .systemFont(ofSize: 8.5, weight: .semibold) : .systemFont(ofSize: 8.5)
-        let color: UIColor = isHeader ? .label : .darkGray
+        let color: UIColor = isHeader ? PDFPalette.title : PDFPalette.body
 
         if isHeader {
             let bgRect = CGRect(x: x, y: y - 1, width: totalWidth, height: rowHeight + 2)
-            UIColor.systemGray5.setFill()
+            PDFPalette.headerFill.setFill()
             UIBezierPath(rect: bgRect).fill()
         }
 
@@ -572,7 +770,7 @@ private struct Cursor {
         let borderPath = UIBezierPath()
         borderPath.move(to: CGPoint(x: x, y: y))
         borderPath.addLine(to: CGPoint(x: x + totalWidth, y: y))
-        UIColor.systemGray4.setStroke()
+        PDFPalette.rowBorder.setStroke()
         borderPath.lineWidth = 0.25
         borderPath.stroke()
         y += 1

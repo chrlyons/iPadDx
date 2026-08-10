@@ -215,7 +215,10 @@ class BonjourService {
             let ready = await manager.waitForReady(timeout: 15)
             guard ready else {
                 peer.connectionState = .failed
-                statusMessage = "Connection to \(peer.name) timed out"
+                let reason = manager.lastDisconnectReason
+                statusMessage = reason == .tlsError
+                    ? "Connection to \(peer.name) failed (TLS error)"
+                    : "Connection to \(peer.name) timed out"
                 return
             }
             peer.connectionState = .connected
@@ -267,7 +270,9 @@ class BonjourService {
     func enableConductorMode() {
         guard appMode == .standalone else { return }
         // Disconnect any standalone connection first
-        if connectedPeer != nil { disconnect() }
+        if connectedPeer != nil {
+            disconnect()
+        }
         appMode = .conductor
         let cs = ConductorService()
         cs.conductorBonjourName = localDeviceName
@@ -339,13 +344,21 @@ class BonjourService {
         statusMessage = "Agent — Connected to \(conductorName)"
 
         // Advertise supported bridge transports to conductor
-        conductorConnection.send(.agentCapabilities(supportedBridges: BridgeRegistry.enabledBridgeIDs))
+        // Advertise what this device's runtimes can actually do right now, not what the
+        // build happens to contain. A bridge whose runtime failed to start (or that is
+        // compiled out on this platform) must not be offered to the conductor.
+        conductorConnection.send(.agentCapabilities(
+            supportedBridges: BridgeRegistry.enabledBridgeIDs.filter { BridgeRegistry.isBridgeHealthy($0) },
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
+            iosVersion: UIDevice.current.systemVersion
+        ))
     }
 
     func leaveAgentMode() {
         AppLog("Leaving agent mode", category: "Bonjour")
         agentService?.reset()
         agentService = nil
+        conductorService = nil
 
         // Clean up the underlying conductor connection
         let engine = diagnosticEngine
@@ -433,16 +446,22 @@ class BonjourService {
         for result in results {
             if case let .service(name, _, _, _) = result.endpoint {
                 // Skip our own service
-                if name == localDeviceName { continue }
-                let peer = PeerDevice(name: name, endpoint: result.endpoint)
-                peer.bonjourName = name
-                // Preserve state if we already knew about this peer
-                if let existing = discoveredPeers.first(where: { $0.bonjourName == name || $0.name == name }) {
-                    peer.connectionState = existing.connectionState
-                    peer.metrics = existing.metrics
-                    peer.bonjourName = existing.bonjourName
+                if name == localDeviceName {
+                    continue
                 }
-                newPeers.append(peer)
+                // Reuse the existing PeerDevice for a peer we already know about.
+                // Building a fresh one on every browse callback gave it a new UUID and
+                // silently discarded everything learned from peerInfo (stableDeviceID,
+                // chipFamily, model, role), as well as churning SwiftUI list identity.
+                if let existing = discoveredPeers.first(where: { $0.bonjourName == name || $0.name == name }) {
+                    existing.endpoint = result.endpoint
+                    existing.bonjourName = existing.bonjourName ?? name
+                    newPeers.append(existing)
+                } else {
+                    let peer = PeerDevice(name: name, endpoint: result.endpoint)
+                    peer.bonjourName = name
+                    newPeers.append(peer)
+                }
             }
         }
         let added = newPeers.filter { np in !discoveredPeers.contains { $0.name == np.name } }
@@ -485,7 +504,9 @@ class BonjourService {
             }
             Task {
                 let ready = await manager.waitForReady(timeout: 15)
-                if ready { engine.start() }
+                if ready {
+                    engine.start()
+                }
             }
             return
         }
@@ -567,6 +588,19 @@ class BonjourService {
         Task {
             let ready = await manager.waitForReady(timeout: 15)
             guard ready else {
+                // Tear the half-open connection down. Leaving connectionManager and
+                // diagnosticEngine populated here made every subsequent inbound
+                // connection be rejected as a duplicate, and left the NWConnection
+                // itself uncancelled.
+                AppLog("Incoming connection never became ready — cleaning up", level: .warning, category: "Bonjour")
+                engine.stop()
+                manager.onConnectionLost = nil
+                manager.disconnect()
+                conn.cancel()
+                if connectionManager === manager {
+                    connectionManager = nil
+                    diagnosticEngine = nil
+                }
                 guard appMode == .standalone else { return }
                 peer.connectionState = .failed
                 statusMessage = "Incoming connection timed out"

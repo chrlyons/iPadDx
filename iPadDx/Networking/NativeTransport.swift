@@ -7,6 +7,12 @@ final class NativeTransport: TransportProvider {
     let bridgeID = "native"
     let bridgeLabel = "Native (baseline)"
 
+    /// Largest frame accepted off the wire. Throughput tests legitimately send
+    /// multi-megabyte payloads, so this is deliberately generous — it exists to
+    /// stop a corrupt or hostile length prefix from requesting an absurd
+    /// allocation, not to constrain real traffic.
+    static let maxFrameLength = 64 * 1024 * 1024 // 64 MB
+
     var onStateChange: ((TransportState) -> Void)?
 
     private var connection: NWConnection?
@@ -121,16 +127,35 @@ final class NativeTransport: TransportProvider {
             }
 
             guard let lengthData = data, lengthData.count == 4 else {
-                if isComplete { onEOF() }
-                else { self?.receiveFrame(conn: conn, handler: handler, onEOF: onEOF, onError: onError) }
+                if isComplete {
+                    onEOF()
+                } else {
+                    self?.receiveFrame(conn: conn, handler: handler, onEOF: onEOF, onError: onError)
+                }
                 return
             }
 
-            let length = lengthData.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian }
+            let length = Int(lengthData.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian })
+
+            // The length comes straight off the wire: 0 traps inside
+            // NWConnection (invalid parameter) and an absurd value would ask
+            // for a huge allocation. Either means the stream is desynced or
+            // corrupt, and nothing useful can be read after it — log and close
+            // the connection instead of trapping or reading garbage.
+            guard length > 0, length <= Self.maxFrameLength else {
+                AppLog(
+                    "invalid frame length \(length) (max \(Self.maxFrameLength)) — closing connection",
+                    level: .error,
+                    category: "NativeTransport"
+                )
+                conn.cancel()
+                onError(length == 0 ? .posix(.EBADMSG) : .posix(.EMSGSIZE))
+                return
+            }
 
             conn.receive(
-                minimumIncompleteLength: Int(length),
-                maximumLength: Int(length)
+                minimumIncompleteLength: length,
+                maximumLength: length
             ) { [weak self] payload, _, isComplete2, error in
                 if let error {
                     onError(error)

@@ -105,6 +105,10 @@ struct AgentStatusView: View {
                         }
                     }
 
+                // Reachable: AgentService sets `.completed` after a full run's
+                // report has been sent to the conductor (a *cancelled* run
+                // returns to `.idle` instead, so a partial run never shows as
+                // completed here).
                 case .completed:
                     HStack(spacing: 12) {
                         Image(systemName: "checkmark.seal.fill")

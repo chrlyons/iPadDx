@@ -11,25 +11,25 @@ enum CapacitorBridgeManager {
     private static var isReady = false
     static var isHealthy = false
     private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
-    private static var echoCallbacks: [String: (String) -> Void] = [:]
-    private static var callIdCounter = 0
+    private static var registry = BridgeCallbackRegistry(prefix: "cap")
 
     static func nextCallId() -> String {
-        callIdCounter += 1
-        return "cap_\(callIdCounter)"
+        registry.nextCallId()
     }
 
     static func registerCallback(callId: String, callback: @escaping (String) -> Void) {
-        echoCallbacks[callId] = callback
+        registry.register(
+            callId: callId,
+            callback: callback
+        )
     }
 
     static func cancelCallback(callId: String) {
-        echoCallbacks.removeValue(forKey: callId)
+        registry.cancel(callId: callId)
     }
 
     static func handleEchoResult(callId: String, payload: String) {
-        let callback = echoCallbacks.removeValue(forKey: callId)
-        callback?(payload)
+        registry.handle(callId: callId, payload: payload)
     }
 
     static func shared() async -> CAPBridgeViewController {
@@ -53,21 +53,16 @@ enum CapacitorBridgeManager {
         vc.loadViewIfNeeded()
 
         // Wait for the web view to load and the JS bridge to signal readiness
-        var attempts = 0
-        let maxAttempts = 50 // 5 seconds max
-        while attempts < maxAttempts {
-            if isReady { break }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            attempts += 1
-        }
-
-        if !isReady {
+        if let attempt = await waitForBridgeReady(isReady: { isReady }) {
+            AppLog("Capacitor bridge ready after \(attempt * 100)ms", category: "CapacitorTransport")
+            isHealthy = true
+        } else {
             AppLog("Capacitor bridge did not become ready after 5s", level: .error, category: "CapacitorTransport")
+            // Mark init completed so subsequent shared() callers take the fast path
+            // and don't deadlock on an un-resumable continuation. isHealthy=false
+            // is the signal callers check via BridgeRegistry.isBridgeHealthy().
             isReady = true
             isHealthy = false
-        } else {
-            AppLog("Capacitor bridge ready after \(attempts * 100)ms", category: "CapacitorTransport")
-            isHealthy = true
         }
 
         for cont in readyContinuations {

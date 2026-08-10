@@ -25,7 +25,9 @@ class PeerDevice: Identifiable, Hashable {
 
     let id: UUID
     var name: String
-    let endpoint: NWEndpoint
+    /// Refreshed on each browse update: mDNS can hand back a new endpoint for the
+    /// same service, and the peer object is reused so its learned identity survives.
+    var endpoint: NWEndpoint
     var connectionState: ConnectionState = .discovered
     var metrics: DiagnosticMetrics = .init()
     var role: DeviceRole = .none

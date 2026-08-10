@@ -26,6 +26,13 @@ private enum AnalyticsMetric: String, CaseIterable, Identifiable {
     }
 }
 
+/// The artefacts the analytics screen can export.
+private enum AnalyticsExportKind {
+    case pdf
+    case summaryCSV
+    case analyticsCSV
+}
+
 private enum DateRangePreset: String, CaseIterable, Identifiable {
     case all = "All Time"
     case week = "7 Days"
@@ -58,6 +65,8 @@ struct ReportAnalyticsView: View {
     @State private var customEnd: Date = .init()
     @State private var selectedMetric: AnalyticsMetric = .latencyAvg
     @State private var exportURLs: [URL]?
+    @State private var isExporting = false
+    @State private var exportError: String?
 
     private var effectiveDateRange: (start: Date?, end: Date?) {
         switch datePreset {
@@ -113,6 +122,18 @@ struct ReportAnalyticsView: View {
         .sorted { $0.pair < $1.pair }
     }
 
+    private var osPairAverages: [OSPairAggregate] {
+        let grouped: [String: [ReportSummary]] = Dictionary(grouping: filteredSummaries) {
+            "\($0.localOS) \u{2192} \($0.remoteOS)"
+        }
+        return grouped.map { entry -> OSPairAggregate in
+            let summaries = entry.value
+            let avg = summaries.map { metricValue(for: $0) }.reduce(0, +) / Double(summaries.count)
+            return OSPairAggregate(pair: entry.key, average: avg, count: summaries.count)
+        }
+        .sorted { $0.pair < $1.pair }
+    }
+
     private var gradeDistribution: [(grade: String, count: Int, color: Color)] {
         let grades = ["Excellent", "Good", "Fair", "Poor"]
         let colors: [Color] = [.green, .blue, .orange, .red]
@@ -135,8 +156,11 @@ struct ReportAnalyticsView: View {
                 VStack(spacing: 16) {
                     filterBar
                     summaryCards
+                    trendBadgesSection
+                    pairTrendsSection
                     trendChart
                     pairComparisonChart
+                    osPairComparisonChart
 
                     // Bridge comparison (only when multiple bridges exist)
                     if store.availableBridgeTransports().count > 1 {
@@ -153,17 +177,65 @@ struct ReportAnalyticsView: View {
         .toolbar {
             if !store.summaries.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        exportAnalytics()
+                    Menu {
+                        Button {
+                            exportAnalytics(kinds: [.pdf, .summaryCSV])
+                        } label: {
+                            Label("PDF + Summary CSV", systemImage: "doc.on.doc")
+                        }
+                        Button {
+                            exportAnalytics(kinds: [.pdf])
+                        } label: {
+                            Label("Analytics PDF", systemImage: "doc.richtext")
+                        }
+                        Button {
+                            exportAnalytics(kinds: [.analyticsCSV])
+                        } label: {
+                            Label("Analytics CSV (raw data)", systemImage: "chart.bar.doc.horizontal")
+                        }
+                        Button {
+                            exportAnalytics(kinds: [.summaryCSV])
+                        } label: {
+                            Label("Summary CSV (one row per report)", systemImage: "tablecells")
+                        }
                     } label: {
                         Label("Export", systemImage: "square.and.arrow.up")
                     }
+                    .disabled(isExporting)
                 }
             }
         }
+        .overlay {
+            if isExporting {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Building analytics export…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(20)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .alert(
+            "Export failed",
+            isPresented: Binding(get: { exportError != nil }, set: {
+                if !$0 {
+                    exportError = nil
+                }
+            })
+        ) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
         .sheet(isPresented: Binding(
             get: { exportURLs != nil },
-            set: { if !$0 { exportURLs = nil } }
+            set: {
+                if !$0 {
+                    exportURLs = nil
+                }
+            }
         )) {
             if let urls = exportURLs {
                 ShareSheet(activityItems: urls)
@@ -172,18 +244,32 @@ struct ReportAnalyticsView: View {
         }
     }
 
-    private func exportAnalytics() {
-        let ids = Set(filteredSummaries.map(\.id))
-        let fullReports = store.loadFullReports(ids: ids)
-        var urls: [URL] = []
-        if let pdfURL = AnalyticsReportRenderer.renderPDF(reports: fullReports) {
-            urls.append(pdfURL)
+    /// Loads the matching reports (SwiftData stays on the main actor) and then builds
+    /// the files off the main actor — rendering a PDF for a large store takes seconds.
+    private func exportAnalytics(kinds: [AnalyticsExportKind]) {
+        let reports = store.loadFullReports(ids: Set(filteredSummaries.map(\.id)))
+        guard !reports.isEmpty else {
+            exportError = "There are no reports matching the current filters to export."
+            return
         }
-        if let summaryURL = store.exportSummaryCSV(for: fullReports) {
-            urls.append(summaryURL)
-        }
-        if !urls.isEmpty {
-            exportURLs = urls
+        let reportStore = store
+        isExporting = true
+        Task {
+            let urls = await Task.detached(priority: .userInitiated) { () -> [URL] in
+                kinds.compactMap { kind -> URL? in
+                    switch kind {
+                    case .pdf: return AnalyticsReportRenderer.renderPDF(reports: reports)
+                    case .summaryCSV: return reportStore.exportSummaryCSV(for: reports)
+                    case .analyticsCSV: return reportStore.exportAnalyticsCSV(for: reports)
+                    }
+                }
+            }.value
+            isExporting = false
+            if urls.isEmpty {
+                exportError = "The export files could not be written."
+            } else {
+                exportURLs = urls
+            }
         }
     }
 
@@ -341,6 +427,204 @@ struct ReportAnalyticsView: View {
         }
     }
 
+    // MARK: - Trend Badges
+
+    private var trendBadgesSection: some View {
+        let summaries = filteredSummaries
+        let trends = computeTrends(from: summaries)
+
+        return Group {
+            if !trends.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                            .foregroundStyle(.blue)
+                        Text("Trend Analysis")
+                            .font(.headline)
+                        Spacer()
+                        Text(summaries.count >= 3 ? "Based on \(summaries.count) reports" : "")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    LazyVGrid(
+                        columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
+                        spacing: 8
+                    ) {
+                        ForEach(trends) { trend in
+                            VStack(spacing: 4) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: trend.direction.icon)
+                                        .font(.caption)
+                                        .foregroundStyle(Color.trendColor(trend.direction))
+                                    Text(String(format: "%+.1f%%", trend.changePercent))
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(Color.trendColor(trend.direction))
+                                }
+                                Text(trend.metric)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                // Confidence bar
+                                GeometryReader { geo in
+                                    ZStack(alignment: .leading) {
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .fill(Color.gray.opacity(0.15))
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .fill(Color.trendColor(trend.direction).opacity(0.4))
+                                            .frame(width: geo.size.width * trend.confidence)
+                                    }
+                                }
+                                .frame(height: 3)
+                                Text(trend.isFlat
+                                    ? "no variation in samples"
+                                    : String(format: "%.0f%% confidence", trend.confidence * 100))
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(.tertiary)
+                                Text(trend.period)
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                            .padding(8)
+                            .background(
+                                Color.trendColor(trend.direction).opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 8)
+                            )
+                        }
+                    }
+                }
+                .padding()
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+
+    private func computeTrends(from summaries: [ReportSummary]) -> [TrendResult] {
+        guard summaries.count >= 3 else { return [] }
+
+        let metrics: [(name: String, keyPath: KeyPath<ReportSummary, Double>, lowerIsBetter: Bool)] = [
+            ("Latency Avg", \.latencyAvg, true),
+            ("Latency P95", \.latencyP95, true),
+            ("Throughput", \.throughputBps, false),
+            ("Jitter", \.jitterAvg, true),
+            ("Packet Loss", \.packetLossPercent, true),
+        ]
+
+        // Real window the regression was fitted over — shown on each badge.
+        let period = TrendAnalyzer.describePeriod(dates: summaries.map(\.date))
+
+        return metrics.compactMap { metric in
+            let samples = summaries.map { (date: $0.date, value: $0[keyPath: metric.keyPath]) }
+            return TrendAnalyzer.analyzeTrend(
+                samples: samples,
+                metric: metric.name,
+                lowerIsBetter: metric.lowerIsBetter,
+                period: period
+            )
+        }
+    }
+
+    // MARK: - Per-Pair Trends
+
+    /// One trend per device pair for the selected metric — answers "which pairs are
+    /// getting worse". Pairs with fewer than 3 reports cannot be fitted and are listed
+    /// as such rather than given a made-up trend.
+    private var pairTrends: [PairTrend] {
+        let grouped = Dictionary(grouping: filteredSummaries) {
+            "\($0.localChip) \u{2192} \($0.remoteChip)"
+        }
+        return grouped.map { pair, items in
+            let sorted = items.sorted { $0.date < $1.date }
+            let period = TrendAnalyzer.describePeriod(dates: sorted.map(\.date))
+            // nil when the pair has fewer than 3 reports — no trend is invented.
+            let trend = TrendAnalyzer.analyzeTrend(
+                samples: sorted.map { (date: $0.date, value: metricValue(for: $0)) },
+                metric: selectedMetric.rawValue,
+                lowerIsBetter: selectedMetric.lowerIsBetter,
+                period: period
+            )
+            return PairTrend(pair: pair, count: sorted.count, trend: trend, period: period)
+        }
+        .sorted { lhs, rhs in
+            let lhsRank = trendRank(lhs.trend?.direction)
+            let rhsRank = trendRank(rhs.trend?.direction)
+            if lhsRank != rhsRank {
+                return lhsRank < rhsRank
+            }
+            return abs(lhs.trend?.changePercent ?? 0) > abs(rhs.trend?.changePercent ?? 0)
+        }
+    }
+
+    /// Worsening pairs sort first; pairs with no fittable trend sort last.
+    private func trendRank(_ direction: TrendDirection?) -> Int {
+        guard let direction else { return 3 }
+        switch direction {
+        case .degrading: return 0
+        case .stable: return 1
+        case .improving: return 2
+        }
+    }
+
+    private var pairTrendsSection: some View {
+        let trends = pairTrends
+        return Group {
+            if !trends.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "chart.line.downtrend.xyaxis")
+                            .foregroundStyle(.orange)
+                        Text("\(selectedMetric.rawValue) Trend by Device Pair").font(.headline)
+                        Spacer()
+                        Text("worsening first").font(.caption).foregroundStyle(.secondary)
+                    }
+
+                    ForEach(trends) { item in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.pair).font(.subheadline).fontWeight(.medium)
+                                Text("\(item.count) reports · \(item.period)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if let trend = item.trend {
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: trend.direction.icon)
+                                            .font(.caption)
+                                        Text(trend.isFlat
+                                            ? "flat"
+                                            : String(format: "%+.1f%%", trend.changePercent))
+                                            .font(.caption).fontWeight(.semibold)
+                                    }
+                                    .foregroundStyle(Color.trendColor(trend.direction))
+                                    Text(trend.isFlat
+                                        ? "no variation"
+                                        : String(format: "%.0f%% confidence", trend.confidence * 100))
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.tertiary)
+                                }
+                            } else {
+                                Text("needs 3+ reports")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .padding(8)
+                        .background(
+                            Color.trendColor(item.trend?.direction ?? .stable)
+                                .opacity(item.trend == nil ? 0.03 : 0.06),
+                            in: RoundedRectangle(cornerRadius: 8)
+                        )
+                    }
+                }
+                .padding()
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+
     // MARK: - Trend Chart
 
     private var trendChart: some View {
@@ -490,26 +774,67 @@ struct ReportAnalyticsView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    // MARK: - OS Version Pair Comparison
+
+    private var osPairComparisonChart: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "arrow.left.arrow.right").foregroundStyle(.indigo)
+                Text("\(selectedMetric.rawValue) by OS Version Pair").font(.headline)
+                Spacer()
+            }
+
+            if !osPairAverages.isEmpty {
+                Chart(osPairAverages) { item in
+                    BarMark(
+                        x: .value(selectedMetric.rawValue, item.average),
+                        y: .value("OS Pair", item.pair)
+                    )
+                    .foregroundStyle(by: .value("OS Pair", item.pair))
+                    .annotation(position: .trailing, spacing: 4) {
+                        Text(formatMetricValue(item.average))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .chartXAxisLabel(selectedMetric.unit)
+                .chartLegend(.hidden)
+                .frame(height: max(CGFloat(osPairAverages.count) * 50, 80))
+            } else {
+                Text("No data for selected filters.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(height: 80).frame(maxWidth: .infinity)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
     // MARK: - OS Version Breakdown
 
     private var osVersionAggregates: [OSAggregate] {
         var map: [String: [ReportSummary]] = [:]
         for summary in filteredSummaries {
             map[summary.localOS, default: []].append(summary)
-            map[summary.remoteOS, default: []].append(summary)
+            // A report where both devices run the same version belongs to that
+            // bucket once, not twice.
+            if summary.remoteOS != summary.localOS {
+                map[summary.remoteOS, default: []].append(summary)
+            }
         }
         return map.map { version, items in
             let n = Double(items.count)
-            let avgLat = items.map(\.latencyAvg).reduce(0, +) / n
-            let avgLoss = items.map(\.packetLossPercent).reduce(0, +) / n
             let failCount = items.filter { $0.overallGrade == "Poor" || $0.overallGrade == "Fair" }.count
-            let failRate = Double(failCount) / n * 100
             return OSAggregate(
                 version: version,
                 count: items.count,
-                avgLatency: avgLat,
-                avgPacketLoss: avgLoss,
-                failRate: failRate
+                avgLatency: items.map(\.latencyAvg).reduce(0, +) / n,
+                avgLatencyP95: items.map(\.latencyP95).reduce(0, +) / n,
+                avgThroughputMBps: items.map(\.throughputBps).reduce(0, +) / n / 1_000_000,
+                avgJitter: items.map(\.jitterAvg).reduce(0, +) / n,
+                avgPacketLoss: items.map(\.packetLossPercent).reduce(0, +) / n,
+                avgLoadDegradation: items.map(\.loadDegradation).reduce(0, +) / n,
+                failRate: Double(failCount) / n * 100
             )
         }
         .sorted { $0.version < $1.version }
@@ -519,7 +844,7 @@ struct ReportAnalyticsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "gear.badge").foregroundStyle(.indigo)
-                Text("\(selectedMetric.rawValue) by iPadOS Version").font(.headline)
+                Text("\(selectedMetric.rawValue) by OS Version").font(.headline)
                 Spacer()
             }
 
@@ -584,11 +909,16 @@ struct ReportAnalyticsView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// Exhaustive on purpose — no `default`, so a new metric fails to compile rather
+    /// than silently plotting latency under another metric's label.
     private func osMetricValue(for item: OSAggregate) -> Double {
         switch selectedMetric {
         case .latencyAvg: item.avgLatency
+        case .latencyP95: item.avgLatencyP95
+        case .throughput: item.avgThroughputMBps
+        case .jitterAvg: item.avgJitter
         case .packetLoss: item.avgPacketLoss
-        default: item.avgLatency
+        case .loadDegradation: item.avgLoadDegradation
         }
     }
 
@@ -683,7 +1013,9 @@ private struct PairAggregate: Identifiable {
     let count: Int
     let bridge: String?
     var id: String {
-        if let bridge { return "\(pair)|\(bridge)" }
+        if let bridge {
+            return "\(pair)|\(bridge)"
+        }
         return pair
     }
 
@@ -699,9 +1031,33 @@ private struct OSAggregate: Identifiable {
     let version: String
     let count: Int
     let avgLatency: Double
+    let avgLatencyP95: Double
+    let avgThroughputMBps: Double
+    let avgJitter: Double
     let avgPacketLoss: Double
+    let avgLoadDegradation: Double
     let failRate: Double
     var id: String {
         version
+    }
+}
+
+private struct PairTrend: Identifiable {
+    let pair: String
+    let count: Int
+    /// nil when the pair has too few reports to fit a regression.
+    let trend: TrendResult?
+    let period: String
+    var id: String {
+        pair
+    }
+}
+
+private struct OSPairAggregate: Identifiable {
+    let pair: String
+    let average: Double
+    let count: Int
+    var id: String {
+        pair
     }
 }

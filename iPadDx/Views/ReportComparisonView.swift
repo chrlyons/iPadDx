@@ -8,9 +8,10 @@ struct ReportComparisonView: View {
         ScrollView {
             VStack(spacing: 16) {
                 // Headers
+                // A and B follow the order the reports were selected, not fetch order.
                 HStack(spacing: 12) {
-                    reportHeader(reportA, label: "Report A")
-                    reportHeader(reportB, label: "Report B")
+                    reportHeader(reportA, label: "Report A · selected first")
+                    reportHeader(reportB, label: "Report B · selected second")
                 }
 
                 // Grade comparison
@@ -209,7 +210,9 @@ struct ReportComparisonView: View {
     ) -> some View {
         let betterSide: Int? = {
             guard let a = numA, let b = numB, a != b else { return nil }
-            if lowerIsBetter { return a < b ? 0 : 1 }
+            if lowerIsBetter {
+                return a < b ? 0 : 1
+            }
             return a > b ? 0 : 1
         }()
 

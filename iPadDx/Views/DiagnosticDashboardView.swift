@@ -4,6 +4,7 @@ import SwiftUI
 struct DiagnosticDashboardView: View {
     let peer: PeerDevice
     @Environment(BonjourService.self) private var service
+    @Environment(\.colorScheme) private var colorScheme
     @State private var uptimeTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var uptimeDisplay: String = "0m 00s"
 
@@ -18,7 +19,11 @@ struct DiagnosticDashboardView: View {
 
                 // MARK: — Connection Metrics (between devices)
 
-                dashboardSectionLabel("Connection", icon: "arrow.left.arrow.right.circle.fill", color: .blue)
+                dashboardSectionLabel(
+                    "Connection",
+                    icon: "arrow.left.arrow.right.circle.fill",
+                    color: Color.adaptive(.blue, scheme: colorScheme)
+                )
 
                 LazyVGrid(columns: threeColumns, spacing: 12) {
                     signalQualityCard
@@ -31,23 +36,26 @@ struct DiagnosticDashboardView: View {
                 LazyVGrid(columns: fourColumns, spacing: 12) {
                     MetricGaugeView(
                         title: "Min Latency", value: String(format: "%.1fms", metrics.latencyMin),
-                        subtitle: "All-time low", icon: "arrow.down", color: .green,
+                        subtitle: "All-time low", icon: "arrow.down",
+                        color: Color.latencyColor(metrics.latencyMin, scheme: colorScheme),
                         tooltip: "The lowest round-trip latency recorded during this session."
                     )
                     MetricGaugeView(
                         title: "Max Latency", value: String(format: "%.1fms", metrics.latencyMax),
-                        subtitle: "All-time high", icon: "arrow.up", color: .red,
+                        subtitle: "All-time high", icon: "arrow.up",
+                        color: Color.latencyColor(metrics.latencyMax, scheme: colorScheme),
                         tooltip: "The highest round-trip latency recorded. Spikes indicate congestion or interference."
                     )
                     MetricGaugeView(
                         title: "Avg Latency", value: String(format: "%.1fms", metrics.latencyAvg),
-                        subtitle: "Overall average", icon: "equal", color: .blue,
+                        subtitle: "Overall average", icon: "equal",
+                        color: Color.latencyColor(metrics.latencyAvg, scheme: colorScheme),
                         tooltip: "Mean round-trip latency across all samples."
                     )
                     MetricGaugeView(
                         title: "Jitter", value: String(format: "%.1fms", metrics.jitterMs),
                         subtitle: "Latency variation", icon: "waveform.path",
-                        color: metrics.jitterMs < 5 ? .green : metrics.jitterMs < 15 ? .orange : .red,
+                        color: Color.thresholdColor(metrics.jitterMs, good: 5, caution: 15, scheme: colorScheme),
                         tooltip: "Average difference between consecutive latency measurements. Low jitter (<5ms) = stable connection."
                     )
                 }
@@ -66,39 +74,50 @@ struct DiagnosticDashboardView: View {
 
                 // MARK: — Local Device
 
-                dashboardSectionLabel("This Device", icon: "ipad", color: .green)
+                dashboardSectionLabel("This Device", icon: "ipad", color: Color.adaptive(.green, scheme: colorScheme))
 
                 LazyVGrid(columns: fourColumns, spacing: 12) {
                     MetricGaugeView(
                         title: "Battery", value: metrics.batteryPercent,
                         subtitle: "Drain: \(metrics.batteryDrain)", icon: "battery.75percent",
-                        color: metrics.batteryLevel > 0.5 ? .green : metrics.batteryLevel > 0.2 ? .orange : .red,
+                        color: Color.thresholdColor(
+                            Double(metrics.batteryLevel) * 100,
+                            good: 50, caution: 20, higherIsBetter: true, scheme: colorScheme
+                        ),
                         tooltip: "Current battery level and drain since connection started."
                     )
                     MetricGaugeView(
                         title: "Thermal", value: metrics.thermalState,
                         subtitle: metrics.batteryState, icon: "thermometer.medium",
-                        color: metrics.thermalState == "Nominal" ? .green :
-                            metrics.thermalState == "Fair" ? .yellow :
-                            metrics.thermalState == "Serious" ? .orange : .red,
+                        color: Color.thermalColor(metrics.thermalState, scheme: colorScheme),
                         tooltip: "Device thermal state. Serious/Critical may throttle performance."
                     )
                     MetricGaugeView(
                         title: "CPU", value: String(format: "%.0f%%", metrics.cpuUsage),
-                        subtitle: "App usage", icon: "cpu",
-                        color: metrics.cpuUsage < 30 ? .green : metrics.cpuUsage < 60 ? .orange : .red,
-                        tooltip: "CPU usage by this app across all threads."
+                        subtitle: SystemMonitor.cpuUsageConvention, icon: "cpu",
+                        color: Color.thresholdColor(
+                            metrics.cpuUsage,
+                            good: SystemMonitor.cpuGoodThreshold,
+                            caution: SystemMonitor.cpuCautionThreshold,
+                            scheme: colorScheme
+                        ),
+                        tooltip: "CPU used by this app across all its threads, as a percentage of everything the device can do (all cores). One fully saturated thread on a 10-core iPad is about 10%."
                     )
                     MetricGaugeView(
                         title: "Memory", value: String(format: "%.0fMB", metrics.memoryUsedMB),
-                        subtitle: metrics.formattedMemory, icon: "memorychip", color: .indigo,
-                        tooltip: "Physical memory footprint of this app."
+                        subtitle: metrics.formattedMemory, icon: "memorychip",
+                        color: Color.adaptive(.indigo, scheme: colorScheme),
+                        tooltip: "Physical memory footprint of this app, shown next to the device's total RAM. They are different quantities — the app footprint is not a share of device RAM."
                     )
                 }
 
                 // MARK: — Remote Device
 
-                dashboardSectionLabel("Remote Device", icon: "ipad.rear.camera", color: .purple)
+                dashboardSectionLabel(
+                    "Remote Device",
+                    icon: "ipad.rear.camera",
+                    color: Color.adaptive(.purple, scheme: colorScheme)
+                )
 
                 peerInfoCard
 
@@ -125,7 +144,11 @@ struct DiagnosticDashboardView: View {
         }
         .alert("Info", isPresented: Binding(
             get: { activeTooltip != nil },
-            set: { if !$0 { activeTooltip = nil } }
+            set: {
+                if !$0 {
+                    activeTooltip = nil
+                }
+            }
         )) {
             Button("OK") { activeTooltip = nil }
         } message: {
@@ -175,7 +198,9 @@ struct DiagnosticDashboardView: View {
                     Text("·")
                     Text(service.localRole.rawValue)
                         .fontWeight(.semibold)
-                        .foregroundStyle(service.localRole == .controller ? .blue : .orange)
+                        .foregroundStyle(
+                            Color.adaptive(service.localRole == .controller ? .blue : .orange, scheme: colorScheme)
+                        )
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -188,16 +213,11 @@ struct DiagnosticDashboardView: View {
 
     private var signalQualityCard: some View {
         let quality = metrics.signalQuality
-        let color: Color = switch quality {
-        case .excellent: .green
-        case .good: .blue
-        case .fair: .orange
-        case .poor: .red
-        }
         return MetricGaugeView(
             title: "Signal Quality", value: quality.rawValue,
-            subtitle: "Based on latency stability", icon: "wifi", color: color,
-            tooltip: "Derived from the mean and standard deviation of the last 30 latency samples."
+            subtitle: "Latency · jitter · loss", icon: "wifi",
+            color: Color.gradeColor(quality.rawValue, scheme: colorScheme),
+            tooltip: "Graded on the last 30 latency samples (mean and standard deviation), the current jitter, and the measured packet loss. The worst of those four decides the grade — a fast link that drops pings is not Excellent."
         )
     }
 
@@ -205,8 +225,7 @@ struct DiagnosticDashboardView: View {
         MetricGaugeView(
             title: "Latency", value: String(format: "%.1fms", metrics.latencyMs),
             subtitle: "Round-trip time", icon: "bolt.fill",
-            color: metrics.latencyMs < 10 ? .green : metrics.latencyMs < 30 ? .blue : metrics
-                .latencyMs < 100 ? .orange : .red,
+            color: Color.latencyColor(metrics.latencyMs, scheme: colorScheme),
             tooltip: "Round-trip time for a ping to the other device and back. Measured every 0.5s."
         )
     }
@@ -214,7 +233,8 @@ struct DiagnosticDashboardView: View {
     private var connectionInfoCard: some View {
         MetricGaugeView(
             title: "Interface", value: metrics.interfaceTypeString,
-            subtitle: metrics.isExpensive ? "Expensive path" : "Local network", icon: "network", color: .teal,
+            subtitle: metrics.isExpensive ? "Expensive path" : "Local network", icon: "network",
+            color: Color.adaptive(.teal, scheme: colorScheme),
             tooltip: "Network interface type. 'Expensive' means cellular or hotspot."
         )
     }
@@ -222,7 +242,7 @@ struct DiagnosticDashboardView: View {
     private var latencyChartSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: "chart.xyaxis.line").foregroundStyle(.blue)
+                Image(systemName: "chart.xyaxis.line").foregroundStyle(Color.adaptive(.blue, scheme: colorScheme))
                 Text("Latency Over Time").font(.headline)
                 Spacer()
                 Text("\(metrics.latencyHistory.count) samples").font(.caption).foregroundStyle(.secondary)
@@ -233,18 +253,55 @@ struct DiagnosticDashboardView: View {
                 let maxID = samples.last!.id
                 let windowSize = max(maxID - samples.first!.id, 60)
 
-                Chart(samples) { sample in
-                    LineMark(x: .value("Sample", sample.id), y: .value("ms", sample.value))
-                        .foregroundStyle(.blue.gradient)
-                        .interpolationMethod(.catmullRom)
-                    AreaMark(x: .value("Sample", sample.id), y: .value("ms", sample.value))
-                        .foregroundStyle(.blue.opacity(0.1).gradient)
-                        .interpolationMethod(.catmullRom)
+                let lineColor = Color.adaptive(.blue, scheme: colorScheme)
+
+                Chart {
+                    ForEach(samples) { sample in
+                        LineMark(x: .value("Sample", sample.id), y: .value("ms", sample.value))
+                            .foregroundStyle(lineColor.gradient)
+                            .interpolationMethod(.catmullRom)
+                        AreaMark(x: .value("Sample", sample.id), y: .value("ms", sample.value))
+                            .foregroundStyle(lineColor.opacity(0.1).gradient)
+                            .interpolationMethod(.catmullRom)
+                    }
+                    // Anomaly markers
+                    ForEach(metrics.anomalies.filter { $0.id >= (maxID - windowSize) }) { anomaly in
+                        PointMark(x: .value("Sample", anomaly.id), y: .value("ms", anomaly.value))
+                            .foregroundStyle(Color.anomalyColor(anomaly.severity, scheme: colorScheme))
+                            .symbolSize(anomaly.severity == .critical ? 80 : 50)
+                    }
                 }
                 .chartXScale(domain: (maxID - windowSize) ... maxID)
                 .chartYAxisLabel("ms")
                 .chartXAxis(.hidden)
                 .frame(height: 200)
+
+                // Anomaly count badge
+                if !metrics.anomalies.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Color.anomalyColor(.warning, scheme: colorScheme))
+                        let critCount = metrics.anomalies.filter { $0.severity == .critical }.count
+                        let warnCount = metrics.anomalies.filter { $0.severity == .warning }.count
+                        Text("\(metrics.anomalies.count) anomalies detected")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        if critCount > 0 {
+                            Text("\(critCount) critical")
+                                .font(.caption2)
+                                .fontWeight(.medium)
+                                .foregroundStyle(Color.anomalyColor(.critical, scheme: colorScheme))
+                        }
+                        if warnCount > 0 {
+                            Text("\(warnCount) warning")
+                                .font(.caption2)
+                                .fontWeight(.medium)
+                                .foregroundStyle(Color.anomalyColor(.warning, scheme: colorScheme))
+                        }
+                        Spacer()
+                    }
+                }
             } else {
                 HStack {
                     ProgressView().scaleEffect(0.8)
@@ -262,8 +319,8 @@ struct DiagnosticDashboardView: View {
             sectionHeader(
                 "Connection Health",
                 icon: "heart.fill",
-                color: .pink,
-                tooltip: "Disconnections count and packet loss percentage (pings unanswered for 3+ seconds)."
+                color: Color.adaptive(.pink, scheme: colorScheme),
+                tooltip: "Disconnections count and packet loss percentage (pings unanswered for 3+ seconds). Every drop is recorded below with the reason the transport reported for it."
             )
             VStack(alignment: .leading, spacing: 6) {
                 infoRow("Disconnections", "\(metrics.disconnectionCount)")
@@ -271,9 +328,71 @@ struct DiagnosticDashboardView: View {
                 infoRow("Pings Sent", "\(metrics.pingsSent)")
                 infoRow("Pongs Received", "\(metrics.pongsReceived)")
             }
+
+            Divider()
+            disconnectHistorySection
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// Root-cause list for every drop recorded this session. Always visible so
+    /// "no drops" is stated rather than left to inference from a missing card.
+    private var disconnectHistorySection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Disconnect Root Cause")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                // disconnectionCount is the authoritative total; the history
+                // array itself is capped, so counting it would under-report.
+                if metrics.disconnectionCount > 5 {
+                    Text("last 5 of \(metrics.disconnectionCount)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if metrics.disconnectHistory.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.caption2)
+                        .foregroundStyle(Color.statusColor(true, scheme: colorScheme))
+                    Text("No drops recorded this session")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } else {
+                ForEach(metrics.disconnectHistory.suffix(5)) { event in
+                    HStack(spacing: 6) {
+                        Image(systemName: disconnectReasonIcon(event.reason))
+                            .font(.caption2)
+                            .foregroundStyle(disconnectReasonColor(event.reason))
+                        Text(event.reason.rawValue)
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .foregroundStyle(disconnectReasonColor(event.reason))
+                        if !event.detail.isEmpty {
+                            Text(event.detail)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        Text("up \(formattedUptime(event.uptimeAtDisconnect))")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text(event.timestamp, style: .time)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var dataTransferCard: some View {
@@ -281,7 +400,7 @@ struct DiagnosticDashboardView: View {
             sectionHeader(
                 "Data Transfer",
                 icon: "arrow.up.arrow.down",
-                color: .cyan,
+                color: Color.adaptive(.cyan, scheme: colorScheme),
                 tooltip: "Total bytes sent and received over this connection."
             )
             VStack(alignment: .leading, spacing: 6) {
@@ -303,6 +422,72 @@ struct DiagnosticDashboardView: View {
                 iPadCatalog.chipFamily(for: metrics.peerModel ?? "", modelNumber: metrics.peerModelNumber ?? "")
             )
             infoRow("OS", metrics.peerOSVersion ?? "Unknown")
+
+            // Live responder metrics
+            if let latest = metrics.remoteMetricsHistory.last {
+                Divider()
+                HStack(spacing: 4) {
+                    Text("Live Metrics")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.caption2)
+                        .foregroundStyle(Color.adaptive(.green, scheme: colorScheme))
+                        .symbolEffect(.pulse)
+                }
+                HStack(spacing: 12) {
+                    let cpuColor = Color.thresholdColor(
+                        latest.cpu,
+                        good: SystemMonitor.cpuGoodThreshold,
+                        caution: SystemMonitor.cpuCautionThreshold,
+                        scheme: colorScheme
+                    )
+                    let memoryColor = Color.adaptive(.indigo, scheme: colorScheme)
+                    let thermalColor = Color.thermalColor(latest.thermalState, scheme: colorScheme)
+
+                    VStack(spacing: 2) {
+                        Text(String(format: "%.0f%%", latest.cpu))
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(cpuColor)
+                        // Same convention as the local CPU gauge — see SystemMonitor.
+                        Text("CPU (all cores)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(6)
+                    .background(cpuColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+
+                    VStack(spacing: 2) {
+                        Text(String(format: "%.0fMB", latest.memoryMB))
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(memoryColor)
+                        Text("App Memory")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(6)
+                    .background(memoryColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+
+                    VStack(spacing: 2) {
+                        Text(latest.thermalState)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(thermalColor)
+                        Text("Thermal")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(6)
+                    .background(thermalColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
@@ -314,24 +499,24 @@ struct DiagnosticDashboardView: View {
             sectionHeader(
                 "Network Path",
                 icon: "point.3.connected.trianglepath.dotted",
-                color: .teal,
+                color: Color.adaptive(.teal, scheme: colorScheme),
                 tooltip: "'Satisfied' = path is usable. 'Expensive' = cellular/hotspot. 'Constrained' = Low Data Mode."
             )
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 pathDetailItem(
                     "Status",
                     metrics.pathStatus == .satisfied ? "Satisfied" : "Unsatisfied",
-                    metrics.pathStatus == .satisfied ? .green : .red
+                    Color.statusColor(metrics.pathStatus == .satisfied, scheme: colorScheme)
                 )
                 pathDetailItem(
                     "Expensive",
                     metrics.isExpensive ? "Yes" : "No",
-                    metrics.isExpensive ? .orange : .green
+                    Color.adaptive(metrics.isExpensive ? .orange : .green, scheme: colorScheme)
                 )
                 pathDetailItem(
                     "Constrained",
                     metrics.isConstrained ? "Yes" : "No",
-                    metrics.isConstrained ? .orange : .green
+                    Color.adaptive(metrics.isConstrained ? .orange : .green, scheme: colorScheme)
                 )
             }
         }
@@ -346,7 +531,8 @@ struct DiagnosticDashboardView: View {
                 TestSuiteView()
             } label: {
                 HStack {
-                    Image(systemName: "testtube.2").font(.title2).foregroundStyle(.blue)
+                    Image(systemName: "testtube.2").font(.title2)
+                        .foregroundStyle(Color.adaptive(.blue, scheme: colorScheme))
                     VStack(alignment: .leading) {
                         Text("Run Test Suite").font(.headline)
                         Text("6 standardized tests for latency, throughput, jitter, stress, and more")
@@ -363,7 +549,11 @@ struct DiagnosticDashboardView: View {
             HStack {
                 Image(systemName: service.remoteTestInProgress ? "antenna.radiowaves.left.and.right" : "testtube.2")
                     .font(.title2)
-                    .foregroundStyle(service.remoteTestInProgress ? .orange : .secondary)
+                    .foregroundStyle(
+                        service.remoteTestInProgress
+                            ? Color.adaptive(.orange, scheme: colorScheme)
+                            : Color.secondary
+                    )
                     .symbolEffect(.pulse, isActive: service.remoteTestInProgress)
                 VStack(alignment: .leading) {
                     Text(service.remoteTestInProgress ? "Test In Progress" : "Responder Mode").font(.headline)
@@ -376,7 +566,9 @@ struct DiagnosticDashboardView: View {
             }
             .padding()
             .background(
-                service.remoteTestInProgress ? Color.orange.opacity(0.05) : Color.clear,
+                service.remoteTestInProgress
+                    ? Color.adaptive(.orange, scheme: colorScheme).opacity(0.05)
+                    : Color.clear,
                 in: RoundedRectangle(cornerRadius: 12)
             )
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -439,5 +631,43 @@ struct DiagnosticDashboardView: View {
         }
         .padding(8).frame(maxWidth: .infinity)
         .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func disconnectReasonIcon(_ reason: DisconnectReason) -> String {
+        switch reason {
+        case .userInitiated: "hand.raised"
+        case .remoteDisconnect: "arrow.uturn.left"
+        case .keepaliveTimeout: "clock.badge.exclamationmark"
+        case .pathChanged: "point.3.connected.trianglepath.dotted"
+        case .tlsError: "lock.trianglebadge.exclamationmark"
+        case .connectionRefused: "xmark.shield"
+        case .networkError: "wifi.exclamationmark"
+        case .unknown: "questionmark.circle"
+        }
+    }
+
+    private func disconnectReasonColor(_ reason: DisconnectReason) -> Color {
+        let base: Color = switch reason {
+        case .userInitiated: .gray
+        case .remoteDisconnect: .blue
+        case .keepaliveTimeout: .orange
+        case .pathChanged: .yellow
+        case .tlsError, .connectionRefused: .red
+        case .networkError: .red
+        case .unknown: .gray
+        }
+        return Color.adaptive(base, scheme: colorScheme)
+    }
+
+    /// Compact uptime for a recorded disconnect ("2m 04s").
+    private func formattedUptime(_ interval: TimeInterval) -> String {
+        let total = Int(interval)
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 {
+            return String(format: "%dh %02dm", hours, minutes)
+        }
+        return String(format: "%dm %02ds", minutes, seconds)
     }
 }

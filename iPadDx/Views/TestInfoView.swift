@@ -154,6 +154,10 @@ struct TestInfoView: View {
         let cfg = TestSuiteConfig.default
         VStack(spacing: 4) {
             switch phase {
+            case .dnsResolution:
+                paramRow("Method", "NWConnection to Bonjour service name")
+                paramRow("Timeout", "10 s")
+                paramRow("Output", "mDNS resolution + TLS handshake time (ms)")
             case .latencyBurst:
                 paramRow("Ping count", "\(cfg.latencyBurstCount)")
                 paramRow("Interval", "\(cfg.latencyBurstIntervalMs) ms between pings")
@@ -338,6 +342,7 @@ struct TestInfoView: View {
 
     private func phaseColor(_ phase: TestPhase) -> Color {
         switch phase.color {
+        case "cyan": .cyan
         case "blue": .blue
         case "purple": .purple
         case "orange": .orange

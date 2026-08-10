@@ -79,7 +79,9 @@ struct DeviceInfo: Codable, Equatable {
     }
 
     var displayModel: String {
-        if model.isEmpty || model == "Unknown" { return modelNumber }
+        if model.isEmpty || model == "Unknown" {
+            return modelNumber
+        }
         return model
     }
 
@@ -168,12 +170,18 @@ enum iPadCatalog {
         // Check pretty model name for chip identifiers
         let chips = ["M4", "M3", "M2", "M1", "A17", "A16", "A15", "A14", "A13", "A12"]
         for chip in chips {
-            if modelName.contains(chip) { return chip }
+            if modelName.contains(chip) {
+                return chip
+            }
         }
         // Try looking up by hardware identifier
-        if let entry = catalog[modelNumber] { return entry.chip }
+        if let entry = catalog[modelNumber] {
+            return entry.chip
+        }
         // Try looking up by model name (in case modelName IS the identifier)
-        if let entry = catalog[modelName] { return entry.chip }
+        if let entry = catalog[modelName] {
+            return entry.chip
+        }
         return modelName.isEmpty || modelName == "Unknown" ? "Unknown" : modelName
     }
 }
@@ -187,6 +195,10 @@ struct TestSuiteResults: Codable {
     let systemMetrics: SystemMetricsResult
     let overallGrade: String
     let responderMetrics: ResponderMetricsResult?
+    let dnsResolution: DNSResolutionResult?
+    /// Phase 6 results. Previously computed and then discarded because there was
+    /// nowhere to put them.
+    let heavyLoad: HeavyLoadResult?
 
     init(
         latencyBurst: LatencyBurstResult,
@@ -196,7 +208,9 @@ struct TestSuiteResults: Codable {
         latencyUnderLoad: LatencyUnderLoadResult,
         systemMetrics: SystemMetricsResult,
         overallGrade: String,
-        responderMetrics: ResponderMetricsResult? = nil
+        responderMetrics: ResponderMetricsResult? = nil,
+        dnsResolution: DNSResolutionResult? = nil,
+        heavyLoad: HeavyLoadResult? = nil
     ) {
         self.latencyBurst = latencyBurst
         self.sustainedThroughput = sustainedThroughput
@@ -206,9 +220,11 @@ struct TestSuiteResults: Codable {
         self.systemMetrics = systemMetrics
         self.overallGrade = overallGrade
         self.responderMetrics = responderMetrics
+        self.dnsResolution = dnsResolution
+        self.heavyLoad = heavyLoad
     }
 
-    /// Support decoding reports that don't have responderMetrics yet
+    /// Support decoding reports written before responderMetrics, dnsResolution or heavyLoad existed
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         latencyBurst = try container.decode(LatencyBurstResult.self, forKey: .latencyBurst)
@@ -219,6 +235,8 @@ struct TestSuiteResults: Codable {
         systemMetrics = try container.decode(SystemMetricsResult.self, forKey: .systemMetrics)
         overallGrade = try container.decode(String.self, forKey: .overallGrade)
         responderMetrics = try container.decodeIfPresent(ResponderMetricsResult.self, forKey: .responderMetrics)
+        dnsResolution = try container.decodeIfPresent(DNSResolutionResult.self, forKey: .dnsResolution)
+        heavyLoad = try container.decodeIfPresent(HeavyLoadResult.self, forKey: .heavyLoad)
     }
 }
 
@@ -246,6 +264,22 @@ struct LatencyUnderLoadResult: Codable {
     }
 }
 
+struct ThermalTransitionRecord: Codable, Identifiable {
+    var id: Date {
+        timestamp
+    }
+
+    let timestamp: Date
+    let from: String
+    let to: String
+}
+
+struct DNSResolutionResult: Codable {
+    let resolutionTimeMs: Double
+    let resolved: Bool
+    let serviceName: String
+}
+
 struct SystemMetricsResult: Codable {
     let batteryStart: Float
     let batteryEnd: Float
@@ -254,6 +288,44 @@ struct SystemMetricsResult: Codable {
     let avgCpuUsage: Double
     let peakMemoryMB: Double
     let thermalStateDuringTest: String
+    let thermalTransitions: [ThermalTransitionRecord]?
+
+    init(
+        batteryStart: Float, batteryEnd: Float, batteryDrainPercent: Double,
+        peakCpuUsage: Double, avgCpuUsage: Double, peakMemoryMB: Double,
+        thermalStateDuringTest: String, thermalTransitions: [ThermalTransitionRecord]? = nil
+    ) {
+        self.batteryStart = batteryStart
+        self.batteryEnd = batteryEnd
+        self.batteryDrainPercent = batteryDrainPercent
+        self.peakCpuUsage = peakCpuUsage
+        self.avgCpuUsage = avgCpuUsage
+        self.peakMemoryMB = peakMemoryMB
+        self.thermalStateDuringTest = thermalStateDuringTest
+        self.thermalTransitions = thermalTransitions
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        batteryStart = try c.decode(Float.self, forKey: .batteryStart)
+        batteryEnd = try c.decode(Float.self, forKey: .batteryEnd)
+        batteryDrainPercent = try c.decode(Double.self, forKey: .batteryDrainPercent)
+        peakCpuUsage = try c.decode(Double.self, forKey: .peakCpuUsage)
+        avgCpuUsage = try c.decode(Double.self, forKey: .avgCpuUsage)
+        peakMemoryMB = try c.decode(Double.self, forKey: .peakMemoryMB)
+        thermalStateDuringTest = try c.decode(String.self, forKey: .thermalStateDuringTest)
+        thermalTransitions = try c.decodeIfPresent([ThermalTransitionRecord].self, forKey: .thermalTransitions)
+    }
+}
+
+struct HistogramBucket: Codable, Identifiable {
+    var id: Double {
+        rangeStart
+    }
+
+    let rangeStart: Double
+    let rangeEnd: Double
+    let count: Int
 }
 
 struct LatencyBurstResult: Codable {
@@ -264,6 +336,105 @@ struct LatencyBurstResult: Codable {
     let p95: Double
     let sampleCount: Int
     let samples: [Double]
+    let p5: Double?
+    let p25: Double?
+    let p75: Double?
+    let p99: Double?
+    let histogram: [HistogramBucket]?
+    let anomalyCount: Int?
+
+    init(
+        min: Double, max: Double, avg: Double, median: Double, p95: Double,
+        sampleCount: Int, samples: [Double],
+        p5: Double? = nil, p25: Double? = nil, p75: Double? = nil, p99: Double? = nil,
+        histogram: [HistogramBucket]? = nil, anomalyCount: Int? = nil
+    ) {
+        self.min = min
+        self.max = max
+        self.avg = avg
+        self.median = median
+        self.p95 = p95
+        self.sampleCount = sampleCount
+        self.samples = samples
+        self.p5 = p5
+        self.p25 = p25
+        self.p75 = p75
+        self.p99 = p99
+        self.histogram = histogram
+        self.anomalyCount = anomalyCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        min = try c.decode(Double.self, forKey: .min)
+        max = try c.decode(Double.self, forKey: .max)
+        avg = try c.decode(Double.self, forKey: .avg)
+        median = try c.decode(Double.self, forKey: .median)
+        p95 = try c.decode(Double.self, forKey: .p95)
+        sampleCount = try c.decode(Int.self, forKey: .sampleCount)
+        samples = try c.decode([Double].self, forKey: .samples)
+        p5 = try c.decodeIfPresent(Double.self, forKey: .p5)
+        p25 = try c.decodeIfPresent(Double.self, forKey: .p25)
+        p75 = try c.decodeIfPresent(Double.self, forKey: .p75)
+        p99 = try c.decodeIfPresent(Double.self, forKey: .p99)
+        histogram = try c.decodeIfPresent([HistogramBucket].self, forKey: .histogram)
+        anomalyCount = try c.decodeIfPresent(Int.self, forKey: .anomalyCount)
+    }
+
+    static func buildHistogram(samples: [Double], bucketCount: Int = 20) -> [HistogramBucket] {
+        let sorted = samples.sorted()
+        guard let lo = sorted.first, let hi = sorted.last, hi > lo else { return [] }
+        let width = (hi - lo) / Double(bucketCount)
+        var buckets = (0 ..< bucketCount).map { i in
+            HistogramBucket(rangeStart: lo + Double(i) * width, rangeEnd: lo + Double(i + 1) * width, count: 0)
+        }
+        for s in samples {
+            let idx = Swift.min(Int((s - lo) / width), bucketCount - 1)
+            buckets[idx] = HistogramBucket(
+                rangeStart: buckets[idx].rangeStart,
+                rangeEnd: buckets[idx].rangeEnd,
+                count: buckets[idx].count + 1
+            )
+        }
+        return buckets
+    }
+
+    /// Linear-interpolated percentile over an already-sorted sample array.
+    ///
+    /// The previous form indexed `Int(count * p)`, which returns the (n·p + 1)-th
+    /// smallest value — for p95 over 100 samples that is the 96th, not the 95th.
+    static func percentile(_ sorted: [Double], _ p: Double) -> Double {
+        guard !sorted.isEmpty else { return 0 }
+        guard sorted.count > 1 else { return sorted[0] }
+        let clamped = Swift.max(0, Swift.min(1, p))
+        let position = clamped * Double(sorted.count - 1)
+        let lower = Int(position.rounded(.down))
+        let upper = Swift.min(lower + 1, sorted.count - 1)
+        let fraction = position - Double(lower)
+        return sorted[lower] + (sorted[upper] - sorted[lower]) * fraction
+    }
+
+    /// True median: the mean of the two central values when the count is even.
+    static func median(_ sorted: [Double]) -> Double {
+        guard !sorted.isEmpty else { return 0 }
+        let mid = sorted.count / 2
+        if sorted.count.isMultiple(of: 2) {
+            return (sorted[mid - 1] + sorted[mid]) / 2
+        }
+        return sorted[mid]
+    }
+
+    /// Number of samples more than 3 standard deviations above the mean.
+    /// Returns nil when there is too little data for the statistic to mean anything.
+    static func anomalyCount(in samples: [Double]) -> Int? {
+        guard samples.count >= 10 else { return nil }
+        let mean = samples.reduce(0, +) / Double(samples.count)
+        let variance = samples.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(samples.count)
+        let stddev = variance.squareRoot()
+        guard stddev > 0.5 else { return 0 }
+        let threshold = mean + 3 * stddev
+        return samples.filter { $0 > threshold }.count
+    }
 }
 
 struct ThroughputResult: Codable {
@@ -287,9 +458,15 @@ struct JitterResult: Codable {
     let sampleCount: Int
 
     var qualityLabel: String {
-        if averageJitter < 5 { return "Stable" }
-        if averageJitter < 15 { return "Moderate" }
-        if averageJitter < 30 { return "Unstable" }
+        if averageJitter < 5 {
+            return "Stable"
+        }
+        if averageJitter < 15 {
+            return "Moderate"
+        }
+        if averageJitter < 30 {
+            return "Unstable"
+        }
         return "Very Unstable"
     }
 }
@@ -309,8 +486,12 @@ struct HeavyLoadResult: Codable {
     let sampleCount: Int
 
     var formattedThroughput: String {
-        if throughputBps >= 1_000_000 { return String(format: "%.1f MB/s", throughputBps / 1_000_000) }
-        if throughputBps >= 1000 { return String(format: "%.1f KB/s", throughputBps / 1000) }
+        if throughputBps >= 1_000_000 {
+            return String(format: "%.1f MB/s", throughputBps / 1_000_000)
+        }
+        if throughputBps >= 1000 {
+            return String(format: "%.1f KB/s", throughputBps / 1000)
+        }
         return String(format: "%.0f B/s", throughputBps)
     }
 }

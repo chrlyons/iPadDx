@@ -2,7 +2,6 @@ import XCTest
 @testable import iPadDx
 
 final class iPadCatalogTests: XCTestCase {
-
     // MARK: - Model name lookup
 
     func testKnownModelNumbers() {
@@ -64,7 +63,12 @@ final class iPadCatalogTests: XCTestCase {
     }
 
     func testDeviceInfoShortDescription() {
-        let info = DeviceInfo(name: "Christians iPad", model: "iPad Pro 13-inch (M4)", modelNumber: "iPad16,5", osVersion: "18.0")
+        let info = DeviceInfo(
+            name: "Christians iPad",
+            model: "iPad Pro 13-inch (M4)",
+            modelNumber: "iPad16,5",
+            osVersion: "18.0"
+        )
         XCTAssertEqual(info.shortDescription, "Christians iPad (M4)")
     }
 }

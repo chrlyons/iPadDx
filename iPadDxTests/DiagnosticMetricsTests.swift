@@ -2,15 +2,14 @@ import XCTest
 @testable import iPadDx
 
 final class DiagnosticMetricsTests: XCTestCase {
-
     // MARK: - Signal Quality
 
     @MainActor
     func testSignalQualityExcellent() {
         let metrics = DiagnosticMetrics()
         // Low latency, low variance
-        for i in 0..<30 {
-            metrics.appendLatency(Double.random(in: 3...7), maxHistory: 120)
+        for _ in 0 ..< 30 {
+            metrics.appendLatency(Double.random(in: 3 ... 7), maxHistory: 120)
         }
         XCTAssertEqual(metrics.signalQuality, .excellent)
     }
@@ -27,8 +26,8 @@ final class DiagnosticMetricsTests: XCTestCase {
     @MainActor
     func testSignalQualityPoorWithHighLatency() {
         let metrics = DiagnosticMetrics()
-        for _ in 0..<30 {
-            metrics.appendLatency(Double.random(in: 150...500), maxHistory: 120)
+        for _ in 0 ..< 30 {
+            metrics.appendLatency(Double.random(in: 150 ... 500), maxHistory: 120)
         }
         XCTAssertEqual(metrics.signalQuality, .poor)
     }
@@ -104,7 +103,7 @@ final class DiagnosticMetricsTests: XCTestCase {
     @MainActor
     func testAppendLatencyTrimsToMaxHistory() {
         let metrics = DiagnosticMetrics()
-        for i in 0..<200 {
+        for i in 0 ..< 200 {
             metrics.appendLatency(Double(i))
         }
         XCTAssertEqual(metrics.latencyHistory.count, 120, "Should trim to maxHistory")
@@ -113,7 +112,7 @@ final class DiagnosticMetricsTests: XCTestCase {
     @MainActor
     func testAppendLatencyCustomMaxHistory() {
         let metrics = DiagnosticMetrics()
-        for i in 0..<50 {
+        for i in 0 ..< 50 {
             metrics.appendLatency(Double(i), maxHistory: 10)
         }
         XCTAssertEqual(metrics.latencyHistory.count, 10)
@@ -124,7 +123,7 @@ final class DiagnosticMetricsTests: XCTestCase {
     @MainActor
     func testLogEventTrimsToMax() {
         let metrics = DiagnosticMetrics()
-        for i in 0..<60 {
+        for i in 0 ..< 60 {
             metrics.logEvent("Event \(i)")
         }
         XCTAssertEqual(metrics.connectionLog.count, 50, "Should trim to 50 events")
@@ -144,7 +143,7 @@ final class DiagnosticMetricsTests: XCTestCase {
         metrics.throughputBytesPerSec = 5_000_000
         XCTAssertEqual(metrics.formattedThroughput, "5.0 MB/s")
 
-        metrics.throughputBytesPerSec = 50_000
+        metrics.throughputBytesPerSec = 50000
         XCTAssertEqual(metrics.formattedThroughput, "50.0 KB/s")
 
         metrics.throughputBytesPerSec = 500
@@ -158,7 +157,7 @@ final class DiagnosticMetricsTests: XCTestCase {
         metrics.bytesSent = 5_000_000
         XCTAssertEqual(metrics.formattedBytesSent, "5.0 MB")
 
-        metrics.bytesSent = 50_000
+        metrics.bytesSent = 50000
         XCTAssertEqual(metrics.formattedBytesSent, "50.0 KB")
 
         metrics.bytesSent = 500

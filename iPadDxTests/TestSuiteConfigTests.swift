@@ -2,7 +2,6 @@ import XCTest
 @testable import iPadDx
 
 final class TestSuiteConfigTests: XCTestCase {
-
     // MARK: - Defaults
 
     func testDefaultConfigValues() {
@@ -18,7 +17,9 @@ final class TestSuiteConfigTests: XCTestCase {
     }
 
     func testDefaultEnabledPhaseCount() {
-        XCTAssertEqual(TestSuiteConfig.default.enabledPhaseCount, 6)
+        // 7: DNS Resolution, Latency Burst, Throughput, Jitter, Packet Loss,
+        // Latency Under Load, Heavy Load.
+        XCTAssertEqual(TestSuiteConfig.default.enabledPhaseCount, 7)
     }
 
     // MARK: - Quick preset
@@ -49,12 +50,15 @@ final class TestSuiteConfigTests: XCTestCase {
         var config = TestSuiteConfig()
         config.runLatencyBurst = false
         config.runThroughput = false
-        XCTAssertEqual(config.enabledPhaseCount, 4)
+        XCTAssertEqual(config.enabledPhaseCount, 5)
 
         config.runJitter = false
         config.runPacketLoss = false
         config.runLatencyUnderLoad = false
         config.runHeavyLoad = false
+        XCTAssertEqual(config.enabledPhaseCount, 1) // DNS Resolution still enabled
+
+        config.runDNSResolution = false
         XCTAssertEqual(config.enabledPhaseCount, 0)
     }
 

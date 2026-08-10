@@ -8,6 +8,7 @@ struct TestSuiteView: View {
     @State private var showSavedAlert = false
     @State private var config: TestSuiteConfig = .default
     @State private var showPhaseInfo: TestPhase?
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ScrollView {
@@ -37,9 +38,17 @@ struct TestSuiteView: View {
             if runner == nil, let engine = service.engine,
                let cm = service.activeConnectionManager
             {
-                let r = TestSuiteRunner(connectionManager: cm, metrics: engine.metrics)
-                engine.testSuiteRunner = r
-                runner = r
+                // Reattach to a suite already running on this connection instead of
+                // creating a second runner — two suites over one connection would
+                // interleave their probes and corrupt both sets of measurements.
+                if let existing = engine.testSuiteRunner {
+                    runner = existing
+                } else {
+                    let r = TestSuiteRunner(connectionManager: cm, metrics: engine.metrics)
+                    r.peerBonjourName = service.connectedPeer?.bonjourName
+                    engine.testSuiteRunner = r
+                    runner = r
+                }
             }
         }
         .alert("Report Saved", isPresented: $showSavedAlert) {
@@ -116,55 +125,35 @@ struct TestSuiteView: View {
             }
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
 
-            // Bridge Transports
+            // Bridge Transports — standalone runs are always native.
+            //
+            // A bridge has to be active on BOTH ends for the measurement to mean
+            // anything, and the standalone connection is established as native the
+            // moment the two devices pair. Only Conductor mode can stand up a fresh
+            // bridged connection on both agents, so bridge comparison lives there.
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Image(systemName: "arrow.triangle.branch")
                         .foregroundStyle(.teal)
-                    Text("Bridge Transports")
+                    Text("Bridge Transport")
                         .font(.subheadline)
                         .fontWeight(.medium)
                     Spacer()
-                    Text("\(config.bridgeTransports.count) selected")
+                    Text("Native")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
 
-                ForEach(BridgeRegistry.available) { bridge in
-                    HStack {
-                        Image(systemName: config.bridgeTransports.contains(bridge.id)
-                            ? "checkmark.square.fill" : "square")
-                            .foregroundStyle(bridge.enabled ? .blue : .gray)
-                        Text(bridge.label)
-                            .font(.caption)
-                        if bridge.id == "native" {
-                            Text("always on")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        if !bridge.enabled, bridge.id != "native" {
-                            Spacer()
-                            Text("coming soon")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .onTapGesture {
-                        guard bridge.enabled, bridge.id != "native" else { return }
-                        if config.bridgeTransports.contains(bridge.id) {
-                            config.bridgeTransports.removeAll { $0 == bridge.id }
-                        } else {
-                            config.bridgeTransports.append(bridge.id)
-                        }
-                    }
-                    .opacity(bridge.enabled ? 1 : 0.5)
-                }
+                Text("Standalone tests always run over the native transport.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                if config.bridgeTransports.count > 1 {
-                    Text("This test will run \(config.bridgeTransports.count)x (once per bridge)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                Text(
+                    "To compare Cordova, React Native, Flutter or Capacitor overhead, use Conductor mode — a bridge has to be active on both devices, which requires a fresh orchestrated connection on each."
+                )
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             .padding()
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -195,27 +184,9 @@ struct TestSuiteView: View {
             Button {
                 runner.config = config
                 Task {
-                    // Run once per selected bridge transport
-                    let bridges = config.bridgeTransports
-                    for (index, bridge) in bridges.enumerated() {
-                        // Skip bridges that failed to initialize — data would be invalid
-                        if bridge != "native", !BridgeRegistry.isBridgeHealthy(bridge) {
-                            AppLog("Skipping \(bridge) — bridge not healthy", level: .error, category: "TestSuite")
-                            continue
-                        }
-                        runner.bridgeTransportOverride = bridge
-                        let report = await runner.runFullSuite()
-                        // Save intermediate reports (all but last) immediately
-                        if let report, bridges.count > 1, index < bridges.count - 1 {
-                            reportStore.save(report)
-                            if let data = reportStore.encodeForSync(report) {
-                                service.sendReport(data)
-                            }
-                            // Reset and settle before next bridge run
-                            runner.reset()
-                            try? await Task.sleep(nanoseconds: 2_000_000_000)
-                        }
-                    }
+                    // One run, over whatever transport this connection actually uses.
+                    // The report records that transport verbatim.
+                    await runner.runFullSuite()
                 }
             } label: {
                 Label("Start Test Suite", systemImage: "play.fill")
@@ -267,6 +238,7 @@ struct TestSuiteView: View {
 
     private func phaseBinding(_ phase: TestPhase) -> Binding<Bool> {
         switch phase {
+        case .dnsResolution: $config.runDNSResolution
         case .latencyBurst: $config.runLatencyBurst
         case .sustainedThroughput: $config.runThroughput
         case .jitterMeasurement: $config.runJitter
@@ -321,6 +293,19 @@ struct TestSuiteView: View {
                     phaseCard(phase, runner: runner)
                 }
             }
+
+            // Cancel button
+            Button(role: .destructive) {
+                runner.cancel()
+            } label: {
+                Label("Cancel Test", systemImage: "stop.fill")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
         }
     }
 
@@ -386,8 +371,8 @@ struct TestSuiteView: View {
                     Text("Skipped")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                case .failed:
-                    Text("Failed")
+                case let .failed(reason):
+                    Text(reason.isEmpty ? "Failed" : "Failed — \(reason)")
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
@@ -447,17 +432,47 @@ struct TestSuiteView: View {
     }
 
     private func failedCard(_ error: String, runner: TestSuiteRunner) -> some View {
-        VStack(spacing: 12) {
+        // A cancelled run still produces a partial report covering the phases that
+        // finished. Offer to keep it — discarding data the user already paid for is
+        // the behaviour the partial report exists to avoid.
+        let partial = runner.lastReport
+
+        return VStack(spacing: 12) {
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 40))
                 .foregroundStyle(.red)
-            Text("Test Failed")
+            Text(partial == nil ? "Test Failed" : "Test Stopped")
                 .font(.headline)
             Text(error)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Button("Retry") { runner.reset() }
-                .buttonStyle(.bordered)
+
+            if let partial {
+                Text("A partial report is available for the phases that completed.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: 12) {
+                    Button {
+                        reportStore.save(partial)
+                        if let data = reportStore.encodeForSync(partial) {
+                            service.sendReport(data)
+                        }
+                        showSavedAlert = true
+                    } label: {
+                        Label("Save Partial Report", systemImage: "square.and.arrow.down")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Discard") { runner.reset() }
+                        .buttonStyle(.bordered)
+                }
+            } else {
+                Button("Retry") { runner.reset() }
+                    .buttonStyle(.bordered)
+            }
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -561,6 +576,7 @@ struct TestSuiteView: View {
 
     private func phaseColor(_ phase: TestPhase) -> Color {
         switch phase.color {
+        case "cyan": .cyan
         case "blue": .blue
         case "purple": .purple
         case "orange": .orange
@@ -571,6 +587,7 @@ struct TestSuiteView: View {
 
     private func phaseDetail(_ phase: TestPhase) -> String {
         switch phase {
+        case .dnsResolution: "mDNS lookup"
         case .latencyBurst: "\(config.latencyBurstCount) pings"
         case .sustainedThroughput: formatBytes(config.throughputBytes)
         case .jitterMeasurement: "\(config.jitterSampleCount) samples"
@@ -630,17 +647,16 @@ struct TestSuiteView: View {
     }
 
     private func gradeColor(_ grade: String) -> Color {
-        switch grade {
-        case "Excellent": .green
-        case "Good": .blue
-        case "Fair": .orange
-        default: .red
-        }
+        Color.gradeColor(grade, scheme: colorScheme)
     }
 
     private func formatBytes(_ bytes: Int) -> String {
-        if bytes >= 1_000_000 { return String(format: "%.1f MB", Double(bytes) / 1_000_000) }
-        if bytes >= 1000 { return String(format: "%.1f KB", Double(bytes) / 1000) }
+        if bytes >= 1_000_000 {
+            return String(format: "%.1f MB", Double(bytes) / 1_000_000)
+        }
+        if bytes >= 1000 {
+            return String(format: "%.1f KB", Double(bytes) / 1000)
+        }
         return "\(bytes) B"
     }
 }
@@ -723,6 +739,10 @@ struct PhaseInfoSheet: View {
         let config = TestSuiteConfig.default
         VStack(spacing: 6) {
             switch phase {
+            case .dnsResolution:
+                paramRow("Method", "NWConnection to Bonjour service name")
+                paramRow("Timeout", "10 s")
+                paramRow("Measures", "mDNS resolution + TLS handshake time (ms)")
             case .latencyBurst:
                 paramRow("Ping count", "\(config.latencyBurstCount)")
                 paramRow("Interval", "\(config.latencyBurstIntervalMs) ms")

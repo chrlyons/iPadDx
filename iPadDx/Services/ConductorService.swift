@@ -23,7 +23,9 @@ struct TestRun: Identifiable, Equatable {
     let bridgeTransport: String
 
     var label: String {
-        if bridgeTransport == "native" { return pair.label }
+        if bridgeTransport == "native" {
+            return pair.label
+        }
         return "\(pair.label) [\(bridgeTransport)]"
     }
 
@@ -87,6 +89,14 @@ class ConductorService {
 
     /// Selected bridge transports for queue generation.
     var selectedBridges: [String] = ["native"]
+    var maxRetries: Int = 2
+    var retryDelay: TimeInterval = 5
+    private(set) var retryCount: [UUID: Int] = [:]
+    /// Runs that were never executed (device offline, unschedulable). Counted separately
+    /// from completedCount so "completed" only ever means "produced a measurement".
+    private(set) var skippedCount: Int = 0
+    /// Runs a failed attempt asked the scheduler to try again.
+    private var requeueBuffer: [TestRun] = []
 
     private let serviceType = "_ipadconn._tcp"
     private var listener: NWListener?
@@ -224,7 +234,16 @@ class ConductorService {
 
     // MARK: - Test Queue
 
+    /// Returns the queue to `.idle` so a repopulated queue is visible and editable
+    /// again after a previous run finished in `.completed`.
+    private func reopenQueueIfFinished() {
+        if queueStatus == .completed {
+            queueStatus = .idle
+        }
+    }
+
     func addPair(_ deviceA: PeerDevice, _ deviceB: PeerDevice) {
+        reopenQueueIfFinished()
         let pair = TestPair(deviceA: deviceA, deviceB: deviceB)
         for bridge in selectedBridges {
             testQueue.append(TestRun(pair: pair, bridgeTransport: bridge))
@@ -236,6 +255,7 @@ class ConductorService {
     }
 
     func generateAllPairs() {
+        reopenQueueIfFinished()
         testQueue.removeAll()
         var allPeers = connectedAgents.map(\.peer)
         if let sp = selfPeer {
@@ -249,22 +269,31 @@ class ConductorService {
                 pairs.append(TestPair(deviceA: allPeers[i], deviceB: allPeers[j]))
             }
         }
+
+        /// A pair involving the conductor can only run native (its own connections are
+        /// never bridged), so don't queue combinations that are guaranteed to be refused.
+        func canRun(_ pair: TestPair, on bridge: String) -> Bool {
+            guard bridge != "native" else { return true }
+            return pair.deviceA.id != selfDeviceID && pair.deviceB.id != selfDeviceID
+        }
         // Interleave bridges across pairs to prevent thermal throttling:
         // A→B [native], C→A [native], A→B [cordova], B→C [native], C→A [cordova], ...
         if selectedBridges.count <= 1 {
-            for pair in pairs {
-                testQueue.append(TestRun(pair: pair, bridgeTransport: selectedBridges.first ?? "native"))
+            let bridge = selectedBridges.first ?? "native"
+            for pair in pairs where canRun(pair, on: bridge) {
+                testQueue.append(TestRun(pair: pair, bridgeTransport: bridge))
             }
         } else {
-            // Build per-bridge queues, then interleave
-            var bridgeQueues: [[TestRun]] = selectedBridges.map { bridge in
-                pairs.map { TestRun(pair: $0, bridgeTransport: bridge) }
-            }
-            while bridgeQueues.contains(where: { !$0.isEmpty }) {
-                for i in 0 ..< bridgeQueues.count {
-                    if !bridgeQueues[i].isEmpty {
-                        testQueue.append(bridgeQueues[i].removeFirst())
-                    }
+            // Offset each bridge's pair order so the same pair is not run back-to-back
+            // under two bridges. Round-robining the queues at the same index — which is
+            // what this used to do — produced pair0[native], pair0[cordova], … i.e. the
+            // exact adjacency the interleave is meant to avoid.
+            for step in 0 ..< pairs.count {
+                for (bridgeIndex, bridge) in selectedBridges.enumerated() {
+                    let pairIndex = (step + bridgeIndex * max(1, pairs.count / selectedBridges.count))
+                        % pairs.count
+                    guard canRun(pairs[pairIndex], on: bridge) else { continue }
+                    testQueue.append(TestRun(pair: pairs[pairIndex], bridgeTransport: bridge))
                 }
             }
         }
@@ -273,11 +302,19 @@ class ConductorService {
     private let selfDeviceID = DeviceIdentifier.stableID
     var conductorBonjourName: String = ""
     private var selfBusy = false
+    /// The conductor's own in-flight suite, when it is participating in a run.
+    private var selfRunner: TestSuiteRunner?
 
     func cancelQueue() {
-        guard queueStatus != .idle else { return }
+        guard queueStatus != .idle, queueStatus != .completed else { return }
         cancelRequested = true
         log("Queue cancellation requested", level: .warning)
+
+        // Stop the conductor's own suite explicitly. Cancelling the wrapper Task is
+        // not enough: every pacing delay inside the runner is `try? await Task.sleep`,
+        // which throws instantly in a cancelled task and is swallowed by the `try?`,
+        // so the suite would race through all remaining phases at full speed.
+        selfRunner?.cancel()
 
         // Cancel all active tasks
         for (_, task) in activeTasks {
@@ -295,15 +332,25 @@ class ConductorService {
         selfBusy = false
     }
 
-    func runQueue(reportStore _: ReportStore) async {
-        guard !testQueue.isEmpty else { return }
+    /// Runs every queued pair.
+    ///
+    /// - Parameter preservingResults: keep results from the previous queue. Used by
+    ///   "Re-run Failed" so retrying does not erase the successes already on screen.
+    func runQueue(preservingResults: Bool = false) async {
+        // Reentrancy guard: two concurrent queues would double-book every device.
+        guard !isQueueRunning, !testQueue.isEmpty else { return }
         cancelRequested = false
         let total = testQueue.count
         queueStatus = .running(pairIndex: 0, total: total)
-        completedReports.removeAll()
+        if !preservingResults {
+            completedReports.removeAll()
+            retryCount.removeAll()
+        }
         failedRuns.removeAll()
+        skippedCount = 0
         completedCount = 0
         runningPairs.removeAll()
+        requeueBuffer.removeAll()
 
         // Process queue — launch runs in parallel when devices are available
         var remaining = testQueue
@@ -326,17 +373,28 @@ class ConductorService {
                 activeTasks.removeAll()
                 break
             }
+            // Pick up any run a failed attempt asked to retry.
+            if !requeueBuffer.isEmpty {
+                remaining.append(contentsOf: requeueBuffer)
+                requeueBuffer.removeAll()
+            }
             // Prune runs where a device has gone offline
             let deadRuns = remaining.filter { run in
                 let isSelfA = run.deviceA.id == selfDeviceID
                 let isSelfB = run.deviceB.id == selfDeviceID
-                if !isSelfA, fleet.first(where: { $0.peer.id == run.deviceA.id }) == nil { return true }
-                if !isSelfB, fleet.first(where: { $0.peer.id == run.deviceB.id }) == nil { return true }
+                if !isSelfA, fleet.first(where: { $0.peer.id == run.deviceA.id }) == nil {
+                    return true
+                }
+                if !isSelfB, fleet.first(where: { $0.peer.id == run.deviceB.id }) == nil {
+                    return true
+                }
                 return false
             }
             for run in deadRuns {
                 remaining.removeAll { $0.id == run.id }
-                completedCount += 1
+                // A run that never happened is not a completed measurement.
+                skippedCount += 1
+                failedRuns.append(run)
                 log("Skipped \(run.label) — device offline", level: .warning)
             }
 
@@ -383,15 +441,20 @@ class ConductorService {
                     }
 
                     let task = Task { [weak self] in
-                        await self?.executeRun(run)
-                        await MainActor.run {
-                            self?.completedCount += 1
-                            self?.runningPairs.removeAll { $0 == run.label }
-                            self?.queueStatus = .running(
-                                pairIndex: self?.completedCount ?? 0,
-                                total: total
-                            )
+                        guard let self else { return }
+                        let needsRequeue = await executeRun(run)
+                        runningPairs.removeAll { $0 == run.label }
+                        if needsRequeue {
+                            await awaitRetryDelay()
+                            if cancelRequested {
+                                failedRuns.append(run)
+                            } else {
+                                requeueBuffer.append(run)
+                            }
+                        } else {
+                            completedCount += 1
                         }
+                        queueStatus = .running(pairIndex: completedCount, total: total)
                     }
                     activeTasks[run.id] = task
                     launched = true
@@ -404,6 +467,20 @@ class ConductorService {
                     await task.value
                     activeTasks.removeValue(forKey: id)
                 } else {
+                    // Nothing is running and nothing can start — the remaining runs are
+                    // unrunnable. Record them as failures instead of silently dropping
+                    // them and then reporting "All tests completed".
+                    if !remaining.isEmpty {
+                        log(
+                            "\(remaining.count) run(s) could not be scheduled — devices never became available",
+                            level: .error
+                        )
+                        for run in remaining {
+                            failedRuns.append(run)
+                            skippedCount += 1
+                        }
+                        remaining.removeAll()
+                    }
                     break
                 }
             }
@@ -425,41 +502,134 @@ class ConductorService {
         selfBusy = false
 
         if cancelRequested {
-            queueStatus = .idle
             log("Queue cancelled — \(completedCount)/\(total) completed", level: .warning)
         } else {
-            queueStatus = .completed
+            let skippedNote = skippedCount > 0 ? ", \(skippedCount) skipped" : ""
+            log("Queue finished — \(completedCount)/\(total) run(s)\(skippedNote)", level: .success)
         }
         runningPairs.removeAll()
         testQueue.removeAll()
         cancelRequested = false
+        selfRunner = nil
+        queueStatus = .completed
+    }
+
+    /// True while the conductor device itself is one of the endpoints of a running test.
+    /// The self device card uses this instead of queue-level state, which said "Testing"
+    /// for the whole queue regardless of whether the conductor was involved.
+    var selfIsTesting: Bool {
+        selfBusy
+    }
+
+    /// True only while a queue is actually executing.
+    ///
+    /// Conductor controls gate on this rather than on `queueStatus == .idle`: the
+    /// terminal `.completed` state is not idle, so gating on idle left every control
+    /// permanently disabled after the first successful queue.
+    var isQueueRunning: Bool {
+        if case .running = queueStatus {
+            return true
+        }
+        return false
     }
 
     // MARK: - Run Execution
 
-    private func executeRun(_ run: TestRun) async {
+    /// How a single run ended.
+    enum RunOutcome {
+        case succeeded
+        case cancelled
+        /// Failed for a reason another attempt might survive (timeout, disconnect).
+        case retryableFailure
+        /// Failed for a reason retrying cannot change (unhealthy bridge, unsupported
+        /// bridge, device missing from the fleet).
+        case permanentFailure
+    }
+
+    /// Runs one pair and reports what should happen next.
+    ///
+    /// - Returns: true if the scheduler should put this run back on the queue.
+    private func executeRun(_ run: TestRun) async -> Bool {
         let isSelfA = run.deviceA.id == selfDeviceID
         let isSelfB = run.deviceB.id == selfDeviceID
 
-        if isSelfA || isSelfB {
+        // The scheduler marks both endpoints busy BEFORE launching this task, so every
+        // exit path must release them. An early refusal that skipped the release left
+        // the devices permanently busy and starved the rest of the queue.
+        defer { releaseEndpoints(for: run) }
+
+        let outcome: RunOutcome = if isSelfA || isSelfB {
             await executeSelfRun(run, isSelfA: isSelfA)
         } else {
             await executeRemoteRun(run)
         }
+
+        switch outcome {
+        case .succeeded, .cancelled:
+            return false
+        case .permanentFailure:
+            failedRuns.append(run)
+            return false
+        case .retryableFailure:
+            // Retrying is the SCHEDULER's job. Re-entering executeRun from inside the
+            // failing frame would run the retry underneath the failed run's own cleanup.
+            let attempts = retryCount[run.id, default: 0]
+            guard !cancelRequested, shouldRetry(run) else {
+                failedRuns.append(run)
+                if attempts > 0 {
+                    log("\(run.label) failed after \(attempts) attempt(s)", level: .error)
+                }
+                return false
+            }
+            let nextAttempt = attempts + 1
+            retryCount[run.id] = nextAttempt
+            log(
+                "Will retry \(run.label) (attempt \(nextAttempt)/\(maxRetries))",
+                level: .warning
+            )
+            return true
+        }
     }
 
-    private func executeSelfRun(_ run: TestRun, isSelfA: Bool) async {
+    /// Clears the busy marks the scheduler set for a run's endpoints.
+    private func releaseEndpoints(for run: TestRun) {
+        if run.deviceA.id == selfDeviceID || run.deviceB.id == selfDeviceID {
+            selfBusy = false
+        }
+        for peer in [run.deviceA, run.deviceB] where peer.id != selfDeviceID {
+            guard let conn = fleet.first(where: { $0.peer.id == peer.id }) else { continue }
+            if conn.connectionManager.isConnected {
+                conn.agentStatus = .idle
+            }
+            conn.currentTestPartner = nil
+            conn.testProgress = 0
+            conn.testPhase = ""
+        }
+    }
+
+    private func executeSelfRun(_ run: TestRun, isSelfA: Bool) async -> RunOutcome {
         // Refuse to run if the bridge failed to initialize — results would be invalid
         if run.bridgeTransport != "native", !BridgeRegistry.isBridgeHealthy(run.bridgeTransport) {
             log("Bridge \(run.bridgeTransport) not healthy, skipping self run", level: .error)
-            failedRuns.append(run)
-            return
+            return .permanentFailure
+        }
+
+        // The conductor's own fleet connection is always native (it is created when the
+        // device joins the fleet, long before a bridge is chosen), so a bridged run with
+        // the conductor as an endpoint cannot actually be bridged on this side. Refuse it
+        // rather than emit a report labelled with a bridge that never carried the bytes.
+        if run.bridgeTransport != "native" {
+            log(
+                "Skipping \(run.label): the conductor itself cannot be bridged — run bridge comparisons between two agents",
+                level: .warning
+            )
+            return .permanentFailure
         }
 
         let agentPeer = isSelfA ? run.deviceB : run.deviceA
         guard let conn = fleet.first(where: { $0.peer.id == agentPeer.id }) else {
             log("Self run: \(agentPeer.name) not found in fleet", level: .error)
-            return
+            return .permanentFailure
         }
 
         let bridgeTag = run.bridgeTransport == "native" ? "" : " [\(run.bridgeTransport)]"
@@ -475,63 +645,81 @@ class ConductorService {
 
         if isSelfA {
             let runner = TestSuiteRunner(connectionManager: conn.connectionManager, metrics: conn.peer.metrics)
-            runner.bridgeTransportOverride = run.bridgeTransport
-            if let engine = conn.diagnosticEngine { engine.testSuiteRunner = runner }
+            runner.peerBonjourName = conn.peer.bonjourName
+            if let engine = conn.diagnosticEngine {
+                engine.testSuiteRunner = runner
+            }
+            selfRunner = runner
             let report = await runner.runFullSuite()
-            if let report {
+            selfRunner = nil
+            var outcome: RunOutcome = .succeeded
+            if let report, !runner.cancelRequested {
                 // In self-run where conductor is sender (isSelfA):
                 // localDevice = conductor (self), remoteDevice = the agent
                 completedReports.append(patchDeviceInfo(in: report, controllerConn: nil, responderConn: conn))
                 log("Self run completed: \(direction) — \(report.results.overallGrade)", level: .success)
+            } else if runner.cancelRequested {
+                log("Self run cancelled: \(direction)", level: .warning)
+                outcome = .cancelled
             } else {
                 log("Self run failed: \(direction) — no report generated", level: .error)
-                failedRuns.append(run)
+                outcome = .retryableFailure
             }
-            if let engine = conn.diagnosticEngine { engine.testSuiteRunner = nil }
+            if let engine = conn.diagnosticEngine {
+                engine.testSuiteRunner = nil
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // settle
+            return outcome
         } else {
             let config = TestSuiteConfig.default
-            if let configData = try? JSONEncoder().encode(config) {
-                conn.connectionManager.send(.orchestrateTest(
-                    targetDeviceName: conductorBonjourName, configJSON: configData,
-                    role: "controller", bridgeTransport: run.bridgeTransport
-                ))
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                let completed = await waitForTestCompletion(connection: conn, timeout: 180)
-                if completed {
-                    log("Self run completed: \(direction)", level: .success)
-                } else {
-                    let reason = conn.connectionManager.isConnected ? "timed out" : "device disconnected"
-                    log("Self run failed: \(direction) — \(reason)", level: .error)
-                    failedRuns.append(run)
-                    if conn.connectionManager.isConnected {
-                        conn.connectionManager.send(.orchestrationCancel)
-                    }
-                }
+            guard let configData = try? JSONEncoder().encode(config) else {
+                return .permanentFailure
             }
-        }
+            conn.connectionManager.send(.orchestrateTest(
+                targetDeviceName: conductorBonjourName, configJSON: configData,
+                role: "controller", bridgeTransport: run.bridgeTransport
+            ))
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            let completed = await waitForTestCompletion(connection: conn, timeout: 180)
 
-        // Settle delay
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
-
-        if conn.connectionManager.isConnected {
-            conn.agentStatus = .idle
-            conn.currentTestPartner = nil
-            conn.testProgress = 0
-            conn.testPhase = ""
+            var outcome: RunOutcome = .succeeded
+            if completed {
+                log("Self run completed: \(direction)", level: .success)
+            } else if cancelRequested {
+                log("Self run cancelled: \(direction)", level: .warning)
+                outcome = .cancelled
+            } else {
+                let reason = conn.connectionManager.isConnected ? "timed out" : "device disconnected"
+                log("Self run failed: \(direction) — \(reason)", level: .error)
+                outcome = .retryableFailure
+            }
+            if !completed, conn.connectionManager.isConnected {
+                conn.connectionManager.send(.orchestrationCancel)
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // settle
+            return outcome
         }
-        selfBusy = false
     }
 
-    private func executeRemoteRun(_ run: TestRun) async {
+    private func executeRemoteRun(_ run: TestRun) async -> RunOutcome {
         guard let connA = fleet.first(where: { $0.peer.id == run.deviceA.id }),
               let connB = fleet.first(where: { $0.peer.id == run.deviceB.id })
         else {
             log("Remote run: devices not found in fleet", level: .error)
-            return
+            return .permanentFailure
+        }
+
+        // Refuse to dispatch a bridge neither device advertised. Without this the run
+        // is sent anyway and fails later with an opaque timeout.
+        guard validateBridgeSupport(connA: connA, connB: connB, bridge: run.bridgeTransport) else {
+            log("Skipping \(run.label) — bridge not supported by both devices", level: .error)
+            return .permanentFailure
         }
 
         let config = TestSuiteConfig.default
-        guard let configData = try? JSONEncoder().encode(config) else { return }
+        guard let configData = try? JSONEncoder().encode(config) else {
+            return .permanentFailure
+        }
 
         let bridgeTag = run.bridgeTransport == "native" ? "" : " [\(run.bridgeTransport)]"
         let label = "\(run.deviceA.name) → \(run.deviceB.name)\(bridgeTag)"
@@ -565,17 +753,25 @@ class ConductorService {
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         let completed = await waitForTestCompletion(connection: connA, timeout: 180)
 
+        var outcome: RunOutcome = .succeeded
         if completed {
             log("Remote run completed: \(label)", level: .success)
+        } else if cancelRequested {
+            log("Remote run cancelled: \(label)", level: .warning)
+            outcome = .cancelled
         } else {
             let reason = connA.connectionManager.isConnected ? "timed out" : "device disconnected"
             log("Remote run failed: \(label) — \(reason)", level: .error)
-            failedRuns.append(run)
+            outcome = .retryableFailure
         }
 
         if !completed {
-            if connA.connectionManager.isConnected { connA.connectionManager.send(.orchestrationCancel) }
-            if connB.connectionManager.isConnected { connB.connectionManager.send(.orchestrationCancel) }
+            if connA.connectionManager.isConnected {
+                connA.connectionManager.send(.orchestrationCancel)
+            }
+            if connB.connectionManager.isConnected {
+                connB.connectionManager.send(.orchestrationCancel)
+            }
         }
 
         // Wait for responder (connB) to finish
@@ -583,8 +779,12 @@ class ConductorService {
             log("Waiting for responder \(run.deviceB.name) to finish...", level: .info)
             for _ in 0 ..< 20 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                if connB.agentStatus != .testing { break }
-                if !connB.connectionManager.isConnected { break }
+                if connB.agentStatus != .testing {
+                    break
+                }
+                if !connB.connectionManager.isConnected {
+                    break
+                }
             }
         }
 
@@ -603,6 +803,8 @@ class ConductorService {
             connB.testProgress = 0
             connB.testPhase = ""
         }
+
+        return outcome
     }
 
     // MARK: - Message Handling
@@ -614,21 +816,35 @@ class ConductorService {
         case let .orchestrationStatus(phase, detail):
             connection.testPhase = detail
             connection.lastStatusUpdate = Date()
-            if phase == "failed" {
+            switch phase {
+            case "failed":
                 log("\(connection.peer.name): \(detail)", level: .error)
-            } else if phase == "completed" {
+                connection.agentStatus = .failed
+            case "completed":
                 log("\(connection.peer.name): \(detail)", level: .success)
-            }
-            if phase == "running", let pct = parseProgress(from: detail) {
-                connection.testProgress = pct
-            }
-            if phase == "completed" || phase == "failed" {
-                connection.agentStatus = phase == "completed" ? .completed : .failed
+                connection.agentStatus = .completed
+            case "cancelled":
+                // Previously unhandled, so a cancelled agent stayed stuck in .testing
+                // on the conductor and was never logged.
+                log("\(connection.peer.name): \(detail)", level: .warning)
+                connection.agentStatus = .idle
+                connection.currentTestPartner = nil
+                connection.testProgress = 0
+            case "running":
+                if let pct = parseProgress(from: detail) {
+                    connection.testProgress = pct
+                }
+            default:
+                break
             }
 
         case let .orchestrationReport(reportJSON):
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
+            if cancelRequested {
+                log("Ignoring report from \(connection.peer.name) — queue was cancelled", level: .warning)
+                break
+            }
             if let report = try? decoder.decode(TestReport.self, from: reportJSON) {
                 // The controller agent sent this report. Its partner is the responder.
                 let partnerName = connection.currentTestPartner
@@ -641,9 +857,12 @@ class ConductorService {
                 completedReports.append(patched)
             }
 
-        case let .agentCapabilities(supportedBridges):
+        case let .agentCapabilities(supportedBridges, appVersion, iosVersion):
             connection.supportedBridges = supportedBridges
-            log("\(connection.peer.name) supports bridges: \(supportedBridges.joined(separator: ", "))")
+            let vInfo = [appVersion, iosVersion].filter { !$0.isEmpty }.joined(separator: ", iOS ")
+            log(
+                "\(connection.peer.name) supports bridges: \(supportedBridges.joined(separator: ", "))\(vInfo.isEmpty ? "" : " (v\(vInfo))")"
+            )
 
         default:
             break
@@ -653,6 +872,10 @@ class ConductorService {
     private func waitForTestCompletion(connection: DeviceConnection, timeout: Int) async -> Bool {
         for _ in 0 ..< (timeout * 2) {
             try? await Task.sleep(nanoseconds: 500_000_000)
+            // Stop waiting as soon as the queue is being torn down.
+            if cancelRequested {
+                return false
+            }
             if connection.agentStatus == .completed || connection.agentStatus == .failed {
                 return connection.agentStatus == .completed
             }
@@ -731,11 +954,57 @@ class ConductorService {
         )
     }
 
+    // MARK: - Retry Logic (Feature #4)
+
+    private func shouldRetry(_ run: TestRun) -> Bool {
+        retryCount[run.id, default: 0] < maxRetries
+    }
+
+    /// Applies the retry delay before the scheduler re-runs a failed pair.
+    /// Cancellation-aware: a cancelled queue must not sit out the delay.
+    private func awaitRetryDelay() async {
+        let step: UInt64 = 250_000_000
+        var waited: TimeInterval = 0
+        while waited < retryDelay, !cancelRequested {
+            try? await Task.sleep(nanoseconds: step)
+            waited += Double(step) / 1_000_000_000
+        }
+    }
+
+    // MARK: - Capability Validation (Feature #9)
+
+    func validateBridgeSupport(connA: DeviceConnection, connB: DeviceConnection, bridge: String) -> Bool {
+        guard bridge != "native" else { return true }
+        // An agent that has not yet advertised its capabilities is unknown, not
+        // unsupported — refusing here would reject a perfectly capable device purely
+        // on message timing.
+        if connA.supportedBridges.isEmpty || connB.supportedBridges.isEmpty {
+            log("Bridge capabilities not yet received — allowing '\(bridge)' to be attempted", level: .warning)
+            return true
+        }
+        let aOK = connA.supportedBridges.contains(bridge)
+        let bOK = connB.supportedBridges.contains(bridge)
+        if !aOK || !bOK {
+            var missing: [String] = []
+            if !aOK {
+                missing.append(connA.peer.name)
+            }
+            if !bOK {
+                missing.append(connB.peer.name)
+            }
+            log("Bridge '\(bridge)' not supported by: \(missing.joined(separator: ", "))", level: .error)
+            return false
+        }
+        return true
+    }
+
     // MARK: - Event Log
 
     func log(_ message: String, level: ConductorEvent.EventLevel = .info) {
         let event = ConductorEvent(timestamp: Date(), level: level, message: message)
         eventLog.insert(event, at: 0)
-        if eventLog.count > 100 { eventLog.removeLast() }
+        if eventLog.count > 100 {
+            eventLog.removeLast()
+        }
     }
 }

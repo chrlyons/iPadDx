@@ -1,5 +1,6 @@
 import CoreLocation
 import SwiftUI
+import UIKit
 
 enum DetailView: Hashable {
     case dashboard
@@ -95,12 +96,15 @@ struct ContentView: View {
         .alert("Set Device Name", isPresented: $showNamePrompt) {
             TextField("e.g. Christian's iPad", text: $editingName)
             Button("Save") {
-                let name = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !name.isEmpty {
-                    UserDefaults.standard.set(name, forKey: "deviceName")
-                    service.startAll()
-                }
+                // This alert only appears at first launch, and `onAppear` will
+                // not fire again — so saving must always end with the service
+                // advertising and browsing. Fall back to the system device name
+                // rather than leaving the app silent on the network.
+                let typed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
+                UserDefaults.standard.set(typed.isEmpty ? UIDevice.current.name : typed, forKey: "deviceName")
+                service.startAll()
             }
+            .disabled(editingName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } message: {
             Text("Choose a name for this device so the other iPad can identify it.")
         }

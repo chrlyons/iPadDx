@@ -8,6 +8,7 @@ struct ConductorDashboardView: View {
     @State private var pairDeviceB: PeerDevice?
     @State private var resultsExpanded = true
     @State private var eventLogExpanded = false
+    @Environment(\.colorScheme) private var colorScheme
 
     private var conductor: ConductorService? {
         service.conductorService
@@ -25,8 +26,10 @@ struct ConductorDashboardView: View {
                 // Queue controls
                 controlsSection
 
-                // Completed reports
-                if let conductor, !conductor.completedReports.isEmpty {
+                // Results — shown whenever there is anything to report. Gating this on
+                // completedReports alone hid the failed-run list and the Re-run Failed
+                // button in exactly the case they exist for: a queue where everything failed.
+                if let conductor, !conductor.completedReports.isEmpty || !conductor.failedRuns.isEmpty {
                     recentResultsSection
                 }
 
@@ -71,7 +74,7 @@ struct ConductorDashboardView: View {
                     if conductor.includeSelf {
                         SelfDeviceCard(
                             info: DeviceIdentifier.localDeviceInfo(),
-                            isTesting: conductor.queueStatus != .idle && conductor.queueStatus != .completed
+                            isTesting: conductor.isQueueRunning && conductor.selfIsTesting
                         )
                     }
 
@@ -221,7 +224,7 @@ struct ConductorDashboardView: View {
                     }
                 }
                 .padding(.horizontal)
-                .disabled(conductor.queueStatus != .idle)
+                .disabled(conductor.isQueueRunning)
 
                 // Bridge transport toggles
                 bridgeTransportSection(conductor)
@@ -234,7 +237,7 @@ struct ConductorDashboardView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                    .disabled(conductor.queueStatus != .idle)
+                    .disabled(conductor.isQueueRunning)
 
                     Button {
                         conductor.generateAllPairs()
@@ -243,9 +246,9 @@ struct ConductorDashboardView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                    .disabled(conductor.connectedAgents.isEmpty || conductor.queueStatus != .idle)
+                    .disabled(conductor.connectedAgents.isEmpty || conductor.isQueueRunning)
 
-                    if conductor.queueStatus != .idle, conductor.queueStatus != .completed {
+                    if conductor.isQueueRunning {
                         Button(role: .destructive) {
                             conductor.cancelQueue()
                         } label: {
@@ -257,7 +260,7 @@ struct ConductorDashboardView: View {
                     } else {
                         Button {
                             Task {
-                                await conductor.runQueue(reportStore: reportStore)
+                                await conductor.runQueue()
                                 for report in conductor.completedReports {
                                     reportStore.save(report, source: "conductor")
                                 }
@@ -267,7 +270,7 @@ struct ConductorDashboardView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(conductor.testQueue.isEmpty || conductor.queueStatus != .idle)
+                        .disabled(conductor.testQueue.isEmpty || conductor.isQueueRunning)
                     }
                 }
             }
@@ -306,8 +309,31 @@ struct ConductorDashboardView: View {
 
             if resultsExpanded, let conductor {
                 if !conductor.failedRuns.isEmpty,
-                   conductor.queueStatus == .idle || conductor.queueStatus == .completed
+                   !conductor.isQueueRunning
                 {
+                    VStack(spacing: 4) {
+                        ForEach(conductor.failedRuns) { run in
+                            HStack(spacing: 6) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                Text(run.label)
+                                    .font(.caption)
+                                let retries = conductor.retryCount[run.id, default: 0]
+                                if retries > 0 {
+                                    Text("\(retries)/\(conductor.maxRetries) retries")
+                                        .font(.caption2)
+                                        .fontWeight(.medium)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(.red.opacity(0.12), in: Capsule())
+                                        .foregroundStyle(.red)
+                                }
+                                Spacer()
+                            }
+                        }
+                    }
+
                     Button {
                         rerunFailedRuns()
                     } label: {
@@ -486,11 +512,12 @@ struct ConductorDashboardView: View {
         conductor.failedRuns.removeAll()
 
         guard !conductor.testQueue.isEmpty else { return }
-        conductor.queueStatus = .idle
+        let alreadySaved = Set(conductor.completedReports.map(\.id))
         Task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            await conductor.runQueue(reportStore: reportStore)
-            for report in conductor.completedReports {
+            // Keep the results already on screen — a retry should add to them, not wipe them.
+            await conductor.runQueue(preservingResults: true)
+            for report in conductor.completedReports where !alreadySaved.contains(report.id) {
                 reportStore.save(report, source: "conductor")
             }
         }
@@ -541,7 +568,7 @@ struct ConductorDashboardView: View {
             }
         }
         .padding(.horizontal)
-        .disabled(conductor.queueStatus != .idle)
+        .disabled(conductor.isQueueRunning)
     }
 
     // MARK: - Helpers
@@ -565,11 +592,6 @@ struct ConductorDashboardView: View {
     }
 
     private func gradeColor(_ grade: String) -> Color {
-        switch grade {
-        case "Excellent": .green
-        case "Good": .blue
-        case "Fair": .orange
-        default: .red
-        }
+        Color.gradeColor(grade, scheme: colorScheme)
     }
 }

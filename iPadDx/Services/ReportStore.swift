@@ -7,6 +7,11 @@ class ReportStore {
     /// Lightweight summaries — always in memory, drives list/analytics views.
     var summaries: [ReportSummary] = []
 
+    /// Human-readable reason the persistent store could not be opened, if it could not.
+    /// When this is set the app degrades to "reports unavailable" — nothing on disk is
+    /// ever modified or removed, so a later launch (or an app update) can still recover it.
+    var initError: String?
+
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
 
@@ -21,40 +26,51 @@ class ReportStore {
             )
             modelContext = modelContainer.map { ModelContext($0) }
         } catch {
-            AppLog("SwiftData init failed: \(error), deleting old store and retrying", level: .error, category: "Store")
-            if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-                let fm = FileManager.default
-                let files = (try? fm.contentsOfDirectory(at: appSupport, includingPropertiesForKeys: nil)) ?? []
-                for file in files where file.lastPathComponent.hasPrefix("iPadDxReports") {
-                    AppLog("Deleting: \(file.lastPathComponent)", level: .warning, category: "Store")
-                    try? fm.removeItem(at: file)
-                }
-            }
-            do {
-                let config = ModelConfiguration("iPadDxReports", isStoredInMemoryOnly: false)
-                modelContainer = try ModelContainer(for: ReportEntity.self, configurations: config)
-                modelContext = modelContainer.map { ModelContext($0) }
-                AppLog("Fresh database created successfully", category: "Store")
-            } catch {
-                AppLog("SwiftData fallback also failed: \(error)", level: .error, category: "Store")
-            }
+            // Never delete the store on failure — a transient open error must not cost
+            // the user their entire report history.
+            initError = "The saved-report database could not be opened: \(error.localizedDescription)"
+            AppLog(
+                "SwiftData init failed: \(error) — store left on disk untouched, no reports deleted",
+                level: .error,
+                category: "Store"
+            )
         }
         loadAll()
     }
 
     // MARK: - CRUD
 
-    func save(_ report: TestReport, source: String = "local") {
-        if let context = modelContext {
-            let entity = ReportEntity(from: report, source: source)
-            context.insert(entity)
-            try? context.save()
+    /// Persists a report and adds it to the in-memory summary list.
+    ///
+    /// Returns false if the report could not be persisted. The summary is only added
+    /// when persistence succeeded — listing a report whose full body can never be
+    /// loaded back produces a row that fails to open.
+    @discardableResult
+    func save(_ report: TestReport, source: String = "local") -> Bool {
+        guard let context = modelContext else {
+            AppLog(
+                "Cannot save report — report storage is unavailable",
+                level: .error,
+                category: "Store"
+            )
+            return false
+        }
+
+        let entity = ReportEntity(from: report, source: source)
+        context.insert(entity)
+        do {
+            try context.save()
+        } catch {
+            context.delete(entity)
+            AppLog("Failed to save report: \(error)", level: .error, category: "Store")
+            return false
         }
 
         if !summaries.contains(where: { $0.id == report.id }) {
             let summary = ReportSummary(from: report, source: source)
             summaries.insert(summary, at: 0)
         }
+        return true
     }
 
     func delete(_ id: UUID) {
@@ -196,28 +212,28 @@ class ReportStore {
 
     // MARK: - Export
 
-    func exportCSV(for report: TestReport) -> URL? {
+    nonisolated func exportCSV(for report: TestReport) -> URL? {
         let r = report.results
-        let bridgeLine = report.bridgeTransport.map { "Bridge Transport,\($0)\n" } ?? ""
+        let bridgeLine = report.bridgeTransport.map { "Bridge Transport,\(csvEscape($0))\n" } ?? ""
         let csv = """
         iPadDx Test Report
         Date,\(ISO8601DateFormatter().string(from: report.date))
         Duration,\(String(format: "%.1f", report.durationSeconds))s
-        Overall Grade,\(r.overallGrade)
+        Overall Grade,\(csvEscape(r.overallGrade))
         \(bridgeLine)
         Local Device
-        Name,\(report.localDevice.name)
-        Model,\(report.localDevice.displayModel)
-        Model #,"\(report.localDevice.modelNumber)"
-        Chip,\(report.localDevice.chipFamily)
-        OS,\(report.localDevice.osVersion)
+        Name,\(csvEscape(report.localDevice.name))
+        Model,\(csvEscape(report.localDevice.displayModel))
+        Model #,\(csvEscape(report.localDevice.modelNumber))
+        Chip,\(csvEscape(report.localDevice.chipFamily))
+        OS,\(csvEscape(report.localDevice.osVersion))
 
         Remote Device
-        Name,\(report.remoteDevice.name)
-        Model,\(report.remoteDevice.displayModel)
-        Model #,"\(report.remoteDevice.modelNumber)"
-        Chip,\(report.remoteDevice.chipFamily)
-        OS,\(report.remoteDevice.osVersion)
+        Name,\(csvEscape(report.remoteDevice.name))
+        Model,\(csvEscape(report.remoteDevice.displayModel))
+        Model #,\(csvEscape(report.remoteDevice.modelNumber))
+        Chip,\(csvEscape(report.remoteDevice.chipFamily))
+        OS,\(csvEscape(report.remoteDevice.osVersion))
 
         Latency Burst (\(r.latencyBurst.sampleCount) samples)
         Min,\(String(format: "%.2f", r.latencyBurst.min))ms
@@ -227,7 +243,7 @@ class ReportStore {
         P95,\(String(format: "%.2f", r.latencyBurst.p95))ms
 
         Throughput
-        Speed,\(r.sustainedThroughput.formattedSpeed)
+        Speed,\(csvEscape(r.sustainedThroughput.formattedSpeed))
         Bytes,\(r.sustainedThroughput.totalBytes)
         Duration,\(String(format: "%.2f", r.sustainedThroughput.durationSeconds))s
 
@@ -252,21 +268,30 @@ class ReportStore {
         Peak CPU,\(String(format: "%.1f", r.systemMetrics.peakCpuUsage))%
         Avg CPU,\(String(format: "%.1f", r.systemMetrics.avgCpuUsage))%
         Peak Memory,\(String(format: "%.0f", r.systemMetrics.peakMemoryMB))MB
-        Thermal State,\(r.systemMetrics.thermalStateDuringTest)
+        Thermal State,\(csvEscape(r.systemMetrics.thermalStateDuringTest))
         \(report.errors.map { errors in
-            "\nErrors (\(errors.count))\n" + errors.enumerated().map { "\($0.offset + 1),\($0.element)" }
+            "\nErrors (\(errors.count))\n" + errors.enumerated()
+                .map { "\($0.offset + 1),\(csvEscape($0.element))" }
+                .joined(separator: "\n")
+        } ?? "")
+        \(report.skippedPhases.map { phases in
+            "\nSkipped Phases (\(phases.count))\n" + phases.enumerated()
+                .map { "\($0.offset + 1),\(csvEscape($0.element))" }
                 .joined(separator: "\n")
         } ?? "")
         """
 
-        let fileName = "iPadDx_Report_\(report.localDevice.chipFamily)_vs_\(report.remoteDevice.chipFamily)_\(report.id.uuidString.prefix(8)).csv"
+        let stem = "\(report.localDevice.chipFamily)_vs_\(report.remoteDevice.chipFamily)"
+            .replacingOccurrences(of: ",", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
+        let fileName = "iPadDx_Report_\(stem)_\(report.id.uuidString.prefix(8)).csv"
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         try? csv.write(to: tempURL, atomically: true, encoding: .utf8)
         return tempURL
     }
 
     // swiftlint:disable function_body_length
-    func exportSummaryCSV(for reports: [TestReport]) -> URL? {
+    nonisolated func exportSummaryCSV(for reports: [TestReport]) -> URL? {
         let headers = [
             "Date",
             "Local Name",
@@ -327,15 +352,15 @@ class ReportStore {
                 csvEscape(r.localDevice.name),
                 csvEscape(r.localDevice.displayModel),
                 csvEscape(r.localDevice.modelNumber),
-                r.localDevice.chipFamily,
-                r.localDevice.osVersion,
+                csvEscape(r.localDevice.chipFamily),
+                csvEscape(r.localDevice.osVersion),
                 csvEscape(r.remoteDevice.name),
                 csvEscape(r.remoteDevice.displayModel),
                 csvEscape(r.remoteDevice.modelNumber),
-                r.remoteDevice.chipFamily,
-                r.remoteDevice.osVersion,
-                r.bridgeTransport ?? "native",
-                t.overallGrade,
+                csvEscape(r.remoteDevice.chipFamily),
+                csvEscape(r.remoteDevice.osVersion),
+                csvEscape(r.bridgeTransport ?? "native"),
+                csvEscape(t.overallGrade),
                 String(format: "%.1f", r.durationSeconds),
                 String(format: "%.2f", t.latencyBurst.min),
                 String(format: "%.2f", t.latencyBurst.max),
@@ -363,11 +388,11 @@ class ReportStore {
                 String(format: "%.1f", s.peakCpuUsage),
                 String(format: "%.1f", s.avgCpuUsage),
                 String(format: "%.0f", s.peakMemoryMB),
-                s.thermalStateDuringTest,
+                csvEscape(s.thermalStateDuringTest),
                 t.responderMetrics.map { String(format: "%.1f", $0.peakCpuUsage) } ?? "",
                 t.responderMetrics.map { String(format: "%.1f", $0.avgCpuUsage) } ?? "",
                 t.responderMetrics.map { String(format: "%.0f", $0.peakMemoryMB) } ?? "",
-                t.responderMetrics?.thermalStateDuringTest ?? "",
+                csvEscape(t.responderMetrics?.thermalStateDuringTest ?? ""),
                 t.responderMetrics.map { String(format: "%.2f", $0.batteryDrainPercent) } ?? "",
                 csvEscape(r.errors?.joined(separator: "; ") ?? ""),
             ]
@@ -375,7 +400,7 @@ class ReportStore {
         }
 
         let csv = rows.joined(separator: "\n")
-        let fileName = "iPadDx_Summary_\(reports.count)_reports.csv"
+        let fileName = "iPadDx_Summary_\(reports.count)_reports_\(ReportExporter.fileStamp()).csv"
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         try? csv.write(to: tempURL, atomically: true, encoding: .utf8)
         return tempURL
@@ -384,7 +409,7 @@ class ReportStore {
     // swiftlint:enable function_body_length
 
     // swiftlint:disable function_body_length
-    func exportAnalyticsCSV(for reports: [TestReport]) -> URL? {
+    nonisolated func exportAnalyticsCSV(for reports: [TestReport]) -> URL? {
         guard !reports.isEmpty else { return nil }
 
         var sections: [String] = []
@@ -411,7 +436,7 @@ class ReportStore {
         Generated,\(dateFormatter.string(from: Date()))
         Date Range,\(dateFormatter.string(from: earliest)) — \(dateFormatter.string(from: latest))
         Total Reports,\(reports.count)
-        Bridge Transports,"\(bridges.joined(separator: ", "))"
+        Bridge Transports,\(csvEscape(bridges.joined(separator: ", ")))
 
         Summary
         Metric,Average,Min,Max,Median
@@ -454,7 +479,7 @@ class ReportStore {
                 let bn = Double(br.count)
                 guard bn > 0 else { continue }
                 let row = [
-                    bridge,
+                    csvEscape(bridge),
                     "\(br.count)",
                     f(br.map(\.results.latencyBurst.avg).reduce(0, +) / bn),
                     f(br.map(\.results.latencyBurst.p95).reduce(0, +) / bn),
@@ -487,7 +512,7 @@ class ReportStore {
                     let br = byBridge[bridge]!
                     let n = Double(br.count)
                     let row = [
-                        csvEscape(pair), bridge, "\(br.count)",
+                        csvEscape(pair), csvEscape(bridge), "\(br.count)",
                         f(br.map(\.results.latencyBurst.avg).reduce(0, +) / n),
                         f(br.map(\.results.latencyBurst.p95).reduce(0, +) / n),
                         f(br.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
@@ -541,10 +566,12 @@ class ReportStore {
                         .reduce(0, +) / Double(asSender.count)
                     let receiverAvg = asReceiver.isEmpty ? 0 : asReceiver.map(\.results.latencyBurst.avg)
                         .reduce(0, +) / Double(asReceiver.count)
-                    chipRows
-                        .append(
-                            "\(chip),\(bridge),\(asSender.count),\(f(senderAvg)),\(asReceiver.count),\(f(receiverAvg))"
-                        )
+                    let row = [
+                        csvEscape(chip), csvEscape(bridge),
+                        "\(asSender.count)", f(senderAvg),
+                        "\(asReceiver.count)", f(receiverAvg),
+                    ]
+                    chipRows.append(row.joined(separator: ","))
                 }
             }
             sections.append("Per-Chip Summary\n" + chipRows.joined(separator: "\n"))
@@ -558,26 +585,62 @@ class ReportStore {
                     .reduce(0, +) / Double(asSender.count)
                 let receiverAvg = asReceiver.isEmpty ? 0 : asReceiver.map(\.results.latencyBurst.avg)
                     .reduce(0, +) / Double(asReceiver.count)
-                chipRows.append("\(chip),\(asSender.count),\(f(senderAvg)),\(asReceiver.count),\(f(receiverAvg))")
+                let row = [
+                    csvEscape(chip),
+                    "\(asSender.count)", f(senderAvg),
+                    "\(asReceiver.count)", f(receiverAvg),
+                ]
+                chipRows.append(row.joined(separator: ","))
             }
             sections.append("Per-Chip Summary\n" + chipRows.joined(separator: "\n"))
         }
 
-        // Section 6: Failed tests
+        // Section 6: Per-OS-pair breakdown (controller OS → responder OS)
+        let osGrouped = Dictionary(grouping: reports) {
+            "\($0.localDevice.osVersion) \u{2192} \($0.remoteDevice.osVersion)"
+        }
+        var osPairRows = [
+            "OS Pair,Count,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),Fail Rate (%)",
+        ]
+        for (pair, pairReports) in osGrouped.sorted(by: { $0.key < $1.key }) {
+            let n = Double(pairReports.count)
+            let failCount = pairReports
+                .filter { $0.results.overallGrade == "Poor" || $0.results.overallGrade == "Fair" }.count
+            let row = [
+                csvEscape(pair), "\(pairReports.count)",
+                f(pairReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
+                f(pairReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
+                f(pairReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
+                f(pairReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
+                f(pairReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
+                f(pairReports.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                f(Double(failCount) / n * 100),
+            ]
+            osPairRows.append(row.joined(separator: ","))
+        }
+        sections.append("Per-OS-Pair Breakdown\n" + osPairRows.joined(separator: "\n"))
+
+        // Section 7: Failed tests
         let failed = reports.filter { $0.results.latencyBurst.sampleCount == 0 }
         if !failed.isEmpty {
-            var failRows = ["Date,Local,Remote,Bridge,Grade,Errors"]
+            var failRows = ["Date,Local,Remote,Bridge,Grade,Errors,Skipped Phases"]
             for r in failed {
-                failRows
-                    .append(
-                        "\(ISO8601DateFormatter().string(from: r.date)),\(csvEscape(r.localDevice.shortDescription)),\(csvEscape(r.remoteDevice.shortDescription)),\(r.bridgeTransport ?? "native"),\(r.results.overallGrade),\(csvEscape(r.errors?.joined(separator: "; ") ?? ""))"
-                    )
+                let row = [
+                    ISO8601DateFormatter().string(from: r.date),
+                    csvEscape(r.localDevice.shortDescription),
+                    csvEscape(r.remoteDevice.shortDescription),
+                    csvEscape(r.bridgeTransport ?? "native"),
+                    csvEscape(r.results.overallGrade),
+                    csvEscape(r.errors?.joined(separator: "; ") ?? ""),
+                    csvEscape(r.skippedPhases?.joined(separator: "; ") ?? ""),
+                ]
+                failRows.append(row.joined(separator: ","))
             }
             sections.append("Failed Tests (\(failed.count))\n" + failRows.joined(separator: "\n"))
         }
 
         let csv = sections.joined(separator: "\n\n")
-        let fileName = "iPadDx_Analytics_\(reports.count)_reports.csv"
+        let fileName = "iPadDx_Analytics_\(reports.count)_reports_\(ReportExporter.fileStamp()).csv"
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         try? csv.write(to: tempURL, atomically: true, encoding: .utf8)
         return tempURL
@@ -585,11 +648,11 @@ class ReportStore {
 
     // swiftlint:enable function_body_length
 
-    private func f(_ value: Double) -> String {
+    nonisolated private func f(_ value: Double) -> String {
         String(format: "%.2f", value)
     }
 
-    private func median(_ values: [Double]) -> Double {
+    nonisolated private func median(_ values: [Double]) -> Double {
         guard !values.isEmpty else { return 0 }
         let sorted = values.sorted()
         let mid = sorted.count / 2
@@ -599,10 +662,8 @@ class ReportStore {
         return sorted[mid]
     }
 
-    private func csvEscape(_ value: String) -> String {
-        if value.contains(",") || value.contains("\"") || value.contains("\n") {
-            return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
-        }
-        return value
+    /// Single shared escaping rule for every CSV field this app writes.
+    nonisolated private func csvEscape(_ value: String) -> String {
+        ReportExporter.csvEscape(value)
     }
 }

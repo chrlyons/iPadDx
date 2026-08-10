@@ -10,26 +10,33 @@ Supports standalone 1:1 testing, or fleet-wide automated testing via Conductor m
 - **Bonjour Discovery** -- Automatic peer discovery using `_ipadconn._tcp` service type
 - **TLS-PSK Encryption** -- AES-128-GCM pre-shared key encryption on all connections
 - **Real-Time Latency** -- Ping/pong measurements every 500ms with live sparkline chart
-- **Throughput Testing** -- 10MB data transfer test with MB/s results
-- **Signal Quality** -- Derived from latency, jitter, packet loss, and load degradation (Excellent/Good/Fair/Poor)
+- **Throughput Testing** -- Real 10MB payload transfer; the receiving device counts the bytes and reports the rate
+- **Signal Quality** -- Derived from latency, jitter and packet loss (Excellent/Good/Fair/Poor)
 - **Network Path Info** -- Interface type, expensive/constrained flags, path status
 - **Peer Device Info** -- Hardware model, chip family, OS version, device name
 
 ### Conductor Mode (Fleet Testing)
 - **Multi-Device Orchestration** -- Connect and manage a fleet of iPads from one conductor device
 - **Parallel Test Execution** -- Runs multiple device pairs simultaneously, maximizing throughput
-- **Automated Pair Generation** -- Test all N x N device combinations with one tap
+- **Automated Pair Generation** -- Test all ordered device pairs, N x (N-1), with one tap
 - **Include Self** -- Conductor can participate in tests alongside fleet agents
-- **Re-run Failed Tests** -- Automatically re-queue and run failed pairs
+- **Re-run Failed Tests** -- Automatic retry of transient failures, plus a manual re-run button
 - **Real-Time Fleet Status** -- Live progress, phase info, and status for each agent
 
-### Test Suite (6 Phases)
-1. **Latency Burst** -- 100 pings at 50ms intervals measuring round-trip time
-2. **Sustained Throughput** -- 10MB transfer measuring data rate
-3. **Jitter Measurement** -- 150 samples at 80ms intervals measuring latency variation
-4. **Packet Loss Stress** -- 500 pings at 10ms intervals under aggressive conditions
-5. **Latency Under Load** -- Latency measurement while saturating the connection
-6. **Heavy Load Stress** -- Concurrent data + pings for 15 seconds at maximum stress
+### Test Suite (7 Phases)
+1. **DNS Resolution** -- Measures mDNS discovery time for the peer's Bonjour service via a fresh `NWBrowser`
+2. **Latency Burst** -- 100 pings at 50ms intervals measuring round-trip time
+3. **Sustained Throughput** -- 10MB of real payload in 32KB chunks; the receiver counts the bytes that
+   arrive and acks its own measurement back to the sender
+4. **Jitter Measurement** -- 150 samples at 80ms intervals measuring variation between consecutive probes
+5. **Packet Loss Stress** -- 500 pings at 10ms intervals under aggressive conditions
+6. **Latency Under Load** -- Latency measured while a real payload stream saturates the link
+7. **Heavy Load Stress** -- Three concurrent real payload streams + 75 latency probes for 15 seconds
+
+Throughput is reported as **application payload bytes per second**. Messages are framed as JSON, so
+payload bytes are base64-encoded on the wire and the link actually carries roughly 1.33x the reported
+figure. The framing is identical for every transport, so cross-device and cross-bridge comparisons
+remain like-for-like.
 
 ### Reporting & Analytics
 - **Per-Test Reports** -- Detailed metrics for each test run with device info and grading
@@ -37,6 +44,7 @@ Supports standalone 1:1 testing, or fleet-wide automated testing via Conductor m
 - **CSV Export** -- Individual reports, bulk summaries, and raw data
 - **PDF Analytics Report** -- Formatted report with summary stats, per-pair breakdowns, per-chip analysis, grade distribution, and full test data
 - **Report Comparison** -- Side-by-side comparison of any two reports
+- **Trend Detection** -- Linear-regression trends per metric and per device pair, with confidence
 - **Bulk Management** -- Select all/some reports for export or deletion
 - **iPad Hardware Catalog** -- Automatic chip family detection via sysctl with fallback to model number lookup
 
@@ -61,12 +69,22 @@ Supports standalone 1:1 testing, or fleet-wide automated testing via Conductor m
 1. Both iPads automatically begin advertising and browsing for peers
 2. Tap a discovered device in the sidebar to connect
 3. The other device auto-accepts and both show the diagnostic dashboard
-4. Use the **Test Suite** to run the full 6-phase test
-5. Reports are saved automatically and available in the Reports tab
+4. On the controller device, use the **Test Suite** to run the full 7-phase test
+   (tests are initiated from the controller; the responder shows a status card)
+5. When the run finishes, tap **Save & Sync** to store the report and send it to the peer;
+   saved reports appear in the Reports tab
+
+### Bridge Transport Comparison
+
+Cordova, React Native, Flutter and Capacitor overhead is measured by running the suite through the real
+framework runtime on **both** devices. That requires a fresh connection stood up on each side, which only
+Conductor mode can orchestrate, so bridge comparison is available for **agent-to-agent pairs only**.
+Standalone runs and any pair that includes the conductor itself always use the native transport, and their
+reports record exactly that — a report is never labelled with a bridge that did not carry its bytes.
 
 ### Conductor (Fleet Testing)
 1. On the conductor iPad, tap **Enable Conductor Mode** in the sidebar
-2. Other iPads will appear in the discovered devices list -- tap to add them to the fleet
+2. Other iPads appear under **Nearby Devices** in the sidebar -- tap to add them to the fleet
 3. Each device automatically enters Agent mode when added
 4. Toggle **Include This Device** to add the conductor to the test pool
 5. Tap **All Pairs** to generate every device combination, or **Add Pair** for specific pairs
@@ -83,7 +101,7 @@ Built with SwiftUI and Apple's Network.framework (`NWBrowser`, `NWListener`, `NW
 iPadDx/
 ├── iPadDxApp.swift
 ├── Models/
-│   ├── DiagnosticMessage.swift       # Wire protocol (21 message types)
+│   ├── DiagnosticMessage.swift       # Wire protocol (19 message types)
 │   ├── DiagnosticMetrics.swift       # Observable metric model + signal quality
 │   ├── PeerDevice.swift              # Peer device model with roles
 │   ├── DeviceConnection.swift        # Fleet agent connection wrapper
@@ -101,7 +119,7 @@ iPadDx/
 │   ├── ReportStore.swift             # SwiftData persistence + CSV/analytics export
 │   ├── AnalyticsReportRenderer.swift # PDF report generation
 │   ├── DeviceIdentifier.swift        # Hardware/chip detection via sysctl
-│   └── SystemMonitor.swift           # CPU/memory/battery/thermal via Mach kernel
+│   └── SystemMonitor.swift           # CPU/memory via Mach; battery via UIDevice, thermal via ProcessInfo
 └── Views/
     ├── ContentView.swift             # NavigationSplitView root
     ├── DeviceListView.swift          # Peer discovery sidebar
@@ -138,7 +156,8 @@ Devices communicate over TLS-PSK encrypted TCP using length-prefixed JSON framin
 |---|---|---|
 | `ping` / `pong` | Both | Latency probes (diagnostic heartbeat) |
 | `peerInfo` | Both | Exchange device name, model, chip, OS, stable ID |
-| `throughputStart` / `throughputData` / `throughputAck` | A -> B | Throughput measurement |
+| `throughputStart` / `throughputData` | A -> B | Throughput transfer (`throughputData` carries real payload bytes) |
+| `throughputAck` | B -> A | Receiver's measurement: bytes counted and elapsed time |
 | `testPing` / `testPong` | A -> B -> A | Test suite latency probes (sequenced) |
 | `testSuiteStatus` | A -> B | Notify responder of test phase |
 | `reportSync` | Both | Share test reports between devices |
@@ -147,6 +166,9 @@ Devices communicate over TLS-PSK encrypted TCP using length-prefixed JSON framin
 | `orchestrationStatus` | Agent -> Conductor | Report test progress/completion/failure |
 | `orchestrationReport` | Agent -> Conductor | Send completed test report |
 | `orchestrationCancel` | Conductor -> Agent | Cancel in-progress test |
+| `agentCapabilities` | Agent -> Conductor | Advertise supported bridge transports, app and iOS version |
+| `liveMetrics` | Responder -> Controller | CPU / memory / thermal broadcast every 2s during a test |
+| `responderMetrics` | Responder -> Controller | Responder-side system metrics after the test |
 | `disconnect` | Both | Graceful disconnect |
 
 ## Grading Algorithm
@@ -159,6 +181,8 @@ Tests are scored on a 12-point scale across 4 dimensions:
 | Avg Jitter | < 5ms | < 15ms | < 30ms | >= 30ms |
 | Packet Loss | < 1% | < 5% | < 10% | >= 10% |
 | Load Degradation | <= 0% | < 50% | < 100% | >= 100% |
+
+Only dimensions that actually produced samples are scored; the total is then normalised onto the 12-point scale. A phase that is disabled or that collects nothing contributes nothing — it cannot raise the grade.
 
 - **Excellent**: 9-12 points
 - **Good**: 6-8 points

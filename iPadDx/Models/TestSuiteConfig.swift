@@ -2,6 +2,7 @@ import Foundation
 
 struct TestSuiteConfig: Codable {
     // Phase enable/disable
+    var runDNSResolution: Bool = true
     var runLatencyBurst: Bool = true
     var runThroughput: Bool = true
     var runJitter: Bool = true
@@ -29,13 +30,14 @@ struct TestSuiteConfig: Codable {
     var bridgeTransports: [String] = ["native"]
 
     var enabledPhaseCount: Int {
-        [runLatencyBurst, runThroughput, runJitter, runPacketLoss, runLatencyUnderLoad, runHeavyLoad]
+        [runDNSResolution, runLatencyBurst, runThroughput, runJitter, runPacketLoss, runLatencyUnderLoad, runHeavyLoad]
             .filter(\.self).count
     }
 
     static let `default` = TestSuiteConfig()
 
     static let quick = TestSuiteConfig(
+        runDNSResolution: false,
         runLatencyUnderLoad: false,
         runHeavyLoad: false,
         runWarmUp: true,
