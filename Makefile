@@ -73,6 +73,26 @@ require-workspace:
 		echo ""; \
 		exit 1; \
 	fi
+	@# Final check: ask xcodebuild itself. A workspace can look correct to the checks
+	@# above and still be rejected ("is not a workspace file") for reasons only
+	@# xcodebuild sees — wrong type on disk, unreadable permissions, a stale nested
+	@# workspace. Surfacing its own error beats a guess.
+	@if ! xcodebuild -list -workspace "$(WORKSPACE)" >/dev/null 2>&1; then \
+		echo ""; \
+		echo "xcodebuild cannot read $(WORKSPACE). Its error:"; \
+		echo ""; \
+		xcodebuild -list -workspace "$(WORKSPACE)" 2>&1 | sed 's/^/    /' | head -15; \
+		echo ""; \
+		echo "Diagnostics:"; \
+		echo "    path type: $$(if [ -L "$(WORKSPACE)" ]; then echo symlink; elif [ -d "$(WORKSPACE)" ]; then echo directory; elif [ -f "$(WORKSPACE)" ]; then echo "regular file (should be a directory)"; else echo missing; fi)"; \
+		echo "    permissions: $$(ls -ld "$(WORKSPACE)" 2>/dev/null | awk '{print $$1, $$3, $$4}')"; \
+		echo "    xcodebuild: $$(xcodebuild -version 2>/dev/null | head -1)"; \
+		echo "    xcode-select: $$(xcode-select -p 2>/dev/null)"; \
+		echo ""; \
+		echo "Usually fixed by regenerating:  rm -rf $(WORKSPACE) Pods && make pods"; \
+		echo ""; \
+		exit 1; \
+	fi
 
 help: ## Show this help
 	@# No pipefail here on purpose: grep exits 1 when it matches nothing, which would

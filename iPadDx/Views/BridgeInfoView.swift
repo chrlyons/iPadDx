@@ -315,26 +315,41 @@ struct BridgeInfoView: View {
         let nativeBaselineMs: Double?
     }
 
-    /// The device pair with the most bridges measured, which is the only
-    /// apples-to-apples comparison the saved reports can support. Returns nil
-    /// until at least one test has been saved.
+    /// The device pair with the most bridges actually MEASURED — the only
+    /// apples-to-apples comparison the saved reports can support. Returns nil only
+    /// when no pair has any measured bridge rows at all.
+    ///
+    /// The candidate must be chosen AFTER `bridgeComparison` has dropped unmeasured
+    /// rows. Ranking raw summaries first meant a pair with many cancelled reports won
+    /// the ranking, produced zero rows, and the screen claimed "No bridge measurements
+    /// recorded yet" while another pair had perfectly good data.
     private var measuredComparison: MeasuredComparison? {
         let byPair = Dictionary(grouping: store.summaries) { "\($0.localChip)|\($0.remoteChip)" }
-        let best = byPair.values.max { lhs, rhs in
-            let lhsKey = (Set(lhs.map(\.bridgeTransport)).count, lhs.count)
-            let rhsKey = (Set(rhs.map(\.bridgeTransport)).count, rhs.count)
-            return lhsKey < rhsKey
+
+        let candidates: [MeasuredComparison] = byPair.values.compactMap { summaries in
+            guard let sample = summaries.first else { return nil }
+            let rows = store.bridgeComparison(local: sample.localChip, remote: sample.remoteChip)
+            guard !rows.isEmpty else { return nil }
+            return MeasuredComparison(
+                pairLabel: "\(sample.localChip) → \(sample.remoteChip)",
+                // bridgeComparison only returns rows with measured latency, so the
+                // sort key is always present.
+                rows: rows.sorted { ($0.avgLatency ?? 0) < ($1.avgLatency ?? 0) },
+                nativeBaselineMs: rows.first { $0.bridge == "native" }?.avgLatency
+            )
         }
-        guard let sample = best?.first else { return nil }
-        let rows = store.bridgeComparison(local: sample.localChip, remote: sample.remoteChip)
-        guard !rows.isEmpty else { return nil }
-        return MeasuredComparison(
-            pairLabel: "\(sample.localChip) → \(sample.remoteChip)",
-            // bridgeComparison only returns rows with measured latency, so the sort
-            // key is always present.
-            rows: rows.sorted { ($0.avgLatency ?? 0) < ($1.avgLatency ?? 0) },
-            nativeBaselineMs: rows.first { $0.bridge == "native" }?.avgLatency
-        )
+
+        // Rank on measured evidence: most bridges compared, then most reports behind
+        // those measurements, then a stable label so the screen does not flip between
+        // equally-good pairs on redraw.
+        return candidates.max { lhs, rhs in
+            let lhsKey = (lhs.rows.count, lhs.rows.reduce(0) { $0 + $1.measuredLatencyCount })
+            let rhsKey = (rhs.rows.count, rhs.rows.reduce(0) { $0 + $1.measuredLatencyCount })
+            if lhsKey != rhsKey {
+                return lhsKey < rhsKey
+            }
+            return lhs.pairLabel > rhs.pairLabel
+        }
     }
 
     private var overheadSection: some View {

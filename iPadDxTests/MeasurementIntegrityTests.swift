@@ -834,3 +834,80 @@ final class BridgeComparisonValidityTests: XCTestCase {
         XCTAssertEqual(BridgeComparisonRow.gradeScore("Cancelled"), 0)
     }
 }
+
+/// Guards the bridge-comparison pair selection.
+///
+/// Once bridgeComparison started dropping unmeasured rows, picking the "best" pair from
+/// raw summaries first became wrong: a pair with many cancelled reports won the ranking,
+/// produced zero rows, and the screen said "No bridge measurements recorded yet" while a
+/// different pair had perfectly good data. Candidates must be ranked on measured rows.
+final class BridgeComparisonSelectionTests: XCTestCase {
+    private func row(_ bridge: String, latency: Double?, measured: Int) -> BridgeComparisonRow {
+        BridgeComparisonRow(
+            bridge: bridge,
+            reportCount: max(measured, 1),
+            measuredLatencyCount: measured,
+            avgLatency: latency,
+            avgJitter: nil,
+            avgPacketLoss: nil,
+            avgThroughput: nil,
+            avgGradeScore: 9
+        )
+    }
+
+    /// Mirrors the view's ranking: most bridges compared, then most measured reports.
+    private func best(_ candidates: [(label: String, rows: [BridgeComparisonRow])])
+        -> (label: String, rows: [BridgeComparisonRow])?
+    {
+        candidates
+            .filter { !$0.rows.isEmpty }
+            .max { lhs, rhs in
+                let l = (lhs.rows.count, lhs.rows.reduce(0) { $0 + $1.measuredLatencyCount })
+                let r = (rhs.rows.count, rhs.rows.reduce(0) { $0 + $1.measuredLatencyCount })
+                if l != r {
+                    return l < r
+                }
+                return lhs.label > rhs.label
+            }
+    }
+
+    func testPairWithNoMeasuredRowsDoesNotHideAPairThatHasThem() {
+        // "A→B" would win on raw report count but contributes no measured rows.
+        let candidates = [
+            (label: "A→B", rows: [BridgeComparisonRow]()),
+            (label: "C→D", rows: [
+                row("native", latency: 8, measured: 2),
+                row("cordova", latency: 17, measured: 2),
+            ]),
+        ]
+        let chosen = best(candidates)
+        XCTAssertEqual(chosen?.label, "C→D", "an unmeasured pair must not suppress a measured one")
+        XCTAssertEqual(chosen?.rows.count, 2)
+    }
+
+    func testAllPairsUnmeasuredYieldsNoComparison() {
+        let candidates = [
+            (label: "A→B", rows: [BridgeComparisonRow]()),
+            (label: "C→D", rows: [BridgeComparisonRow]()),
+        ]
+        XCTAssertNil(best(candidates), "only then should the empty state appear")
+    }
+
+    func testMoreBridgesComparedWinsOverMoreReports() {
+        let candidates = [
+            (label: "A→B", rows: [row("native", latency: 8, measured: 50)]),
+            (label: "C→D", rows: [
+                row("native", latency: 8, measured: 2),
+                row("flutter", latency: 14, measured: 2),
+            ]),
+        ]
+        XCTAssertEqual(best(candidates)?.label, "C→D", "a comparison needs at least two bridges")
+    }
+
+    func testSelectionIsStableForEquallyGoodPairs() {
+        let rows = [row("native", latency: 8, measured: 2), row("cordova", latency: 15, measured: 2)]
+        let a = best([(label: "A→B", rows: rows), (label: "C→D", rows: rows)])
+        let b = best([(label: "C→D", rows: rows), (label: "A→B", rows: rows)])
+        XCTAssertEqual(a?.label, b?.label, "the screen must not flip between pairs on redraw")
+    }
+}
