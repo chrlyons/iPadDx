@@ -240,9 +240,15 @@ jobs:
           # app actually references are defined here, where the cause is obvious.
           STAGED_LIB=../../../Frameworks/ReactNative/libReactNative.a
 
-          # Diagnostics before the assertion. The first version of this guard sent nm's
-          # stderr to /dev/null, so when it reported the symbol missing there was no way
-          # to tell a genuinely incomplete archive from nm failing to read it at all.
+          # nm's output goes to a FILE and the assertion greps the file. Do not collapse
+          # this back into `nm ... | grep -qF`: grep -q exits on first match and SIGPIPEs
+          # nm, so under this job's pipefail the pipeline returns 141 and every symbol
+          # reads as missing. That false negative failed the build against a perfectly
+          # good 326 MB archive. It is the same SIGPIPE-under-pipefail trap the Flutter
+          # step above documents — it has now bitten twice in this file.
+          #
+          # Diagnostics run before the assertion, and nm's stderr is kept, so an
+          # incomplete archive can be told apart from nm failing to read one at all.
           echo "--- libReactNative.a ---"
           ls -lh "$STAGED_LIB" | awk '{print "  size: " $5}'
           echo "  React-Core included in merge: $(echo "$LIBS" | grep -c 'libReact-Core\.a')"
