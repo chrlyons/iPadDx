@@ -84,7 +84,9 @@ jobs:
       - name: Select Xcode
         run: |
           # Use the latest Xcode 16.x available on the runner
-          XCODE_PATH=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          # `|| true`: with pipefail a no-match `ls` fails the pipeline, and under -e
+          # the assignment would abort the step before the "not found" branch below runs.
+          XCODE_PATH=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1 || true)
           if [ -z "$XCODE_PATH" ]; then
             echo "No Xcode 16.x found, using default"
             xcodebuild -version
@@ -198,7 +200,8 @@ jobs:
           fi
 
           # --- Copy hermes.xcframework ---
-          HERMES_SRC=$(find Pods -name "hermes.xcframework" -type d | head -1)
+          # `|| true` — see the XCODE_PATH note: "not found" is handled by the else below.
+          HERMES_SRC=$(find Pods -name "hermes.xcframework" -type d | head -1 || true)
           if [ -n "$HERMES_SRC" ]; then
             cp -R "$HERMES_SRC" ../../../Frameworks/hermes.xcframework
             echo "hermes.xcframework copied"
@@ -288,10 +291,12 @@ jobs:
           # pinned model that only exists under an older runtime fails with "Unable to
           # find a device matching the provided destination specifier". Runner images
           # change their device/runtime mix regularly.
+          # `|| true` — grep exits 1 when no iPad simulator exists, which under
+          # pipefail + -e would kill the step before the explicit error message below.
           SIM_ID=$(xcrun simctl list devices available \
             | grep -E '^ +iPad' \
             | grep -oE '[0-9A-F]{8}-[0-9A-F-]{27}' \
-            | head -1)
+            | head -1 || true)
           if [ -z "$SIM_ID" ]; then
             echo "::error::No iPad simulator available on this runner."
             xcrun simctl list devices available
