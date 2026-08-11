@@ -911,3 +911,63 @@ final class BridgeComparisonSelectionTests: XCTestCase {
         XCTAssertEqual(a?.label, b?.label, "the screen must not flip between pairs on redraw")
     }
 }
+
+/// Guards against latency being treated as the only real metric.
+///
+/// Phases are independently disableable, so "no latency" does not mean "failed run".
+/// Three places assumed otherwise: the PDF trend gate, the Failed Tests lists in both
+/// exports, and computeGrade's short-circuit to Poor.
+final class LatencyIsNotTheOnlyMetricTests: XCTestCase {
+    private func results(latency: Int, jitter: Int, lossSent: Int, throughput: Double) -> TestSuiteResults {
+        TestSuiteResults(
+            latencyBurst: LatencyBurstResult(
+                min: 1, max: 2, avg: 1.5, median: 1.5, p95: 2,
+                sampleCount: latency, samples: []
+            ),
+            sustainedThroughput: ThroughputResult(
+                bytesPerSecond: throughput, totalBytes: 10, durationSeconds: 1
+            ),
+            jitterMeasurement: JitterResult(averageJitter: 1, maxJitter: 2, sampleCount: jitter),
+            packetLossStress: PacketLossResult(
+                sent: lossSent, received: lossSent, lostPercent: 0.5, durationSeconds: 1
+            ),
+            latencyUnderLoad: LatencyUnderLoadResult(
+                baselineAvg: 0, underLoadAvg: 0, degradationPercent: 0, sampleCount: 0
+            ),
+            systemMetrics: SystemMetricsResult(
+                batteryStart: 1, batteryEnd: 1, batteryDrainPercent: 0,
+                peakCpuUsage: 1, avgCpuUsage: 1, peakMemoryMB: 1,
+                thermalStateDuringTest: "Nominal"
+            ),
+            overallGrade: "Good"
+        )
+    }
+
+    func testRunWithoutLatencyIsNotAFailedRun() {
+        // Latency Burst disabled, everything else measured cleanly.
+        let r = results(latency: 0, jitter: 150, lossSent: 500, throughput: 5_000_000)
+        XCTAssertFalse(r.measuredNothing, "a run is only failed when it measured nothing at all")
+        XCTAssertFalse(r.hasLatency)
+        XCTAssertTrue(r.hasJitter)
+        XCTAssertTrue(r.hasPacketLoss)
+        XCTAssertTrue(r.hasThroughput)
+    }
+
+    func testRunWithOnlyThroughputIsStillNotFailed() {
+        let r = results(latency: 0, jitter: 0, lossSent: 0, throughput: 5_000_000)
+        XCTAssertFalse(r.measuredNothing)
+    }
+
+    func testCancelledRunMeasuredNothing() {
+        let r = results(latency: 0, jitter: 0, lossSent: 0, throughput: 0)
+        XCTAssertTrue(r.measuredNothing)
+    }
+
+    func testMeasuredNothingRequiresEveryDimensionEmpty() {
+        // Each dimension alone is enough to make the run non-failed.
+        XCTAssertFalse(results(latency: 1, jitter: 0, lossSent: 0, throughput: 0).measuredNothing)
+        XCTAssertFalse(results(latency: 0, jitter: 1, lossSent: 0, throughput: 0).measuredNothing)
+        XCTAssertFalse(results(latency: 0, jitter: 0, lossSent: 1, throughput: 0).measuredNothing)
+        XCTAssertFalse(results(latency: 0, jitter: 0, lossSent: 0, throughput: 1).measuredNothing)
+    }
+}

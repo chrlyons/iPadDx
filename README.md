@@ -204,7 +204,7 @@ Only dimensions that actually produced samples are scored; the total is then nor
 - **Excellent**: 9-12 points
 - **Good**: 6-8 points
 - **Fair**: 3-5 points
-- **Poor**: 0-2 points (or 0 latency + jitter samples = test failed)
+- **Poor**: 0-2 points (or a run that measured nothing at all)
 
 ## License
 

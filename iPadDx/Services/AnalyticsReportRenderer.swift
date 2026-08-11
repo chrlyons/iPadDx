@@ -71,8 +71,14 @@ enum AnalyticsReportRenderer {
             drawGradeTable(reports: reports, cursor: &cursor, width: contentWidth)
             cursor.y += 20
 
-            // Trends (a regression needs at least 3 reports that measured something)
-            if reports.filter(\.results.hasLatency).count >= 3 {
+            // Trends need 3+ reports that measured SOME trended metric — not
+            // specifically latency. drawTrendTable renders each metric independently,
+            // so gating the whole section on latency hid throughput/jitter/packet-loss
+            // trends whenever the latency phase was disabled or came back empty.
+            let trendable = trendMetrics().contains { metric in
+                reports.filter { metric.value($0) != nil }.count >= 3
+            }
+            if trendable {
                 cursor.drawSectionHeader("Trends", width: contentWidth)
                 drawTrendTable(reports: reports, cursor: &cursor, width: contentWidth)
                 cursor.y += 10
@@ -122,7 +128,7 @@ enum AnalyticsReportRenderer {
             }
 
             // Failed tests
-            let failed = reports.filter { $0.results.latencyBurst.sampleCount == 0 }
+            let failed = reports.filter(\.results.measuredNothing)
             if !failed.isEmpty {
                 cursor.drawSectionHeader("Failed Tests (\(failed.count))", width: contentWidth)
                 drawFailedTable(reports: failed, cursor: &cursor, width: contentWidth)

@@ -1146,10 +1146,13 @@ class TestSuiteRunner {
         loss: PacketLossResult,
         underLoad: LatencyUnderLoadResult
     ) -> SignalQuality {
-        // No real data collected — test effectively failed
-        if latency.sampleCount == 0, jitter.sampleCount == 0 {
-            return .poor
-        }
+        // Grade Poor only when the run measured NOTHING. Keying this off latency and
+        // jitter alone short-circuited to Poor whenever those two phases were disabled,
+        // even if packet loss and throughput were measured cleanly — the same
+        // latency-is-the-only-real-metric assumption fixed in the exports.
+        let measuredAnything = latency.sampleCount > 0 || jitter.sampleCount > 0
+            || loss.sent > 0 || underLoad.sampleCount > 0
+        guard measuredAnything else { return .poor }
 
         // Only dimensions that actually produced measurements may contribute.
         // Zero sits in the best-scoring band of every dimension, so scoring a

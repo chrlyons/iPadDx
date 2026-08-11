@@ -646,7 +646,7 @@ class ReportStore {
         sections.append("Per-OS-Pair Breakdown\n" + osPairRows.joined(separator: "\n"))
 
         // Section 7: Failed tests
-        let failed = reports.filter { $0.results.latencyBurst.sampleCount == 0 }
+        let failed = reports.filter(\.results.measuredNothing)
         if !failed.isEmpty {
             var failRows = ["Date,Local,Remote,Bridge,Grade,Errors,Skipped Phases"]
             for r in failed {

@@ -209,6 +209,16 @@ extension TestSuiteResults {
         sustainedThroughput.bytesPerSecond > 0
     }
 
+    /// True when the run produced no measurement of any kind.
+    ///
+    /// This is what "failed" means in exports. Keying it off latency alone was wrong
+    /// once phases became independently disableable: a run with Latency Burst switched
+    /// off but throughput, jitter and packet loss all measured is a perfectly good
+    /// report, not a failure.
+    var measuredNothing: Bool {
+        !hasLatency && !hasJitter && !hasPacketLoss && !hasThroughput
+    }
+
     var hasLoadDegradation: Bool {
         latencyUnderLoad.sampleCount > 0 && latencyUnderLoad.baselineAvg > 0
     }
