@@ -203,12 +203,24 @@ jobs:
           RN_BUILD=$(pwd)/build/Release-iphoneos
           cd "$RN_BUILD"
           mkdir -p merged
-          # Collect all .a files except Pods dummy libs
-          LIBS=$(find . -maxdepth 1 -name "*.a" ! -name "libPods*" -type f)
-          if [ -n "$LIBS" ]; then
-            libtool -static -o merged/libReactNative.a $LIBS
-            echo "Merged $(echo $LIBS | wc -w | tr -d ' ') static libs into libReactNative.a"
+          # CocoaPods writes each pod's static library into its OWN subdirectory
+          # (Release-iphoneos/React-Core/libReact-Core.a), so `-maxdepth 1` matched
+          # exactly one library — the RNBridge target's — and merged that alone. The
+          # app then failed to link with undefined _OBJC_CLASS_$_RCTBridge,
+          # _RCTRegisterModule and __RCTLogNativeInternal, all of which live in
+          # React-Core. Recurse instead.
+          #
+          # XCFrameworkIntermediates is pruned: it holds slices unpacked from prebuilt
+          # xcframeworks (hermes), which are linked separately via hermes.xcframework.
+          # Merging them here would define those symbols twice.
+          LIBS=$(find . -path ./XCFrameworkIntermediates -prune -o \
+                   -name "*.a" ! -name "libPods*" -type f -print)
+          if [ -z "$LIBS" ]; then
+            echo "::error::No static libraries found under $RN_BUILD — nothing to merge."
+            exit 1
           fi
+          libtool -static -o merged/libReactNative.a $LIBS
+          echo "Merged $(echo "$LIBS" | wc -w | tr -d ' ') static libs into libReactNative.a"
           cd -
 
           # --- Copy artifacts to Frameworks/ ---
@@ -218,8 +230,22 @@ jobs:
           elif [ -f "$RN_BUILD/libReactNative.a" ]; then
             cp "$RN_BUILD/libReactNative.a" ../../../Frameworks/ReactNative/
           else
-            echo "::warning::libReactNative.a not found in build output"
+            echo "::error::libReactNative.a not found in build output"
+            exit 1
           fi
+
+          # A count is not enough: the previous merge produced a perfectly valid
+          # one-library archive and reported success, and the defect only surfaced as
+          # undefined symbols in the app link ~8 minutes later. Assert the symbols the
+          # app actually references are defined here, where the cause is obvious.
+          STAGED_LIB=../../../Frameworks/ReactNative/libReactNative.a
+          for sym in '_OBJC_CLASS_$_RCTBridge' '_RCTRegisterModule' '_RCTLogNativeInternal'; do
+            if ! nm -gU "$STAGED_LIB" 2>/dev/null | grep -qF "$sym"; then
+              echo "::error::$sym is not defined in libReactNative.a — the app cannot link."
+              exit 1
+            fi
+          done
+          echo "libReactNative.a defines the React symbols the app links against"
 
           # --- Public headers for the app's bridging header ---
           # iPadDx-Bridging-Header.h imports <React/RCTBridgeModule.h> and five more,
