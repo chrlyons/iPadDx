@@ -119,13 +119,19 @@ clean: ## Clean build artifacts (works even with a broken workspace)
 	@# from a broken one, so requiring the workspace here made the recovery path
 	@# unreachable in exactly the state that needs it. xcodebuild clean is
 	@# best-effort; removing the local artifacts always runs.
+	@# `rm -rf` is in the SAME shell as the best-effort clean and runs unconditionally.
+	@# Previously it was a separate recipe line, so a readable workspace whose
+	@# `xcodebuild clean` failed (bad scheme, damaged DerivedData) exited non-zero and
+	@# make stopped before removing anything — the target silently did nothing in the
+	@# case you most want it to work.
 	@if xcodebuild -list -workspace "$(WORKSPACE)" >/dev/null 2>&1; then \
-		set -o pipefail; \
-		xcodebuild -workspace "$(WORKSPACE)" -scheme "$(SCHEME)" clean 2>&1 | tail -3; \
+		{ set -o pipefail; \
+		  xcodebuild -workspace "$(WORKSPACE)" -scheme "$(SCHEME)" clean 2>&1 | tail -3; } || \
+			echo "'xcodebuild clean' failed — continuing with local artifact removal."; \
 	else \
 		echo "Skipping 'xcodebuild clean' — $(WORKSPACE) is missing or unusable."; \
-		echo "Removing local build artifacts only. Run 'make reset-pods' to regenerate it."; \
-	fi
+		echo "Run 'make reset-pods' to regenerate it."; \
+	fi; \
 	rm -rf build/ DerivedData/
 
 reset-pods: ## Delete and regenerate the CocoaPods workspace (recovery)
