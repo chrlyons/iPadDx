@@ -1,4 +1,4 @@
-.PHONY: require-workspace build build-sim clean typecheck lint lint-fix format format-check \
+.PHONY: require-workspace reset-pods build build-sim clean typecheck lint lint-fix format format-check \
         check fix test test-ci coverage open help frameworks pods cordova-js \
         bridges setup
 
@@ -61,8 +61,8 @@ require-workspace:
 		sed 's/^/    /' "$(WORKSPACE)/contents.xcworkspacedata" 2>/dev/null | head -20; \
 		echo ""; \
 		echo "This usually means 'pod install' did not finish. Re-run 'make pods'"; \
-		echo "(it now reports pod failures instead of hiding them), or remove the"; \
-		echo "directory and regenerate:  rm -rf $(WORKSPACE) && make pods"; \
+		echo "(it now reports pod failures instead of hiding them), or regenerate"; \
+		echo "from scratch:  make reset-pods"; \
 		echo ""; \
 		exit 1; \
 	fi
@@ -89,7 +89,7 @@ require-workspace:
 		echo "    xcodebuild: $$(xcodebuild -version 2>/dev/null | head -1)"; \
 		echo "    xcode-select: $$(xcode-select -p 2>/dev/null)"; \
 		echo ""; \
-		echo "Usually fixed by regenerating:  rm -rf $(WORKSPACE) Pods && make pods"; \
+		echo "Usually fixed by regenerating:  make reset-pods"; \
 		echo ""; \
 		exit 1; \
 	fi
@@ -114,10 +114,26 @@ build-sim: ## Build for iPad simulator
 		CODE_SIGNING_ALLOWED=NO \
 		2>&1 | tail -5
 
-clean: ## Clean build artifacts
-	@$(MAKE) --no-print-directory require-workspace
-	set -o pipefail; xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) clean 2>&1 | tail -3
+clean: ## Clean build artifacts (works even with a broken workspace)
+	@# Never gate cleaning on a healthy workspace: cleaning is what you do to RECOVER
+	@# from a broken one, so requiring the workspace here made the recovery path
+	@# unreachable in exactly the state that needs it. xcodebuild clean is
+	@# best-effort; removing the local artifacts always runs.
+	@if xcodebuild -list -workspace "$(WORKSPACE)" >/dev/null 2>&1; then \
+		set -o pipefail; \
+		xcodebuild -workspace "$(WORKSPACE)" -scheme "$(SCHEME)" clean 2>&1 | tail -3; \
+	else \
+		echo "Skipping 'xcodebuild clean' — $(WORKSPACE) is missing or unusable."; \
+		echo "Removing local build artifacts only. Run 'make reset-pods' to regenerate it."; \
+	fi
 	rm -rf build/ DerivedData/
+
+reset-pods: ## Delete and regenerate the CocoaPods workspace (recovery)
+	@# The documented fix when the workspace is malformed. Safe to run any time:
+	@# both the workspace and Pods/ are generated from the committed Podfile.lock.
+	@echo "Removing $(WORKSPACE) and Pods/..."
+	@rm -rf "$(WORKSPACE)" Pods
+	@$(MAKE) --no-print-directory pods
 
 typecheck: ## Type-check via the workspace (bare swiftc cannot resolve the pods)
 	@$(MAKE) --no-print-directory require-workspace

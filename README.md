@@ -74,6 +74,12 @@ and `Capacitor` modules.
 Command line: `make build-sim`, `make build` (device) and `make test` all use the
 workspace and will tell you to run `make pods` if it is missing.
 
+If Xcode or `xcodebuild` reports **"`iPadDx.xcworkspace` is not a workspace file"**,
+the generated workspace is incomplete — usually a `pod install` that did not finish.
+Run `make reset-pods` to delete and regenerate it, or `make require-workspace` to see
+xcodebuild's own error and the relevant environment details. `make clean` works even
+when the workspace is broken.
+
 ## Usage
 
 ### Standalone (1:1 Testing)
