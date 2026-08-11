@@ -52,7 +52,12 @@ struct ReportListView: View {
 
     private var availableGrades: [String] {
         let grades = Set(store.summaries.map(\.overallGrade))
-        return ["Excellent", "Good", "Fair", "Poor"].filter { grades.contains($0) }
+        // "Not graded" is a real value a report can hold (a run that measured something
+        // but nothing in a scored dimension). Listing only the four bands meant such
+        // reports were visible but unfilterable. Ordered after the bands, and only
+        // offered when some report actually has it.
+        let ordered = SignalQuality.allCases.map(\.rawValue) + [TestSuiteResults.notGradedLabel]
+        return ordered.filter { grades.contains($0) }
     }
 
     private var availableOSVersions: [String] {

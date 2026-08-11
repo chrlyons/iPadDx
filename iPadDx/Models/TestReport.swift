@@ -219,8 +219,33 @@ extension TestSuiteResults {
     /// off but throughput, jitter and packet loss all measured is a perfectly good
     /// report, not a failure.
     var measuredNothing: Bool {
-        !hasLatency && !hasJitter && !hasPacketLoss && !hasThroughput
-            && !hasHeavyLoad && !hasDNSResolution
+        !TestPhase.allCases.contains(where: measured)
+    }
+
+    /// Whether a given phase produced a measurement.
+    ///
+    /// Exhaustive over `TestPhase` ON PURPOSE — no `default`. Every previous version of
+    /// `measuredNothing` was a hand-written conjunction that silently omitted a phase
+    /// (throughput, then Heavy Load and DNS, then Latency Under Load), each time
+    /// exporting a successful run as "Failed". Adding a phase now fails to compile here
+    /// until it is classified.
+    func measured(_ phase: TestPhase) -> Bool {
+        switch phase {
+        case .dnsResolution: hasDNSResolution
+        case .latencyBurst: hasLatency
+        case .sustainedThroughput: hasThroughput
+        case .jitterMeasurement: hasJitter
+        case .packetLossStress: hasPacketLoss
+        case .latencyUnderLoad: hasLatencyUnderLoad
+        case .heavyLoad: hasHeavyLoad
+        }
+    }
+
+    /// Phase 5 collected probes. Distinct from `hasLoadDegradation`, which additionally
+    /// needs a baseline to compare against: a run can measure under-load latency without
+    /// a comparable baseline, and that is still a measurement.
+    var hasLatencyUnderLoad: Bool {
+        latencyUnderLoad.sampleCount > 0
     }
 
     /// Phase 6 produced probes.

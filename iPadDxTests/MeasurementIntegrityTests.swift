@@ -1048,3 +1048,101 @@ final class UngradedRunTests: XCTestCase {
         XCTAssertEqual(BridgeComparisonRow.gradeScore(TestSuiteResults.notGradedLabel), 0)
     }
 }
+
+/// Pins phase/grade completeness.
+///
+/// measuredNothing was a hand-written conjunction that omitted a phase three separate
+/// times — throughput, then Heavy Load and DNS, then Latency Under Load — each time
+/// exporting a successful run as "Failed". It is now driven by an exhaustive switch
+/// over TestPhase; these tests assert every single phase can, on its own, make a run
+/// count as measured.
+final class PhaseCoverageTests: XCTestCase {
+    private func results(
+        latency: Int = 0, jitter: Int = 0, lossSent: Int = 0, throughput: Double = 0,
+        underLoadSamples: Int = 0, heavyLoadSamples: Int? = nil, dnsResolved: Bool? = nil
+    ) -> TestSuiteResults {
+        TestSuiteResults(
+            latencyBurst: LatencyBurstResult(
+                min: 1, max: 2, avg: 1.5, median: 1.5, p95: 2, sampleCount: latency, samples: []
+            ),
+            sustainedThroughput: ThroughputResult(
+                bytesPerSecond: throughput, totalBytes: 10, durationSeconds: 1
+            ),
+            jitterMeasurement: JitterResult(averageJitter: 1, maxJitter: 2, sampleCount: jitter),
+            packetLossStress: PacketLossResult(
+                sent: lossSent, received: lossSent, lostPercent: 0, durationSeconds: 1
+            ),
+            latencyUnderLoad: LatencyUnderLoadResult(
+                baselineAvg: 0, underLoadAvg: 5, degradationPercent: 0, sampleCount: underLoadSamples
+            ),
+            systemMetrics: SystemMetricsResult(
+                batteryStart: 1, batteryEnd: 1, batteryDrainPercent: 0,
+                peakCpuUsage: 1, avgCpuUsage: 1, peakMemoryMB: 1, thermalStateDuringTest: "Nominal"
+            ),
+            overallGrade: "Good",
+            dnsResolution: dnsResolved.map {
+                DNSResolutionResult(resolutionTimeMs: 25, resolved: $0, serviceName: "Pink")
+            },
+            heavyLoad: heavyLoadSamples.map {
+                HeavyLoadResult(
+                    avgLatency: 20, maxLatency: 40, throughputBps: 1000,
+                    packetLoss: 1, sampleCount: $0
+                )
+            }
+        )
+    }
+
+    /// A run consisting of ONLY that phase, for each phase in turn.
+    private func onlyPhase(_ phase: TestPhase) -> TestSuiteResults {
+        switch phase {
+        case .dnsResolution: results(dnsResolved: true)
+        case .latencyBurst: results(latency: 100)
+        case .sustainedThroughput: results(throughput: 5_000_000)
+        case .jitterMeasurement: results(jitter: 150)
+        case .packetLossStress: results(lossSent: 500)
+        case .latencyUnderLoad: results(underLoadSamples: 50)
+        case .heavyLoad: results(heavyLoadSamples: 75)
+        }
+    }
+
+    func testEveryPhaseAloneCountsAsAMeasurement() {
+        for phase in TestPhase.allCases {
+            let r = onlyPhase(phase)
+            XCTAssertFalse(
+                r.measuredNothing,
+                "a run measuring only \(phase.rawValue) must not be exported as failed"
+            )
+            XCTAssertTrue(r.measured(phase), "\(phase.rawValue) should report itself as measured")
+        }
+    }
+
+    func testEachPhaseIsRecognisedOnlyByItsOwnFlag() {
+        // Guards against a phase being mapped to the wrong flag in the switch.
+        for phase in TestPhase.allCases {
+            let r = onlyPhase(phase)
+            let others = TestPhase.allCases.filter { $0 != phase }
+            for other in others {
+                XCTAssertFalse(
+                    r.measured(other),
+                    "a \(phase.rawValue)-only run must not report \(other.rawValue) as measured"
+                )
+            }
+        }
+    }
+
+    func testAnEmptyRunMeasuresNoPhase() {
+        let r = results()
+        XCTAssertTrue(r.measuredNothing)
+        for phase in TestPhase.allCases {
+            XCTAssertFalse(r.measured(phase))
+        }
+    }
+
+    func testUnderLoadSamplesCountEvenWithoutABaseline() {
+        // hasLoadDegradation needs a baseline; measuring under load does not.
+        let r = results(underLoadSamples: 50)
+        XCTAssertTrue(r.hasLatencyUnderLoad)
+        XCTAssertFalse(r.hasLoadDegradation, "no baseline means no comparable degradation")
+        XCTAssertFalse(r.measuredNothing)
+    }
+}
