@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct BridgeInfoView: View {
+    @Environment(ReportStore.self) private var store
+    @Environment(\.colorScheme) private var colorScheme
     @State private var expandedBridge: String?
 
     var body: some View {
@@ -10,7 +12,7 @@ struct BridgeInfoView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.branch")
                         .font(.system(size: 50))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.adaptive(.purple, scheme: colorScheme))
                     Text("Bridge Transports")
                         .font(.title2)
                         .fontWeight(.bold)
@@ -59,7 +61,6 @@ struct BridgeInfoView: View {
         let id: String
         let name: String
         let icon: String
-        let color: Color
         let technology: String
         let processBoundary: String
         let serialization: String
@@ -75,7 +76,6 @@ struct BridgeInfoView: View {
                 id: "native",
                 name: "Native (Baseline)",
                 icon: "network",
-                color: .green,
                 technology: "Network.framework direct",
                 processBoundary: "None",
                 serialization: "None — raw bytes on the wire",
@@ -88,7 +88,6 @@ struct BridgeInfoView: View {
                 id: "flutter",
                 name: "Flutter Channel",
                 icon: "bird",
-                color: .blue,
                 technology: "FlutterEngine + FlutterMethodChannel + AOT Dart isolate",
                 processBoundary: "None (in-process)",
                 serialization: "StandardMethodCodec (binary)",
@@ -101,7 +100,6 @@ struct BridgeInfoView: View {
                 id: "reactnative",
                 name: "React Native Bridge",
                 icon: "atom",
-                color: .purple,
                 technology: "RCTBridge + Hermes engine + ObjC RCT_EXPORT_MODULE",
                 processBoundary: "None (in-process)",
                 serialization: "JSON + MessageQueue batching",
@@ -114,7 +112,6 @@ struct BridgeInfoView: View {
                 id: "cordova",
                 name: "Cordova JS Bridge",
                 icon: "globe",
-                color: .orange,
                 technology: "WKWebView + cordova.js + CDVPlugin + CDVPluginResult",
                 processBoundary: "Yes (WKWebView — separate process)",
                 serialization: "JSON",
@@ -127,7 +124,6 @@ struct BridgeInfoView: View {
                 id: "capacitor",
                 name: "Capacitor Bridge",
                 icon: "bolt.fill",
-                color: .teal,
                 technology: "CAPBridgeViewController + CAPPlugin + WKWebView IPC",
                 processBoundary: "Yes (WKWebView — separate process)",
                 serialization: "JSON",
@@ -157,7 +153,7 @@ struct BridgeInfoView: View {
                     HStack {
                         let bridge = bridges.first { $0.id == info.id }
                         Image(systemName: bridge?.icon ?? "questionmark")
-                            .foregroundStyle(bridge?.color ?? .gray)
+                            .foregroundStyle(Color.bridgeColor(info.id, scheme: colorScheme))
                             .frame(width: 24)
                         Text(info.label)
                             .font(.subheadline)
@@ -177,6 +173,7 @@ struct BridgeInfoView: View {
 
     private func bridgeRow(_ bridge: BridgeDetail) -> some View {
         let isExpanded = expandedBridge == bridge.id
+        let color = Color.bridgeColor(bridge.id, scheme: colorScheme)
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -186,10 +183,10 @@ struct BridgeInfoView: View {
                 HStack(spacing: 12) {
                     ZStack {
                         Circle()
-                            .fill(bridge.color.opacity(0.15))
+                            .fill(color.opacity(0.15))
                             .frame(width: 40, height: 40)
                         Image(systemName: bridge.icon)
-                            .foregroundStyle(bridge.color)
+                            .foregroundStyle(color)
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(bridge.name)
@@ -218,7 +215,7 @@ struct BridgeInfoView: View {
                         Text("Overview")
                             .font(.caption)
                             .fontWeight(.semibold)
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(Color.adaptive(.blue, scheme: colorScheme))
                         Text(bridge.description)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -228,7 +225,7 @@ struct BridgeInfoView: View {
                         Text("Characteristics")
                             .font(.caption)
                             .fontWeight(.semibold)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Color.adaptive(.orange, scheme: colorScheme))
                         detailRow("Process boundary", bridge.processBoundary)
                         detailRow("Serialization", bridge.serialization)
                         detailRow("Binary data", bridge.binaryData)
@@ -239,7 +236,7 @@ struct BridgeInfoView: View {
                         Text("Data Path")
                             .font(.caption)
                             .fontWeight(.semibold)
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(Color.adaptive(.purple, scheme: colorScheme))
                         Text(bridge.dataPath)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -300,36 +297,74 @@ struct BridgeInfoView: View {
                 .fontWeight(.bold)
                 .foregroundStyle(.white)
                 .frame(width: 22, height: 22)
-                .background(.purple, in: Circle())
+                .background(Color.adaptive(.purple, scheme: colorScheme), in: Circle())
             Text(text)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: - Overhead Comparison
+    // MARK: - Overhead Comparison (measured, never estimated)
+
+    /// One device pair's measured bridge results. Only reports for a single
+    /// chip pair are compared against each other — mixing hardware would make
+    /// the deltas meaningless.
+    private struct MeasuredComparison {
+        let pairLabel: String
+        let rows: [BridgeComparisonRow]
+        let nativeBaselineMs: Double?
+    }
+
+    /// The device pair with the most bridges actually MEASURED — the only
+    /// apples-to-apples comparison the saved reports can support. Returns nil only
+    /// when no pair has any measured bridge rows at all.
+    ///
+    /// The candidate must be chosen AFTER `bridgeComparison` has dropped unmeasured
+    /// rows. Ranking raw summaries first meant a pair with many cancelled reports won
+    /// the ranking, produced zero rows, and the screen claimed "No bridge measurements
+    /// recorded yet" while another pair had perfectly good data.
+    private var measuredComparison: MeasuredComparison? {
+        let byPair = Dictionary(grouping: store.summaries) { "\($0.localChip)|\($0.remoteChip)" }
+
+        let candidates: [MeasuredComparison] = byPair.values.compactMap { summaries in
+            guard let sample = summaries.first else { return nil }
+            let rows = store.bridgeComparison(local: sample.localChip, remote: sample.remoteChip)
+            guard !rows.isEmpty else { return nil }
+            return MeasuredComparison(
+                pairLabel: "\(sample.localChip) → \(sample.remoteChip)",
+                // bridgeComparison only returns rows with measured latency, so the
+                // sort key is always present.
+                rows: rows.sorted { ($0.avgLatency ?? 0) < ($1.avgLatency ?? 0) },
+                nativeBaselineMs: rows.first { $0.bridge == "native" }?.avgLatency
+            )
+        }
+
+        // Rank on measured evidence: most bridges compared, then most reports behind
+        // those measurements, then a stable label so the screen does not flip between
+        // equally-good pairs on redraw.
+        return candidates.max { lhs, rhs in
+            let lhsKey = (lhs.rows.count, lhs.rows.reduce(0) { $0 + $1.measuredLatencyCount })
+            let rhsKey = (rhs.rows.count, rhs.rows.reduce(0) { $0 + $1.measuredLatencyCount })
+            if lhsKey != rhsKey {
+                return lhsKey < rhsKey
+            }
+            return lhs.pairLabel > rhs.pairLabel
+        }
+    }
 
     private var overheadSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Overhead Comparison", systemImage: "chart.bar")
                 .font(.headline)
 
-            Text(
-                "Typical overhead added by each bridge on top of the native baseline. Actual values depend on device, payload size, and network conditions."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            VStack(spacing: 6) {
-                overheadRow("Native", "+0%", .green, 0)
-                overheadRow("Flutter", "+70-80%", .blue, 0.75)
-                overheadRow("React Native", "+75-85%", .purple, 0.80)
-                overheadRow("Capacitor", "+95-105%", .teal, 1.0)
-                overheadRow("Cordova", "+100-110%", .orange, 1.05)
+            if let comparison = measuredComparison {
+                measuredOverhead(comparison)
+            } else {
+                noMeasurementsState
             }
 
             Text(
-                "WKWebView-based bridges (Cordova, Capacitor) have the highest overhead due to cross-process IPC. In-process bridges (Flutter, React Native) are faster but still add serialization and thread dispatch costs."
+                "WKWebView-based bridges (Cordova, Capacitor) cross a process boundary twice per message; in-process bridges (Flutter, React Native) avoid that but still pay for serialization and thread dispatch. The numbers above are whatever this device actually measured — nothing here is estimated."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -339,22 +374,101 @@ struct BridgeInfoView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func overheadRow(_ name: String, _ label: String, _ color: Color, _ ratio: Double) -> some View {
-        HStack(spacing: 8) {
-            Text(name)
-                .font(.caption)
-                .frame(width: 90, alignment: .leading)
-            GeometryReader { geo in
-                let width = max(geo.size.width * min(ratio / 1.2, 1.0), ratio == 0 ? 4 : 20)
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(color.opacity(0.6))
-                    .frame(width: width)
+    private func measuredOverhead(_ comparison: MeasuredComparison) -> some View {
+        let maxLatency = comparison.rows.compactMap(\.avgLatency).max() ?? 0
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(
+                "Average round-trip latency measured on this device for \(comparison.pairLabel), from saved test reports."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            VStack(spacing: 6) {
+                ForEach(comparison.rows) { row in
+                    overheadRow(row, maxLatency: maxLatency, baseline: comparison.nativeBaselineMs)
+                }
             }
-            .frame(height: 16)
-            Text(label)
+
+            if comparison.nativeBaselineMs == nil {
+                Text(
+                    "No native run saved for this pair yet, so no baseline delta can be computed — run the suite over the Native transport to get one."
+                )
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .frame(width: 80, alignment: .trailing)
+            }
+
+            if !recordedBridgeCounts.isEmpty {
+                Text("Reports on record: \(recordedBridgeCounts)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// "native 4, cordova 2" — measured coverage across all saved reports.
+    private var recordedBridgeCounts: String {
+        store.availableBridgeTransports()
+            .map { "\($0) \(store.summaries(forBridge: $0).count)" }
+            .joined(separator: ", ")
+    }
+
+    private var noMeasurementsState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "chart.bar.doc.horizontal")
+                    .foregroundStyle(.secondary)
+                Text("No bridge measurements recorded yet")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+            }
+            Text(
+                "Run a bridge comparison in Conductor mode — or run the test suite once per bridge — and the measured overhead for your own devices will appear here. This app never shows estimated numbers."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+    }
+
+    private func overheadRow(_ row: BridgeComparisonRow, maxLatency: Double, baseline: Double?) -> some View {
+        let ratio = maxLatency > 0 ? (row.avgLatency ?? 0) / maxLatency : 0
+        let color = Color.bridgeColor(row.bridge, scheme: colorScheme)
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.bridge)
+                    .font(.caption)
+                // Count the reports the figure was averaged over, not every report
+                // filed under this bridge — they differ when a run measured nothing.
+                Text("\(row.measuredLatencyCount) measured")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(width: 90, alignment: .leading)
+
+            GeometryReader { geo in
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(color.opacity(0.6))
+                    .frame(width: max(geo.size.width * ratio, 4))
+            }
+            .frame(height: 16)
+
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(row.avgLatency.map { String(format: "%.2f ms", $0) } ?? "—")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if let baseline, baseline > 0, row.bridge != "native" {
+                    Text(row.avgLatency.map { String(format: "%+.0f%%", ($0 / baseline - 1) * 100) } ?? "—")
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundStyle(color)
+                } else if row.bridge == "native" {
+                    Text("baseline")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 84, alignment: .trailing)
         }
     }
 }
@@ -363,16 +477,17 @@ struct BridgeInfoView: View {
 
 struct BridgeHealthBadge: View {
     let bridgeID: String
+    @Environment(\.colorScheme) private var colorScheme
     @State private var healthy: Bool?
 
     var body: some View {
         Group {
             if bridgeID == "native" {
-                badge("Baseline", .green)
+                badge("Baseline", Color.statusColor(true, scheme: colorScheme))
             } else if let healthy {
-                badge(healthy ? "Ready" : "Failed", healthy ? .green : .red)
+                badge(healthy ? "Ready" : "Failed", Color.statusColor(healthy, scheme: colorScheme))
             } else {
-                badge("Checking...", .gray)
+                badge("Checking...", Color.adaptive(.gray, scheme: colorScheme))
             }
         }
         .task {

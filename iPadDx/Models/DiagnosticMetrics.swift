@@ -20,12 +20,94 @@ enum SignalQuality: String, CaseIterable {
 struct LatencySample: Identifiable {
     let id: Int
     let value: Double
+    /// When the sample was taken, so the chart can show a real time window rather
+    /// than an opaque sample index.
+    let timestamp: Date
+
+    init(id: Int, value: Double, timestamp: Date = Date()) {
+        self.id = id
+        self.value = value
+        self.timestamp = timestamp
+    }
 }
 
 struct ConnectionEvent: Identifiable {
     let id = UUID()
     let timestamp: Date
     let event: String
+}
+
+// MARK: - Disconnect Reason (Feature #2)
+
+enum DisconnectReason: String, Codable {
+    case userInitiated, remoteDisconnect, keepaliveTimeout
+    case pathChanged, tlsError, connectionRefused, networkError, unknown
+}
+
+struct DisconnectEvent: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let reason: DisconnectReason
+    let detail: String
+    let uptimeAtDisconnect: TimeInterval
+}
+
+// MARK: - Latency Anomaly (Feature #10)
+
+enum AnomalySeverity: String { case warning, critical }
+
+/// A latency spike, captured together with what the device was doing at the time.
+///
+/// The count alone is not actionable — the useful question is always "what else was
+/// happening?". A spike during a thermal event, a discovery flap or a specific test
+/// phase points somewhere very different from an isolated one on an idle link.
+struct LatencyAnomaly: Identifiable {
+    let id: Int
+    let value: Double
+    let mean: Double
+    let threshold: Double
+    let severity: AnomalySeverity
+
+    // Context captured at the moment of the spike
+    let timestamp: Date
+    let cpuUsage: Double
+    let thermalState: String
+    /// Interface in use, e.g. "awdl0" for a direct device-to-device link.
+    let interfaceName: String?
+    /// Test phase running at the time, when a suite is in progress.
+    let phase: String?
+
+    /// How far above the mean the sample was, in standard deviations.
+    var sigma: Double {
+        let stddev = (threshold - mean) / 3
+        guard stddev > 0 else { return 0 }
+        return (value - mean) / stddev
+    }
+
+    var contextSummary: String {
+        var parts: [String] = []
+        if let phase {
+            parts.append(phase)
+        }
+        if let interfaceName {
+            parts.append(interfaceName)
+        }
+        parts.append(String(format: "CPU %.0f%%", cpuUsage))
+        if thermalState != "Nominal" {
+            parts.append("thermal \(thermalState)")
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+// MARK: - Remote Metrics (Feature #5)
+
+struct RemoteMetricsSample: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let cpu: Double
+    let memoryMB: Double
+    let thermalState: String
 }
 
 enum ConnectionState: String {
@@ -51,6 +133,11 @@ class DiagnosticMetrics {
     var connectionStartTime: Date?
     var disconnectionCount: Int = 0
     var connectionLog: [ConnectionEvent] = []
+    var disconnectHistory: [DisconnectEvent] = []
+    var anomalies: [LatencyAnomaly] = []
+    /// Test phase currently running, so anomalies can be attributed to a phase.
+    var currentTestPhase: String?
+    var remoteMetricsHistory: [RemoteMetricsSample] = []
 
     // Packet loss
     var pingsSent: Int = 0
@@ -64,6 +151,18 @@ class DiagnosticMetrics {
     // Network path
     var pathStatus: NWPath.Status = .unsatisfied
     var interfaceType: NWInterface.InterfaceType?
+    /// The BSD name of the active interface ("en0", "awdl0"). This is the only
+    /// reliable way to tell an Apple peer-to-peer link from infrastructure Wi-Fi —
+    /// NWInterface.type reports .wifi for both.
+    var interfaceName: String?
+    /// Number of times the active interface set changed since the connection opened.
+    var pathChangeCount: Int = 0
+    /// Times this peer vanished from Bonjour browse results and came back.
+    ///
+    /// The primary signal for an unstable discovery/AWDL radio: a device whose
+    /// peer-to-peer radio is contended (AWDL time-slices with Bluetooth) drops out of
+    /// mDNS browse results and returns, even while a TCP connection appears healthy.
+    var discoveryFlapCount: Int = 0
     var isExpensive: Bool = false
     var isConstrained: Bool = false
 
@@ -84,9 +183,17 @@ class DiagnosticMetrics {
     var memoryTotalMB: Double = 0
     var batteryAtConnectionStart: Float = -1
 
-    func appendLatency(_ rtt: Double, maxHistory: Int = 120) {
+    /// Retains an hour of pings at the 500ms heartbeat.
+    ///
+    /// The old 120-sample cap held only ~60 seconds, so on a long soak the chart
+    /// silently discarded everything older — which is exactly the history you need
+    /// when chasing an intermittent radio fault. ~7200 samples is a few hundred KB.
+    static let defaultLatencyHistory = 7200
+
+    func appendLatency(_ rtt: Double, maxHistory: Int = defaultLatencyHistory) {
         sampleCounter += 1
         latencyHistory.append(LatencySample(id: sampleCounter, value: rtt))
+        checkForAnomaly(rtt)
         if latencyHistory.count > maxHistory {
             latencyHistory.removeFirst(latencyHistory.count - maxHistory)
         }
@@ -99,8 +206,82 @@ class DiagnosticMetrics {
         }
     }
 
+    func logDisconnect(reason: DisconnectReason, detail: String = "") {
+        disconnectionCount += 1
+        disconnectHistory.append(DisconnectEvent(
+            timestamp: Date(), reason: reason, detail: detail, uptimeAtDisconnect: connectionUptime
+        ))
+        // Bounded like connectionLog / anomalies — a flapping link over a long
+        // soak run would otherwise grow this forever. `disconnectionCount`
+        // above stays the authoritative total, so nothing is under-reported.
+        if disconnectHistory.count > 50 {
+            disconnectHistory.removeFirst()
+        }
+        logEvent("Disconnected: \(reason.rawValue)\(detail.isEmpty ? "" : " — \(detail)")")
+    }
+
+    func appendRemoteMetrics(cpu: Double, memoryMB: Double, thermalState: String) {
+        remoteMetricsHistory.append(RemoteMetricsSample(
+            timestamp: Date(), cpu: cpu, memoryMB: memoryMB, thermalState: thermalState
+        ))
+        if remoteMetricsHistory.count > 100 {
+            remoteMetricsHistory.removeFirst()
+        }
+    }
+
+    private func checkForAnomaly(_ sample: Double) {
+        // Baseline excludes the candidate itself — including it drags the mean
+        // toward the spike and inflates the stddev, which hides real anomalies
+        // when only a handful of samples have been collected.
+        let recent = latencyHistory.dropLast().suffix(30).map(\.value)
+        guard recent.count >= 10 else { return }
+        let mean = recent.reduce(0, +) / Double(recent.count)
+        let stddev = (recent.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(recent.count)).squareRoot()
+        guard stddev > 0.5 else { return }
+        if sample > mean + 3 * stddev {
+            let severity: AnomalySeverity = sample > mean + 5 * stddev ? .critical : .warning
+            let anomaly = LatencyAnomaly(
+                id: sampleCounter,
+                value: sample,
+                mean: mean,
+                threshold: mean + 3 * stddev,
+                severity: severity,
+                timestamp: Date(),
+                cpuUsage: cpuUsage,
+                thermalState: thermalState,
+                interfaceName: interfaceName,
+                phase: currentTestPhase
+            )
+            anomalies.append(anomaly)
+            // Log it: a count on a chart cannot be exported, correlated or read after
+            // the fact. This puts every spike in the console log with its context.
+            AppLog(
+                String(
+                    format: "Latency anomaly (%@): %.1fms vs mean %.1fms (%.1fσ) — %@",
+                    severity.rawValue, sample, mean, anomaly.sigma, anomaly.contextSummary
+                ),
+                level: severity == .critical ? .error : .warning,
+                category: "Anomaly"
+            )
+            logEvent(String(format: "%@ latency spike: %.1fms", severity.rawValue.capitalized, sample))
+            // Retain enough to cover a long soak; the drill-down lists them all.
+            if anomalies.count > 500 {
+                anomalies.removeFirst()
+            }
+        }
+    }
+
     // MARK: - Computed
 
+    /// Live connection quality across every dimension the model measures:
+    /// latency, stability (stddev of the recent window), jitter and packet
+    /// loss. Each dimension is graded on its own and the *worst* one wins — a
+    /// link is only as good as its weakest property, and a 2ms link that drops
+    /// 5% of pings is not "Excellent".
+    ///
+    /// Load degradation is the fifth dimension the README mentions; it is only
+    /// measurable by the test suite (baseline vs under-load), so it is graded
+    /// in the report, not here.
     var signalQuality: SignalQuality {
         guard latencyHistory.count >= 5 else { return .poor }
         let recent = latencyHistory.suffix(30).map(\.value)
@@ -108,10 +289,35 @@ class DiagnosticMetrics {
         let variance = recent.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(recent.count)
         let stddev = variance.squareRoot()
 
-        if mean < 10, stddev < 3 { return .excellent }
-        if mean < 30, stddev < 10 { return .good }
-        if mean < 100, stddev < 30 { return .fair }
-        return .poor
+        var tiers = [
+            qualityTier(mean, excellent: 10, good: 30, fair: 100), // latency
+            qualityTier(stddev, excellent: 3, good: 10, fair: 30), // stability
+            qualityTier(jitterMs, excellent: 3, good: 10, fair: 30), // jitter
+        ]
+        // Packet loss only counts once enough pings have resolved for the
+        // percentage to mean something — one lost ping out of five is 20%,
+        // which would swamp the grade on noise.
+        if pongsReceived + pingsLost >= 20 {
+            tiers.append(qualityTier(packetLossPercent, excellent: 0.5, good: 2, fair: 5))
+        }
+
+        let ranked: [SignalQuality] = [.excellent, .good, .fair, .poor]
+        return ranked[tiers.max() ?? ranked.count - 1]
+    }
+
+    /// Bucket a lower-is-better metric into a quality tier:
+    /// 0 = excellent, 1 = good, 2 = fair, 3 = poor.
+    private func qualityTier(_ value: Double, excellent: Double, good: Double, fair: Double) -> Int {
+        if value < excellent {
+            return 0
+        }
+        if value < good {
+            return 1
+        }
+        if value < fair {
+            return 2
+        }
+        return 3
     }
 
     var packetLossPercent: Double {
@@ -159,6 +365,23 @@ class DiagnosticMetrics {
         return String(format: "%dm %02ds", minutes, seconds)
     }
 
+    /// True when the path is an Apple peer-to-peer (AWDL) link.
+    var usesPeerToPeerLink: Bool {
+        interfaceName?.hasPrefix("awdl") ?? false
+    }
+
+    /// How the link reads on the dashboard.
+    ///
+    /// Both forms are local — no internet is involved either way. The distinction is
+    /// whether the two devices are talking over a DIRECT radio link (AWDL) or still
+    /// routing through a local access point.
+    var linkDescription: String {
+        guard let name = interfaceName else { return interfaceTypeString }
+        return usesPeerToPeerLink
+            ? "Direct device-to-device · \(name)"
+            : "Via access point · \(name)"
+    }
+
     var interfaceTypeString: String {
         guard let type = interfaceType else { return "Unknown" }
         switch type {
@@ -197,12 +420,20 @@ class DiagnosticMetrics {
     var batteryDrain: String {
         guard batteryAtConnectionStart >= 0, batteryLevel >= 0 else { return "N/A" }
         let drain = batteryAtConnectionStart - batteryLevel
-        if drain <= 0 { return "<1% (too short to measure)" }
+        if drain <= 0 {
+            return "<1% (too short to measure)"
+        }
         return String(format: "%.1f%%", drain * 100)
     }
 
+    /// App footprint and device RAM are different quantities — this app's
+    /// `phys_footprint` versus the whole device's memory — so they are labelled
+    /// separately instead of being rendered as a "used / total" ratio.
     var formattedMemory: String {
-        String(format: "%.0f / %.0f MB", memoryUsedMB, memoryTotalMB)
+        guard memoryTotalMB > 0 else {
+            return String(format: "%.0f MB app footprint", memoryUsedMB)
+        }
+        return String(format: "%.0f MB app · %.0f MB device RAM", memoryUsedMB, memoryTotalMB)
     }
 
     private func formatBytes(_ bytes: Int) -> String {

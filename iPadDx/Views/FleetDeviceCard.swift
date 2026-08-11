@@ -4,6 +4,8 @@ struct FleetDeviceCard: View {
     let connection: DeviceConnection
     let onDisconnect: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         VStack(spacing: 8) {
             HStack {
@@ -30,7 +32,7 @@ struct FleetDeviceCard: View {
                         .fontWeight(.semibold)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(.blue.opacity(0.1), in: Capsule())
+                        .background(accent.opacity(0.1), in: Capsule())
                 }
                 if let model = connection.peer.model {
                     Text(model)
@@ -38,6 +40,23 @@ struct FleetDeviceCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+            }
+
+            // Capability badges
+            if connection.supportedBridges.count > 1 || connection.supportedBridges.first != "native" {
+                HStack(spacing: 4) {
+                    ForEach(connection.supportedBridges, id: \.self) { bridge in
+                        let color = Color.bridgeColor(bridge, scheme: colorScheme)
+                        Text(bridge)
+                            .font(.system(size: 9))
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(color.opacity(0.12), in: Capsule())
+                            .foregroundStyle(color)
+                    }
+                    Spacer()
+                }
             }
 
             // Status line
@@ -60,14 +79,18 @@ struct FleetDeviceCard: View {
             if !connection.testPhase.isEmpty {
                 Text(connection.testPhase)
                     .font(.caption2)
-                    .foregroundStyle(connection.agentStatus == .failed ? .red : .secondary)
+                    .foregroundStyle(
+                        connection.agentStatus == .failed
+                            ? Color.adaptive(.red, scheme: colorScheme)
+                            : Color.secondary
+                    )
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             // Progress bar during testing
             if connection.agentStatus == .testing, connection.testProgress > 0 {
                 ProgressView(value: connection.testProgress)
-                    .tint(.blue)
+                    .tint(accent)
             }
         }
         .padding()
@@ -75,14 +98,20 @@ struct FleetDeviceCard: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// Neutral accent used for chip badges and progress.
+    private var accent: Color {
+        Color.adaptive(.blue, scheme: colorScheme)
+    }
+
     private var statusColor: Color {
-        switch connection.agentStatus {
+        let base: Color = switch connection.agentStatus {
         case .connected, .idle: .green
         case .connecting: .yellow
         case .testing: .blue
         case .completed: .green
         case .failed: .red
         }
+        return Color.adaptive(base, scheme: colorScheme)
     }
 
     private var statusIcon: String {
@@ -97,9 +126,7 @@ struct FleetDeviceCard: View {
 
     private var statusBackground: Color {
         switch connection.agentStatus {
-        case .testing: .blue.opacity(0.05)
-        case .failed: .red.opacity(0.05)
-        case .completed: .green.opacity(0.05)
+        case .testing, .failed, .completed: statusColor.opacity(0.05)
         default: .clear
         }
     }
@@ -110,11 +137,13 @@ struct SelfDeviceCard: View {
     let info: DeviceInfo
     let isTesting: Bool
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         VStack(spacing: 8) {
             HStack {
                 Circle()
-                    .fill(isTesting ? .blue : .green)
+                    .fill(statusColor)
                     .frame(width: 10, height: 10)
                 Text(info.name)
                     .font(.subheadline)
@@ -122,7 +151,7 @@ struct SelfDeviceCard: View {
                 Spacer()
                 Image(systemName: "star.fill")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(conductorAccent)
             }
 
             HStack {
@@ -131,7 +160,7 @@ struct SelfDeviceCard: View {
                     .fontWeight(.semibold)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(.orange.opacity(0.1), in: Capsule())
+                    .background(conductorAccent.opacity(0.1), in: Capsule())
                 Text(info.displayModel)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -141,15 +170,26 @@ struct SelfDeviceCard: View {
             HStack {
                 Image(systemName: isTesting ? "bolt.fill" : "checkmark.circle.fill")
                     .font(.caption)
-                    .foregroundStyle(isTesting ? .blue : .green)
+                    .foregroundStyle(statusColor)
                 Text(isTesting ? "Testing" : "Conductor")
                     .font(.caption)
-                    .foregroundStyle(isTesting ? .blue : .green)
+                    .foregroundStyle(statusColor)
                 Spacer()
             }
         }
         .padding()
-        .background(isTesting ? .blue.opacity(0.05) : .orange.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        .background(
+            (isTesting ? statusColor : conductorAccent).opacity(0.05),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var statusColor: Color {
+        Color.adaptive(isTesting ? .blue : .green, scheme: colorScheme)
+    }
+
+    private var conductorAccent: Color {
+        Color.adaptive(.orange, scheme: colorScheme)
     }
 }

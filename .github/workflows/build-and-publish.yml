@@ -1,0 +1,528 @@
+# =============================================================================
+# iPadDx — Build, Archive & Publish to App Store Connect / TestFlight
+# =============================================================================
+#
+# Triggers:
+#   - Push a tag like v1.0.0   -> full build + upload to App Store Connect
+#   - Manual dispatch           -> choose whether to upload or just build
+#   - Push to main              -> CI build only (no upload)
+#
+# Required GitHub Secrets (Settings > Secrets and variables > Actions):
+#
+#   APPLE_CERTIFICATE_BASE64        Base64-encoded .p12 distribution certificate
+#   APPLE_CERTIFICATE_PASSWORD      Password for the .p12 file
+#   APPLE_PROVISIONING_PROFILE_BASE64  Base64-encoded .mobileprovision file
+#   APPSTORE_CONNECT_API_KEY_ID     App Store Connect API Key ID
+#   APPSTORE_CONNECT_ISSUER_ID      App Store Connect API Issuer ID
+#   APPSTORE_CONNECT_API_KEY_BASE64 Base64-encoded .p8 API key file
+#   KEYCHAIN_PASSWORD               Any random password for the temporary keychain
+#
+# See docs/ci-cd-setup.md for how to obtain each secret.
+# =============================================================================
+
+name: Build & Publish iPadDx
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'          # e.g. v1.0.0, v1.2.3-beta
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      upload_to_appstore:
+        description: 'Upload to App Store Connect (TestFlight)?'
+        required: true
+        default: 'false'
+        type: boolean
+
+# Cancel redundant runs for the same branch / PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCHEME: iPadDx
+  WORKSPACE: iPadDx.xcworkspace
+  ARCHIVE_PATH: build/iPadDx.xcarchive
+  EXPORT_PATH: build/export
+
+jobs:
+  # ===========================================================================
+  # Job 1: Build & Archive
+  # ===========================================================================
+  build:
+    name: Build & Archive
+    runs-on: macos-15          # macOS Sequoia — Xcode 16 pre-installed
+    timeout-minutes: 60
+
+    # Every `run:` block gets pipefail.
+    #
+    # GitHub Actions defaults to `bash -e {0}` — set -e is on but PIPEFAIL IS NOT, so
+    # `xcodebuild ... | xcbeautify` takes xcbeautify's status. xcbeautify is a log
+    # formatter that always exits 0, so failing builds, failing tests and failing
+    # archives all reported success. The test step is the only correctness gate in this
+    # workflow and it was completely inert.
+    defaults:
+      run:
+        # -e and pipefail only. `-u` (error on unset variable) is deliberately NOT
+        # set: it would change behaviour in steps this change cannot exercise locally,
+        # and the defect being fixed here is purely the lost pipeline status.
+        shell: bash -eo pipefail {0}
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Select Xcode version
+      # -----------------------------------------------------------------------
+      - name: Select Xcode
+        run: |
+          # Use the latest Xcode 16.x available on the runner
+          # `|| true`: with pipefail a no-match `ls` fails the pipeline, and under -e
+          # the assignment would abort the step before the "not found" branch below runs.
+          XCODE_PATH=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$XCODE_PATH" ]; then
+            echo "No Xcode 16.x found, using default"
+            xcodebuild -version
+          else
+            sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+            echo "Selected: $XCODE_PATH"
+            xcodebuild -version
+          fi
+
+      # -----------------------------------------------------------------------
+      # 3. Install build tools
+      # -----------------------------------------------------------------------
+      - name: Install xcbeautify
+        run: brew install xcbeautify
+
+      # -----------------------------------------------------------------------
+      # 4. Cache CocoaPods (root + RN bridge)
+      # -----------------------------------------------------------------------
+      - name: Cache CocoaPods (root)
+        uses: actions/cache@v4
+        with:
+          path: Pods
+          key: pods-root-${{ runner.os }}-${{ hashFiles('Podfile.lock') }}
+          restore-keys: pods-root-${{ runner.os }}-
+
+      - name: Cache CocoaPods (RN bridge)
+        uses: actions/cache@v4
+        with:
+          path: Bridges/rn_bridge/ios/Pods
+          key: pods-rn-${{ runner.os }}-${{ hashFiles('Bridges/rn_bridge/ios/Podfile.lock') }}
+          restore-keys: pods-rn-${{ runner.os }}-
+
+      # -----------------------------------------------------------------------
+      # 5. Install Flutter SDK
+      # -----------------------------------------------------------------------
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          # Pinned deliberately. `channel: stable` on its own floats, and it moved this
+          # job from 3.41.x to 3.44.9 on 2026-08-06 — which changed the behaviour of
+          # `build ios-framework` and broke CI with no commit to blame. Floating also
+          # re-resolved pubspec.lock on every run (meta and test_api are pinned by the
+          # SDK, not the pubspec), so CI silently tested a different dependency set
+          # than the developer machine. This version matches local development.
+          flutter-version: 3.41.6
+
+      # -----------------------------------------------------------------------
+      # 6. Build Flutter bridge frameworks
+      # -----------------------------------------------------------------------
+      - name: Build Flutter bridge frameworks
+        run: |
+          cd Bridges/flutter_bridge
+          flutter pub get
+
+          # Flutter 3.44 added `--codesign` to `build ios-framework`, defaulting to ON:
+          # it signs the produced XCFrameworks and aborts when no signing identity
+          # exists, which is always the case on a runner. Signing them here is pointless
+          # anyway — Xcode re-signs embedded frameworks when it builds the host app, and
+          # every other build step in this job already passes CODE_SIGNING_ALLOWED=NO.
+          # Flutter <3.44 rejects the flag, so detect support rather than assume.
+          #
+          # Captured into a variable, not piped into grep: `grep -q` exits on first match
+          # and SIGPIPEs flutter, so under the job's pipefail the pipeline exits 141 and
+          # reads as "flag absent" on exactly the versions that need it.
+          FRAMEWORK_HELP="$(flutter build ios-framework --help 2>&1 || true)"
+          CODESIGN_FLAG=""
+          case "$FRAMEWORK_HELP" in *codesign*) CODESIGN_FLAG="--no-codesign";; esac
+
+          flutter build ios-framework --no-debug --no-profile $CODESIGN_FLAG \
+            --output=../../build/flutter_frameworks
+          mkdir -p ../../Frameworks
+          cp -R ../../build/flutter_frameworks/Release/Flutter.xcframework ../../Frameworks/
+          cp -R ../../build/flutter_frameworks/Release/App.xcframework ../../Frameworks/
+          echo "Flutter frameworks built"
+
+      # -----------------------------------------------------------------------
+      # 7. Build React Native bridge (static lib + JS bundle + Hermes)
+      # -----------------------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build React Native bridge
+        run: |
+          # --- JS bundle ---
+          cd Bridges/rn_bridge
+          npm ci
+          npx react-native bundle \
+            --entry-file index.js \
+            --platform ios \
+            --dev false \
+            --bundle-output ../../iPadDx/Resources/main.jsbundle
+          echo "RN JS bundle created"
+
+          # --- Native build ---
+          cd ios
+          pod install --repo-update
+
+          xcodebuild build \
+            -workspace RNBridge.xcworkspace \
+            -scheme RNBridge \
+            -configuration Release \
+            -sdk iphoneos \
+            -arch arm64 \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            BUILD_DIR=$(pwd)/build \
+            2>&1 | tail -20
+
+          # --- Merge static libs into single libReactNative.a ---
+          RN_BUILD=$(pwd)/build/Release-iphoneos
+          cd "$RN_BUILD"
+          mkdir -p merged
+          # CocoaPods writes each pod's static library into its OWN subdirectory
+          # (Release-iphoneos/React-Core/libReact-Core.a), so `-maxdepth 1` matched
+          # exactly one library — the RNBridge target's — and merged that alone. The
+          # app then failed to link with undefined _OBJC_CLASS_$_RCTBridge,
+          # _RCTRegisterModule and __RCTLogNativeInternal, all of which live in
+          # React-Core. Recurse instead.
+          #
+          # XCFrameworkIntermediates is pruned: it holds slices unpacked from prebuilt
+          # xcframeworks (hermes), which are linked separately via hermes.xcframework.
+          # Merging them here would define those symbols twice.
+          LIBS=$(find . -path ./XCFrameworkIntermediates -prune -o \
+                   -name "*.a" ! -name "libPods*" -type f -print)
+          if [ -z "$LIBS" ]; then
+            echo "::error::No static libraries found under $RN_BUILD — nothing to merge."
+            exit 1
+          fi
+          libtool -static -o merged/libReactNative.a $LIBS
+          echo "Merged $(echo "$LIBS" | wc -w | tr -d ' ') static libs into libReactNative.a"
+          cd -
+
+          # --- Copy artifacts to Frameworks/ ---
+          mkdir -p ../../../Frameworks/ReactNative
+          if [ -f "$RN_BUILD/merged/libReactNative.a" ]; then
+            cp "$RN_BUILD/merged/libReactNative.a" ../../../Frameworks/ReactNative/
+          elif [ -f "$RN_BUILD/libReactNative.a" ]; then
+            cp "$RN_BUILD/libReactNative.a" ../../../Frameworks/ReactNative/
+          else
+            echo "::error::libReactNative.a not found in build output"
+            exit 1
+          fi
+
+          # A count is not enough: the previous merge produced a perfectly valid
+          # one-library archive and reported success, and the defect only surfaced as
+          # undefined symbols in the app link ~8 minutes later. Assert the symbols the
+          # app actually references are defined here, where the cause is obvious.
+          STAGED_LIB=../../../Frameworks/ReactNative/libReactNative.a
+
+          # nm's output goes to a FILE and the assertion greps the file. Do not collapse
+          # this back into `nm ... | grep -qF`: grep -q exits on first match and SIGPIPEs
+          # nm, so under this job's pipefail the pipeline returns 141 and every symbol
+          # reads as missing. That false negative failed the build against a perfectly
+          # good 326 MB archive. It is the same SIGPIPE-under-pipefail trap the Flutter
+          # step above documents — it has now bitten twice in this file.
+          #
+          # Diagnostics run before the assertion, and nm's stderr is kept, so an
+          # incomplete archive can be told apart from nm failing to read one at all.
+          echo "--- libReactNative.a ---"
+          ls -lh "$STAGED_LIB" | awk '{print "  size: " $5}'
+          echo "  React-Core included in merge: $(echo "$LIBS" | grep -c 'libReact-Core\.a')"
+          echo "  nm exit / symbol counts:"
+          nm -gU "$STAGED_LIB" > /tmp/nm-out.txt 2>/tmp/nm-err.txt; NM_RC=$?
+          echo "    exit=$NM_RC  lines=$(wc -l < /tmp/nm-out.txt | tr -d ' ')"
+          echo "    RCT* defined: $(grep -c 'RCT' /tmp/nm-out.txt || true)"
+          echo "    OBJC classes: $(grep -c 'OBJC_CLASS_\$_' /tmp/nm-out.txt || true)"
+          if [ -s /tmp/nm-err.txt ]; then
+            echo "  nm stderr (first 20 lines):"
+            head -20 /tmp/nm-err.txt | sed 's/^/    /'
+          fi
+
+          for sym in '_OBJC_CLASS_$_RCTBridge' '_RCTRegisterModule' '_RCTLogNativeInternal'; do
+            if ! grep -qF "$sym" /tmp/nm-out.txt; then
+              echo "::error::$sym is not defined in libReactNative.a — the app cannot link."
+              exit 1
+            fi
+          done
+          echo "libReactNative.a defines the React symbols the app links against"
+
+          # --- Public headers for the app's bridging header ---
+          # iPadDx-Bridging-Header.h imports <React/RCTBridgeModule.h> and five more,
+          # and the app target's HEADER_SEARCH_PATHS points at
+          # Frameworks/ReactNative/include. Nothing created that directory, so the
+          # device build failed with "'React/RCTBridgeModule.h' file not found". Only
+          # device builds hit it — the imports sit behind #if !TARGET_OS_SIMULATOR.
+          #
+          # Three pod directories supply the transitive closure those imports need:
+          # React-Core's public headers, its private ones (RCTMessageThread,
+          # RCTCxxBridgeDelegate, RCTObjcExecutor, NSDataBigString) and ReactCommon's
+          # react/bridging, all flattened under React/ because that is the prefix the
+          # imports use. Derived from the pods rather than checked in, so the headers
+          # always match the react-native version package-lock.json pins.
+          PODS_HEADERS=Pods/Headers
+          INC=../../../Frameworks/ReactNative/include
+          mkdir -p "$INC/React" "$INC/RCTDeprecation"
+          cp -RL "$PODS_HEADERS/Public/React-Core/React/." "$INC/React/"
+          cp -RL "$PODS_HEADERS/Private/React-Core/React/." "$INC/React/"
+          cp -L  "$PODS_HEADERS/Public/ReactCommon/react/bridging/"*.h "$INC/React/"
+          cp -L  "$PODS_HEADERS/Public/RCTDeprecation/RCTDeprecation.h" "$INC/RCTDeprecation/"
+
+          # Fail here rather than 200 lines later in a compiler error, and name the
+          # header that is actually missing.
+          for h in RCTBridgeModule RCTBridge RCTBridgeDelegate RCTBundleURLProvider RCTRootView RCTLog; do
+            if [ ! -f "$INC/React/$h.h" ]; then
+              echo "::error::React/$h.h missing from $INC — the app's bridging header cannot compile."
+              exit 1
+            fi
+          done
+          echo "React headers staged ($(find "$INC" -name '*.h' | wc -l | tr -d ' ') files)"
+
+          # --- Copy hermes.xcframework ---
+          # `|| true` — see the XCODE_PATH note: "not found" is handled by the else below.
+          HERMES_SRC=$(find Pods -name "hermes.xcframework" -type d | head -1 || true)
+          if [ -n "$HERMES_SRC" ]; then
+            cp -R "$HERMES_SRC" ../../../Frameworks/hermes.xcframework
+            echo "hermes.xcframework copied"
+          else
+            echo "::warning::hermes.xcframework not found in Pods"
+          fi
+
+      # -----------------------------------------------------------------------
+      # 8. Build Capacitor + Cordova bridge assets
+      # -----------------------------------------------------------------------
+      - name: Install Capacitor npm packages
+        run: cd Bridges/capacitor_bridge && npm ci
+
+      - name: Copy Cordova JS into bundle
+        run: |
+          mkdir -p Bridges/cordova_bridge/www iPadDx/Resources/cordova_www
+          cp Bridges/capacitor_bridge/node_modules/@capacitor/core/cordova.js Bridges/cordova_bridge/www/cordova.js
+          cp Bridges/cordova_bridge/www/cordova.js iPadDx/Resources/cordova_www/cordova.js
+          cp Bridges/cordova_bridge/www/index.html iPadDx/Resources/cordova_www/index.html
+          echo "Cordova JS assets copied"
+
+      # -----------------------------------------------------------------------
+      # 9. Install root CocoaPods (Capacitor + CapacitorCordova)
+      # -----------------------------------------------------------------------
+      - name: Install CocoaPods
+        run: pod install --repo-update
+
+      # -----------------------------------------------------------------------
+      # 10. Install Apple certificate & provisioning profile
+      # -----------------------------------------------------------------------
+      - name: Install Apple certificate & provisioning profile
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.upload_to_appstore == 'true'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          PROFILE_PATH=$RUNNER_TEMP/profile.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          # Decode from base64
+          echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+          echo -n "$APPLE_PROVISIONING_PROFILE_BASE64" | base64 --decode -o "$PROFILE_PATH"
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate to keychain
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          # Install provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      # -----------------------------------------------------------------------
+      # 11. Build (CI — no signing, for PRs and pushes to main)
+      # -----------------------------------------------------------------------
+      - name: Build (CI only)
+        if: "!startsWith(github.ref, 'refs/tags/v') && github.event.inputs.upload_to_appstore != 'true'"
+        run: |
+          xcodebuild build \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | xcbeautify
+
+      # -----------------------------------------------------------------------
+      # 11b. Run unit tests with coverage (CI only)
+      # -----------------------------------------------------------------------
+      - name: Run unit tests
+        if: "!startsWith(github.ref, 'refs/tags/v') && github.event.inputs.upload_to_appstore != 'true'"
+        run: |
+          # Resolve an available iPad simulator instead of pinning a model name: with
+          # no OS= the destination defaults to the LATEST installed runtime, and a
+          # pinned model that only exists under an older runtime fails with "Unable to
+          # find a device matching the provided destination specifier". Runner images
+          # change their device/runtime mix regularly.
+          # `|| true` — grep exits 1 when no iPad simulator exists, which under
+          # pipefail + -e would kill the step before the explicit error message below.
+          SIM_ID=$(xcrun simctl list devices available \
+            | grep -E '^ +iPad' \
+            | grep -oE '[0-9A-F]{8}-[0-9A-F-]{27}' \
+            | head -1 || true)
+          if [ -z "$SIM_ID" ]; then
+            echo "::error::No iPad simulator available on this runner."
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Testing on simulator $SIM_ID"
+
+          # Stale result bundles make xcodebuild refuse to run.
+          rm -rf build/TestResults.xcresult
+
+          xcodebuild test \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -destination "id=$SIM_ID" \
+            -enableCodeCoverage YES \
+            -resultBundlePath build/TestResults.xcresult \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | xcbeautify
+
+      - name: Coverage report
+        if: "!startsWith(github.ref, 'refs/tags/v') && github.event.inputs.upload_to_appstore != 'true'"
+        run: |
+          xcrun xccov view --report --only-targets build/TestResults.xcresult
+
+      - name: Upload test results
+        if: always() && !startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: build/TestResults.xcresult
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # 12. Archive (for tag pushes and manual uploads)
+      # -----------------------------------------------------------------------
+      - name: Archive
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.upload_to_appstore == 'true'
+        run: |
+          xcodebuild archive \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            2>&1 | xcbeautify
+
+      # -----------------------------------------------------------------------
+      # 13. Export IPA
+      # -----------------------------------------------------------------------
+      - name: Export IPA
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.upload_to_appstore == 'true'
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist ExportOptions.plist
+
+      # -----------------------------------------------------------------------
+      # 14. Upload to App Store Connect (TestFlight)
+      # -----------------------------------------------------------------------
+      - name: Upload to App Store Connect
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.upload_to_appstore == 'true'
+        env:
+          APPSTORE_CONNECT_API_KEY_ID: ${{ secrets.APPSTORE_CONNECT_API_KEY_ID }}
+          APPSTORE_CONNECT_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_ISSUER_ID }}
+          APPSTORE_CONNECT_API_KEY_BASE64: ${{ secrets.APPSTORE_CONNECT_API_KEY_BASE64 }}
+        run: |
+          # Decode API key
+          mkdir -p ~/.private_keys
+          API_KEY_PATH=~/.private_keys/AuthKey_${APPSTORE_CONNECT_API_KEY_ID}.p8
+          echo -n "$APPSTORE_CONNECT_API_KEY_BASE64" | base64 --decode -o "$API_KEY_PATH"
+
+          # Upload via xcodebuild (replaces deprecated altool)
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$EXPORT_PATH" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$APPSTORE_CONNECT_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_CONNECT_ISSUER_ID" \
+            2>&1 && UPLOADED=1 || UPLOADED=0
+
+          # Fall back to iTMSTransporter if the authenticated export did not upload.
+          # Every fallback records success/failure; the step fails if none worked, so a
+          # release run can no longer report green having uploaded nothing.
+          IPA_PATH="$EXPORT_PATH/iPadDx.ipa"
+          if [ "$UPLOADED" -ne 1 ]; then
+            if [ ! -f "$IPA_PATH" ]; then
+              echo "::error::No IPA at $IPA_PATH — export produced nothing to upload."
+              exit 1
+            fi
+            echo "Primary upload did not succeed; trying iTMSTransporter."
+            if xcrun iTMSTransporter -m upload \
+              -f "$IPA_PATH" \
+              -apiKey "$APPSTORE_CONNECT_API_KEY_ID" \
+              -apiIssuer "$APPSTORE_CONNECT_ISSUER_ID" \
+              2>&1; then
+              UPLOADED=1
+            fi
+          fi
+
+          if [ "$UPLOADED" -ne 1 ]; then
+            echo "::error::Upload to App Store Connect failed. The IPA is attached as a build artifact; upload it manually via Transporter.app."
+            exit 1
+          fi
+          echo "✓ Uploaded to App Store Connect"
+
+      # -----------------------------------------------------------------------
+      # 15. Upload IPA as artifact (always available for download)
+      # -----------------------------------------------------------------------
+      - name: Upload IPA artifact
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.upload_to_appstore == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: iPadDx-${{ github.ref_name }}
+          path: build/export/iPadDx.ipa
+          retention-days: 90
+
+      # -----------------------------------------------------------------------
+      # 16. Cleanup keychain
+      # -----------------------------------------------------------------------
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true

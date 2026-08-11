@@ -26,6 +26,13 @@ private enum AnalyticsMetric: String, CaseIterable, Identifiable {
     }
 }
 
+/// The artefacts the analytics screen can export.
+private enum AnalyticsExportKind {
+    case pdf
+    case summaryCSV
+    case analyticsCSV
+}
+
 private enum DateRangePreset: String, CaseIterable, Identifiable {
     case all = "All Time"
     case week = "7 Days"
@@ -48,6 +55,16 @@ private enum DateRangePreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// Mean over values that were actually measured.
+///
+/// Skipped and cancelled phases persist zeros, and zero is indistinguishable from a
+/// real latency/jitter/loss/throughput reading, so a raw average silently drags every
+/// figure toward zero. Returns nil when nothing measured the metric.
+func measuredMean(_ values: [Double]) -> Double? {
+    guard !values.isEmpty else { return nil }
+    return values.reduce(0, +) / Double(values.count)
+}
+
 struct ReportAnalyticsView: View {
     @Environment(ReportStore.self) private var store
     @State private var selectedPair: String = "All"
@@ -58,6 +75,8 @@ struct ReportAnalyticsView: View {
     @State private var customEnd: Date = .init()
     @State private var selectedMetric: AnalyticsMetric = .latencyAvg
     @State private var exportURLs: [URL]?
+    @State private var isExporting = false
+    @State private var exportError: String?
 
     private var effectiveDateRange: (start: Date?, end: Date?) {
         switch datePreset {
@@ -103,28 +122,45 @@ struct ReportAnalyticsView: View {
             "\($0.localChip) vs \($0.remoteChip)|\($0.bridgeTransport)"
         }
         let hasBridges = Set(filteredSummaries.map(\.bridgeTransport)).count > 1
-        return grouped.map { _, summaries in
+        // Pairs with no measurement of the selected metric are omitted rather than
+        // charted as zero.
+        return grouped.compactMap { _, summaries -> PairAggregate? in
             let pair = "\(summaries[0].localChip) vs \(summaries[0].remoteChip)"
             let bridge = summaries[0].bridgeTransport
             let label = hasBridges ? "\(pair) [\(bridge)]" : pair
-            let avg = summaries.map { metricValue(for: $0) }.reduce(0, +) / Double(summaries.count)
-            return PairAggregate(pair: label, average: avg, count: summaries.count, bridge: bridge)
+            let measured = summaries.compactMap { metricValue(for: $0) }
+            guard let avg = measuredMean(measured) else { return nil }
+            return PairAggregate(pair: label, average: avg, count: measured.count, bridge: bridge)
         }
         .sorted { $0.pair < $1.pair }
     }
 
-    private var gradeDistribution: [(grade: String, count: Int, color: Color)] {
-        let grades = ["Excellent", "Good", "Fair", "Poor"]
-        let colors: [Color] = [.green, .blue, .orange, .red]
-        let summaries = filteredSummaries
-        var result: [(grade: String, count: Int, color: Color)] = []
-        for i in 0 ..< grades.count {
-            let gradeCount = summaries.filter { $0.overallGrade == grades[i] }.count
-            if gradeCount > 0 {
-                result.append((grade: grades[i], count: gradeCount, color: colors[i]))
-            }
+    private var osPairAverages: [OSPairAggregate] {
+        let grouped: [String: [ReportSummary]] = Dictionary(grouping: filteredSummaries) {
+            "\($0.localOS) \u{2192} \($0.remoteOS)"
         }
-        return result
+        return grouped.compactMap { entry -> OSPairAggregate? in
+            let measured = entry.value.compactMap { metricValue(for: $0) }
+            guard let avg = measuredMean(measured) else { return nil }
+            return OSPairAggregate(pair: entry.key, average: avg, count: measured.count)
+        }
+        .sorted { $0.pair < $1.pair }
+    }
+
+    /// Counts EVERY value `overallGrade` can hold, including "Not graded".
+    ///
+    /// The hand-written ["Excellent","Good","Fair","Poor"] literal this replaced dropped
+    /// ungraded reports from the pie while the header still counted them, so the slices
+    /// did not add up to the stated report count. `allGradeValues` is the single list,
+    /// and `Color.gradeColor` supplies the matching colour (grey for ungraded) so the
+    /// two can never drift out of step the way parallel arrays did.
+    private var gradeDistribution: [(grade: String, count: Int, color: Color)] {
+        let summaries = filteredSummaries
+        return TestSuiteResults.allGradeValues.compactMap { grade -> (grade: String, count: Int, color: Color)? in
+            let gradeCount = summaries.filter { $0.overallGrade == grade }.count
+            guard gradeCount > 0 else { return nil }
+            return (grade: grade, count: gradeCount, color: Color.gradeColor(grade))
+        }
     }
 
     var body: some View {
@@ -135,8 +171,11 @@ struct ReportAnalyticsView: View {
                 VStack(spacing: 16) {
                     filterBar
                     summaryCards
+                    trendBadgesSection
+                    pairTrendsSection
                     trendChart
                     pairComparisonChart
+                    osPairComparisonChart
 
                     // Bridge comparison (only when multiple bridges exist)
                     if store.availableBridgeTransports().count > 1 {
@@ -153,17 +192,65 @@ struct ReportAnalyticsView: View {
         .toolbar {
             if !store.summaries.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        exportAnalytics()
+                    Menu {
+                        Button {
+                            exportAnalytics(kinds: [.pdf, .summaryCSV])
+                        } label: {
+                            Label("PDF + Summary CSV", systemImage: "doc.on.doc")
+                        }
+                        Button {
+                            exportAnalytics(kinds: [.pdf])
+                        } label: {
+                            Label("Analytics PDF", systemImage: "doc.richtext")
+                        }
+                        Button {
+                            exportAnalytics(kinds: [.analyticsCSV])
+                        } label: {
+                            Label("Analytics CSV (raw data)", systemImage: "chart.bar.doc.horizontal")
+                        }
+                        Button {
+                            exportAnalytics(kinds: [.summaryCSV])
+                        } label: {
+                            Label("Summary CSV (one row per report)", systemImage: "tablecells")
+                        }
                     } label: {
                         Label("Export", systemImage: "square.and.arrow.up")
                     }
+                    .disabled(isExporting)
                 }
             }
         }
+        .overlay {
+            if isExporting {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Building analytics export…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(20)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .alert(
+            "Export failed",
+            isPresented: Binding(get: { exportError != nil }, set: {
+                if !$0 {
+                    exportError = nil
+                }
+            })
+        ) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
         .sheet(isPresented: Binding(
             get: { exportURLs != nil },
-            set: { if !$0 { exportURLs = nil } }
+            set: {
+                if !$0 {
+                    exportURLs = nil
+                }
+            }
         )) {
             if let urls = exportURLs {
                 ShareSheet(activityItems: urls)
@@ -172,18 +259,32 @@ struct ReportAnalyticsView: View {
         }
     }
 
-    private func exportAnalytics() {
-        let ids = Set(filteredSummaries.map(\.id))
-        let fullReports = store.loadFullReports(ids: ids)
-        var urls: [URL] = []
-        if let pdfURL = AnalyticsReportRenderer.renderPDF(reports: fullReports) {
-            urls.append(pdfURL)
+    /// Loads the matching reports (SwiftData stays on the main actor) and then builds
+    /// the files off the main actor — rendering a PDF for a large store takes seconds.
+    private func exportAnalytics(kinds: [AnalyticsExportKind]) {
+        let reports = store.loadFullReports(ids: Set(filteredSummaries.map(\.id)))
+        guard !reports.isEmpty else {
+            exportError = "There are no reports matching the current filters to export."
+            return
         }
-        if let summaryURL = store.exportSummaryCSV(for: fullReports) {
-            urls.append(summaryURL)
-        }
-        if !urls.isEmpty {
-            exportURLs = urls
+        let reportStore = store
+        isExporting = true
+        Task {
+            let urls = await Task.detached(priority: .userInitiated) { () -> [URL] in
+                kinds.compactMap { kind -> URL? in
+                    switch kind {
+                    case .pdf: return AnalyticsReportRenderer.renderPDF(reports: reports)
+                    case .summaryCSV: return reportStore.exportSummaryCSV(for: reports)
+                    case .analyticsCSV: return reportStore.exportAnalyticsCSV(for: reports)
+                    }
+                }
+            }.value
+            isExporting = false
+            if urls.isEmpty {
+                exportError = "The export files could not be written."
+            } else {
+                exportURLs = urls
+            }
         }
     }
 
@@ -302,42 +403,242 @@ struct ReportAnalyticsView: View {
             summaryItem("Reports", "\(count)", .blue)
             summaryItem(
                 "Avg Latency",
-                count > 0
-                    ? String(format: "%.1fms", items.map(\.latencyAvg).reduce(0, +) / Double(count))
-                    : "-",
+                measuredMean(items.compactMap(\.measuredLatencyAvg))
+                    .map { String(format: "%.1fms", $0) } ?? "-",
                 .blue
             )
             summaryItem(
                 "Avg Throughput",
-                count > 0
-                    ? String(
-                        format: "%.1f MB/s",
-                        items.map(\.throughputBps).reduce(0, +) / Double(count) / 1_000_000
-                    )
-                    : "-",
+                measuredMean(items.compactMap(\.measuredThroughput))
+                    .map { String(format: "%.1f MB/s", $0 / 1_000_000) } ?? "-",
                 .purple
             )
             summaryItem(
                 "Avg Jitter",
-                count > 0
-                    ? String(
-                        format: "%.1fms",
-                        items.map(\.jitterAvg).reduce(0, +) / Double(count)
-                    )
-                    : "-",
+                measuredMean(items.compactMap(\.measuredJitter))
+                    .map { String(format: "%.1fms", $0) } ?? "-",
                 .orange
             )
             summaryItem(
                 "Avg Loss",
-                count > 0
-                    ? String(
-                        format: "%.1f%%",
-                        items.map(\.packetLossPercent).reduce(0, +) / Double(count)
-                    )
-                    : "-",
+                measuredMean(items.compactMap(\.measuredPacketLoss))
+                    .map { String(format: "%.1f%%", $0) } ?? "-",
                 .red
             )
             summaryItem("OS Versions", "\(uniqueOSVersions.count)", .indigo)
+        }
+    }
+
+    // MARK: - Trend Badges
+
+    private var trendBadgesSection: some View {
+        let summaries = filteredSummaries
+        let trends = computeTrends(from: summaries)
+
+        return Group {
+            if !trends.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                            .foregroundStyle(.blue)
+                        Text("Trend Analysis")
+                            .font(.headline)
+                        Spacer()
+                        Text(summaries.count >= 3 ? "Based on \(summaries.count) reports" : "")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    LazyVGrid(
+                        columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
+                        spacing: 8
+                    ) {
+                        ForEach(trends) { trend in
+                            VStack(spacing: 4) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: trend.direction.icon)
+                                        .font(.caption)
+                                        .foregroundStyle(Color.trendColor(trend.direction))
+                                    Text(String(format: "%+.1f%%", trend.changePercent))
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(Color.trendColor(trend.direction))
+                                }
+                                Text(trend.metric)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                // Confidence bar
+                                GeometryReader { geo in
+                                    ZStack(alignment: .leading) {
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .fill(Color.gray.opacity(0.15))
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .fill(Color.trendColor(trend.direction).opacity(0.4))
+                                            .frame(width: geo.size.width * trend.confidence)
+                                    }
+                                }
+                                .frame(height: 3)
+                                Text(trend.isFlat
+                                    ? "no variation in samples"
+                                    : String(format: "%.0f%% confidence", trend.confidence * 100))
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(.tertiary)
+                                Text(trend.period)
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                            .padding(8)
+                            .background(
+                                Color.trendColor(trend.direction).opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 8)
+                            )
+                        }
+                    }
+                }
+                .padding()
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+
+    private func computeTrends(from summaries: [ReportSummary]) -> [TrendResult] {
+        guard summaries.count >= 3 else { return [] }
+
+        // Each metric yields an OPTIONAL value. Regressing over the raw column would
+        // fit a line through the zero placeholders that cancelled and skipped runs
+        // store — one real 10ms report plus two cancelled rows becomes a confident
+        // "improving" latency trend that never happened.
+        let metrics: [(name: String, value: (ReportSummary) -> Double?, lowerIsBetter: Bool)] = [
+            ("Latency Avg", { $0.measuredLatencyAvg }, true),
+            ("Latency P95", { $0.measuredLatencyP95 }, true),
+            ("Throughput", { $0.measuredThroughput }, false),
+            ("Jitter", { $0.measuredJitter }, true),
+            ("Packet Loss", { $0.measuredPacketLoss }, true),
+            // Phase 5's headline number. Omitted here for a long time even though the
+            // metric picker offers it, so the badge row silently covered 5 of the 6
+            // analytics metrics.
+            ("Load Degradation", { $0.measuredLoadDegradation }, true),
+        ]
+
+        return metrics.compactMap { metric in
+            let samples = summaries.compactMap { summary in
+                metric.value(summary).map { (date: summary.date, value: $0) }
+            }
+            // The period must describe the window these samples span, not the full
+            // report range — otherwise a trend over 3 of 30 reports claims 30 reports.
+            return TrendAnalyzer.analyzeTrend(
+                samples: samples,
+                metric: metric.name,
+                lowerIsBetter: metric.lowerIsBetter,
+                period: TrendAnalyzer.describePeriod(dates: samples.map(\.date))
+            )
+        }
+    }
+
+    // MARK: - Per-Pair Trends
+
+    /// One trend per device pair for the selected metric — answers "which pairs are
+    /// getting worse". Pairs with fewer than 3 reports cannot be fitted and are listed
+    /// as such rather than given a made-up trend.
+    private var pairTrends: [PairTrend] {
+        let grouped = Dictionary(grouping: filteredSummaries) {
+            "\($0.localChip) \u{2192} \($0.remoteChip)"
+        }
+        return grouped.map { pair, items in
+            let sorted = items.sorted { $0.date < $1.date }
+            // Trends regress over measured points only; a zero placeholder would
+            // fabricate a downward trend.
+            let samples = sorted.compactMap { summary in
+                metricValue(for: summary).map { (date: summary.date, value: $0) }
+            }
+            let period = TrendAnalyzer.describePeriod(dates: samples.map(\.date))
+            // nil when the pair has fewer than 3 MEASURED reports — no trend is invented.
+            let trend = TrendAnalyzer.analyzeTrend(
+                samples: samples,
+                metric: selectedMetric.rawValue,
+                lowerIsBetter: selectedMetric.lowerIsBetter,
+                period: period
+            )
+            // Count the points the regression was actually fitted over.
+            return PairTrend(pair: pair, count: samples.count, trend: trend, period: period)
+        }
+        .sorted { lhs, rhs in
+            let lhsRank = trendRank(lhs.trend?.direction)
+            let rhsRank = trendRank(rhs.trend?.direction)
+            if lhsRank != rhsRank {
+                return lhsRank < rhsRank
+            }
+            return abs(lhs.trend?.changePercent ?? 0) > abs(rhs.trend?.changePercent ?? 0)
+        }
+    }
+
+    /// Worsening pairs sort first; pairs with no fittable trend sort last.
+    private func trendRank(_ direction: TrendDirection?) -> Int {
+        guard let direction else { return 3 }
+        switch direction {
+        case .degrading: return 0
+        case .stable: return 1
+        case .improving: return 2
+        }
+    }
+
+    private var pairTrendsSection: some View {
+        let trends = pairTrends
+        return Group {
+            if !trends.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "chart.line.downtrend.xyaxis")
+                            .foregroundStyle(.orange)
+                        Text("\(selectedMetric.rawValue) Trend by Device Pair").font(.headline)
+                        Spacer()
+                        Text("worsening first").font(.caption).foregroundStyle(.secondary)
+                    }
+
+                    ForEach(trends) { item in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.pair).font(.subheadline).fontWeight(.medium)
+                                Text("\(item.count) reports · \(item.period)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if let trend = item.trend {
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: trend.direction.icon)
+                                            .font(.caption)
+                                        Text(trend.isFlat
+                                            ? "flat"
+                                            : String(format: "%+.1f%%", trend.changePercent))
+                                            .font(.caption).fontWeight(.semibold)
+                                    }
+                                    .foregroundStyle(Color.trendColor(trend.direction))
+                                    Text(trend.isFlat
+                                        ? "no variation"
+                                        : String(format: "%.0f%% confidence", trend.confidence * 100))
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.tertiary)
+                                }
+                            } else {
+                                Text("needs 3+ reports")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .padding(8)
+                        .background(
+                            Color.trendColor(item.trend?.direction ?? .stable)
+                                .opacity(item.trend == nil ? 0.03 : 0.06),
+                            in: RoundedRectangle(cornerRadius: 8)
+                        )
+                    }
+                }
+                .padding()
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
         }
     }
 
@@ -352,14 +653,18 @@ struct ReportAnalyticsView: View {
                 Text("\(filteredSummaries.count) reports").font(.caption).foregroundStyle(.secondary)
             }
 
-            if filteredSummaries.count >= 2 {
-                let hasBridges = Set(filteredSummaries.map(\.bridgeTransport)).count > 1
+            // Only reports that measured the selected metric can be plotted — a zero
+            // placeholder from a cancelled run would draw a fake dip to the axis.
+            let plottable = filteredSummaries.filter { metricValue(for: $0) != nil }
+            if plottable.count >= 2 {
+                let hasBridges = Set(plottable.map(\.bridgeTransport)).count > 1
                 Chart {
-                    ForEach(filteredSummaries) { summary in
+                    ForEach(plottable) { summary in
                         let pair = "\(summary.localChip) vs \(summary.remoteChip)"
+                        let value = metricValue(for: summary) ?? 0
                         LineMark(
                             x: .value("Date", summary.date),
-                            y: .value(selectedMetric.rawValue, metricValue(for: summary))
+                            y: .value(selectedMetric.rawValue, value)
                         )
                         .foregroundStyle(by: .value(
                             hasBridges ? "Bridge" : "Pair",
@@ -370,7 +675,7 @@ struct ReportAnalyticsView: View {
 
                         PointMark(
                             x: .value("Date", summary.date),
-                            y: .value(selectedMetric.rawValue, metricValue(for: summary))
+                            y: .value(selectedMetric.rawValue, value)
                         )
                         .foregroundStyle(by: .value(
                             hasBridges ? "Bridge" : "Pair",
@@ -440,9 +745,9 @@ struct ReportAnalyticsView: View {
             let bridges = store.availableBridgeTransports()
             let bridgeAverages: [(bridge: String, avg: Double, count: Int)] = bridges.compactMap { bridge in
                 let items = filteredSummaries.filter { $0.bridgeTransport == bridge }
-                guard !items.isEmpty else { return nil }
-                let avg = items.map { metricValue(for: $0) }.reduce(0, +) / Double(items.count)
-                return (bridge: bridge, avg: avg, count: items.count)
+                let measured = items.compactMap { metricValue(for: $0) }
+                guard let avg = measuredMean(measured) else { return nil }
+                return (bridge: bridge, avg: avg, count: measured.count)
             }
 
             if bridgeAverages.count >= 2 {
@@ -490,26 +795,84 @@ struct ReportAnalyticsView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    // MARK: - OS Version Pair Comparison
+
+    private var osPairComparisonChart: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "arrow.left.arrow.right").foregroundStyle(.indigo)
+                Text("\(selectedMetric.rawValue) by OS Version Pair").font(.headline)
+                Spacer()
+            }
+
+            if !osPairAverages.isEmpty {
+                Chart(osPairAverages) { item in
+                    BarMark(
+                        x: .value(selectedMetric.rawValue, item.average),
+                        y: .value("OS Pair", item.pair)
+                    )
+                    .foregroundStyle(by: .value("OS Pair", item.pair))
+                    .annotation(position: .trailing, spacing: 4) {
+                        Text(formatMetricValue(item.average))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .chartXAxisLabel(selectedMetric.unit)
+                .chartLegend(.hidden)
+                .frame(height: max(CGFloat(osPairAverages.count) * 50, 80))
+            } else {
+                Text("No data for selected filters.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(height: 80).frame(maxWidth: .infinity)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
     // MARK: - OS Version Breakdown
+
+    /// The `ReportSummary` equivalent of `TestSuiteResults.isFailure`.
+    ///
+    /// A run that measured nothing at all is COUNTED as a failure rather than dropped
+    /// from the denominator: it is the truest failure there is, and excluding it would
+    /// Mirrors `TestSuiteResults.isFailure` exactly, via the persisted
+    /// `measuredAnything` flag.
+    ///
+    /// Reconstructing "measured nothing" from the summary's four scored columns was
+    /// wrong: DNS Resolution, Heavy Load and Latency Under Load are real measurements
+    /// that the summary does not carry, so a DNS-only or Heavy Load-only run was
+    /// counted as a failure here while the PDF and CSV — which load the full report —
+    /// counted it as a success. The flag is computed from the full results at save
+    /// time so both paths agree.
+    private func isFailure(_ summary: ReportSummary) -> Bool {
+        summary.isFailure
+    }
 
     private var osVersionAggregates: [OSAggregate] {
         var map: [String: [ReportSummary]] = [:]
         for summary in filteredSummaries {
             map[summary.localOS, default: []].append(summary)
-            map[summary.remoteOS, default: []].append(summary)
+            // A report where both devices run the same version belongs to that
+            // bucket once, not twice.
+            if summary.remoteOS != summary.localOS {
+                map[summary.remoteOS, default: []].append(summary)
+            }
         }
         return map.map { version, items in
             let n = Double(items.count)
-            let avgLat = items.map(\.latencyAvg).reduce(0, +) / n
-            let avgLoss = items.map(\.packetLossPercent).reduce(0, +) / n
-            let failCount = items.filter { $0.overallGrade == "Poor" || $0.overallGrade == "Fair" }.count
-            let failRate = Double(failCount) / n * 100
+            let failCount = items.filter(isFailure).count
             return OSAggregate(
                 version: version,
                 count: items.count,
-                avgLatency: avgLat,
-                avgPacketLoss: avgLoss,
-                failRate: failRate
+                avgLatency: measuredMean(items.compactMap(\.measuredLatencyAvg)),
+                avgLatencyP95: measuredMean(items.compactMap(\.measuredLatencyP95)),
+                avgThroughputMBps: measuredMean(items.compactMap(\.measuredThroughput)).map { $0 / 1_000_000 },
+                avgJitter: measuredMean(items.compactMap(\.measuredJitter)),
+                avgPacketLoss: measuredMean(items.compactMap(\.measuredPacketLoss)),
+                avgLoadDegradation: measuredMean(items.compactMap(\.measuredLoadDegradation)),
+                failRate: Double(failCount) / n * 100
             )
         }
         .sorted { $0.version < $1.version }
@@ -519,20 +882,22 @@ struct ReportAnalyticsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "gear.badge").foregroundStyle(.indigo)
-                Text("\(selectedMetric.rawValue) by iPadOS Version").font(.headline)
+                Text("\(selectedMetric.rawValue) by OS Version").font(.headline)
                 Spacer()
             }
 
-            let aggregates = osVersionAggregates
+            // Only OS buckets that measured the selected metric are plotted; the rest
+            // would otherwise appear as a zero-length bar labelled "0.0ms".
+            let aggregates = osVersionAggregates.filter { osMetricValue(for: $0) != nil }
             if !aggregates.isEmpty {
                 Chart(aggregates) { item in
                     BarMark(
-                        x: .value(selectedMetric.rawValue, osMetricValue(for: item)),
+                        x: .value(selectedMetric.rawValue, osMetricValue(for: item) ?? 0),
                         y: .value("OS", item.version)
                     )
                     .foregroundStyle(by: .value("OS", item.version))
                     .annotation(position: .trailing, spacing: 4) {
-                        Text(formatMetricValue(osMetricValue(for: item)))
+                        Text(osMetricValue(for: item).map(formatMetricValue) ?? "—")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -559,14 +924,10 @@ struct ReportAnalyticsView: View {
                         HStack {
                             Text(item.version).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
                             Text("\(item.count)").font(.caption).frame(width: 50, alignment: .trailing)
-                            Text(String(format: "%.1fms", item.avgLatency)).font(.caption).frame(
-                                width: 60,
-                                alignment: .trailing
-                            )
-                            Text(String(format: "%.1f%%", item.avgPacketLoss)).font(.caption).frame(
-                                width: 50,
-                                alignment: .trailing
-                            )
+                            Text(item.avgLatency.map { String(format: "%.1fms", $0) } ?? "—")
+                                .font(.caption).frame(width: 60, alignment: .trailing)
+                            Text(item.avgPacketLoss.map { String(format: "%.1f%%", $0) } ?? "—")
+                                .font(.caption).frame(width: 50, alignment: .trailing)
                             Text(String(format: "%.1f%%", item.failRate)).font(.caption)
                                 .foregroundStyle(item.failRate > 10 ? .red : .primary)
                                 .frame(width: 60, alignment: .trailing)
@@ -584,11 +945,16 @@ struct ReportAnalyticsView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func osMetricValue(for item: OSAggregate) -> Double {
+    /// Exhaustive on purpose — no `default`, so a new metric fails to compile rather
+    /// than silently plotting latency under another metric's label.
+    private func osMetricValue(for item: OSAggregate) -> Double? {
         switch selectedMetric {
         case .latencyAvg: item.avgLatency
+        case .latencyP95: item.avgLatencyP95
+        case .throughput: item.avgThroughputMBps
+        case .jitterAvg: item.avgJitter
         case .packetLoss: item.avgPacketLoss
-        default: item.avgLatency
+        case .loadDegradation: item.avgLoadDegradation
         }
     }
 
@@ -639,15 +1005,25 @@ struct ReportAnalyticsView: View {
 
     // MARK: - Helpers
 
-    private func metricValue(for summary: ReportSummary) -> Double {
+    /// The selected metric for a report, or nil when that report never measured it.
+    ///
+    /// Returning a non-optional Double here was the root of the placeholder bug: a
+    /// cancelled or partial run stores zeros, zero looks like a real reading, and every
+    /// caller then averaged it. Optional forces each consumer to decide explicitly.
+    private func metricValue(for summary: ReportSummary) -> Double? {
         switch selectedMetric {
-        case .latencyAvg: summary.latencyAvg
-        case .latencyP95: summary.latencyP95
-        case .throughput: summary.throughputBps / 1_000_000
-        case .jitterAvg: summary.jitterAvg
-        case .packetLoss: summary.packetLossPercent
-        case .loadDegradation: summary.loadDegradation
+        case .latencyAvg: summary.measuredLatencyAvg
+        case .latencyP95: summary.measuredLatencyP95
+        case .throughput: summary.measuredThroughput.map { $0 / 1_000_000 }
+        case .jitterAvg: summary.measuredJitter
+        case .packetLoss: summary.measuredPacketLoss
+        case .loadDegradation: summary.measuredLoadDegradation
         }
+    }
+
+    /// Mean of the reports that actually measured the selected metric, or nil.
+    private func metricAverage(for summaries: [ReportSummary]) -> Double? {
+        measuredMean(summaries.compactMap { metricValue(for: $0) })
     }
 
     private func formatMetricValue(_ value: Double) -> String {
@@ -683,7 +1059,9 @@ private struct PairAggregate: Identifiable {
     let count: Int
     let bridge: String?
     var id: String {
-        if let bridge { return "\(pair)|\(bridge)" }
+        if let bridge {
+            return "\(pair)|\(bridge)"
+        }
         return pair
     }
 
@@ -695,13 +1073,42 @@ private struct PairAggregate: Identifiable {
     }
 }
 
+/// Per-OS aggregates.
+///
+/// Every metric is optional: `?? 0` would render "no report measured this" as a real
+/// 0.0ms / 0.0% in the chart and table — the best possible value. nil means not
+/// measured, and those buckets are omitted from the chart entirely.
 private struct OSAggregate: Identifiable {
     let version: String
     let count: Int
-    let avgLatency: Double
-    let avgPacketLoss: Double
+    let avgLatency: Double?
+    let avgLatencyP95: Double?
+    let avgThroughputMBps: Double?
+    let avgJitter: Double?
+    let avgPacketLoss: Double?
+    let avgLoadDegradation: Double?
     let failRate: Double
     var id: String {
         version
+    }
+}
+
+private struct PairTrend: Identifiable {
+    let pair: String
+    let count: Int
+    /// nil when the pair has too few reports to fit a regression.
+    let trend: TrendResult?
+    let period: String
+    var id: String {
+        pair
+    }
+}
+
+private struct OSPairAggregate: Identifiable {
+    let pair: String
+    let average: Double
+    let count: Int
+    var id: String {
+        pair
     }
 }

@@ -90,7 +90,11 @@ struct ConsoleLogView: View {
         }
         .sheet(isPresented: Binding(
             get: { exportURL != nil },
-            set: { if !$0 { exportURL = nil } }
+            set: {
+                if !$0 {
+                    exportURL = nil
+                }
+            }
         )) {
             if let url = exportURL {
                 ShareSheet(activityItems: [url])

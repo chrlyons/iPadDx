@@ -2,12 +2,11 @@ import XCTest
 @testable import iPadDx
 
 final class DiagnosticMessageTests: XCTestCase {
-
     // MARK: - Round-trip encoding/decoding
 
     func testPingRoundTrip() throws {
         let id = UUID()
-        let ts: TimeInterval = 123456.789
+        let ts: TimeInterval = 123_456.789
         let msg = DiagnosticMessage.ping(id: id, timestamp: ts)
         let data = try JSONEncoder().encode(msg)
         let decoded = try JSONDecoder().decode(DiagnosticMessage.self, from: data)

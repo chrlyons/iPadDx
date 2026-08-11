@@ -4,10 +4,14 @@ enum ActiveSheet: Identifiable {
     case export(urls: [URL])
     case compare(reportA: TestReport, reportB: TestReport)
 
+    /// Identity has to vary with the payload — SwiftUI keeps a presented sheet whose
+    /// id is unchanged, which would show the previous export's files.
     var id: String {
         switch self {
-        case .export: "export"
-        case .compare: "compare"
+        case let .export(urls):
+            "export-" + urls.map(\.lastPathComponent).joined(separator: "|")
+        case let .compare(reportA, reportB):
+            "compare-\(reportA.id.uuidString)-\(reportB.id.uuidString)"
         }
     }
 }
@@ -15,13 +19,20 @@ enum ActiveSheet: Identifiable {
 struct ReportListView: View {
     @Environment(ReportStore.self) private var store
     @State private var selectedReports: Set<UUID> = []
+    /// Selection in the order the user tapped, so comparison keeps A/B as picked.
+    @State private var selectionOrder: [UUID] = []
     @State private var selectionMode: SelectionMode = .none
     @State private var activeSheet: ActiveSheet?
+    @State private var exportFormat: ExportFormat = .csv
+    @State private var isExporting = false
+    @State private var exportError: String?
+    @State private var showCopiedToast = false
     @State private var chipFilter: String = "All"
     @State private var gradeFilter: String = "All"
     @State private var osFilter: String = "All"
     @State private var bridgeFilter: String = "All"
     @State private var searchText: String = ""
+    @Environment(\.colorScheme) private var colorScheme
 
     enum SelectionMode {
         case none
@@ -41,7 +52,12 @@ struct ReportListView: View {
 
     private var availableGrades: [String] {
         let grades = Set(store.summaries.map(\.overallGrade))
-        return ["Excellent", "Good", "Fair", "Poor"].filter { grades.contains($0) }
+        // "Not graded" is a real value a report can hold (a run that measured something
+        // but nothing in a scored dimension). Listing only the four bands meant such
+        // reports were visible but unfilterable. Ordered after the bands, and only
+        // offered when some report actually has it.
+        let ordered = SignalQuality.allCases.map(\.rawValue) + [TestSuiteResults.notGradedLabel]
+        return ordered.filter { grades.contains($0) }
     }
 
     private var availableOSVersions: [String] {
@@ -53,40 +69,63 @@ struct ReportListView: View {
         store.summaries.filter { s in
             if chipFilter != "All",
                s.localChip != chipFilter, s.remoteChip != chipFilter
-            { return false }
-            if gradeFilter != "All", s.overallGrade != gradeFilter { return false }
+            {
+                return false
+            }
+            if gradeFilter != "All", s.overallGrade != gradeFilter {
+                return false
+            }
             if osFilter != "All",
                s.localOS != osFilter, s.remoteOS != osFilter
-            { return false }
-            if bridgeFilter != "All", s.bridgeTransport != bridgeFilter { return false }
+            {
+                return false
+            }
+            if bridgeFilter != "All", s.bridgeTransport != bridgeFilter {
+                return false
+            }
             if !searchText.isEmpty {
                 let query = searchText.lowercased()
                 let haystack = "\(s.localName) \(s.remoteName) \(s.localChip) \(s.remoteChip) \(s.localDisplayModel) \(s.remoteDisplayModel)"
                     .lowercased()
-                if !haystack.contains(query) { return false }
+                if !haystack.contains(query) {
+                    return false
+                }
             }
             return true
         }
     }
 
+    /// Selection clipped to what the current filters actually show. Filters can change
+    /// after reports were picked, and no bulk action may ever touch a hidden report.
+    private var visibleSelection: Set<UUID> {
+        selectedReports.intersection(filteredSummaries.map(\.id))
+    }
+
     var body: some View {
         List {
+            if let initError = store.initError {
+                storeUnavailableRow(initError)
+            }
+
             if store.summaries.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "doc.text.magnifyingglass")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.secondary)
-                    Text("No saved reports yet.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text("Connect to a device and run the test suite to generate reports.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
+                // Suppressed when the store failed to open — "no reports yet" would be a lie.
+                if store.initError == nil {
+                    VStack(spacing: 12) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.secondary)
+                        Text("No saved reports yet.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text("Connect to a device and run the test suite to generate reports.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+                    .listRowBackground(Color.clear)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 40)
-                .listRowBackground(Color.clear)
             } else {
                 filterBar
                     .listRowBackground(Color.clear)
@@ -120,12 +159,28 @@ struct ReportListView: View {
                             }
                         }
                         .swipeActions(edge: .leading) {
+                            // Explicit format — a swipe must not silently inherit whatever
+                            // was last picked in the toolbar menu.
                             Button {
-                                exportSingle(summary.id)
+                                exportSingle(summary.id, format: .csv)
                             } label: {
-                                Label("Export", systemImage: "square.and.arrow.up")
+                                Label("Export CSV", systemImage: ExportFormat.csv.icon)
                             }
                             .tint(.blue)
+
+                            Button {
+                                exportSingle(summary.id, format: .json)
+                            } label: {
+                                Label("Export JSON", systemImage: ExportFormat.json.icon)
+                            }
+                            .tint(.teal)
+
+                            Button {
+                                copySummaryToClipboard(summary.id)
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.clipboard")
+                            }
+                            .tint(.indigo)
                         }
                     }
                 }
@@ -146,9 +201,16 @@ struct ReportListView: View {
                             }
                             .disabled(store.summaries.count < 2)
 
-                            Button {
-                                selectionMode = .export
-                                selectedReports.removeAll()
+                            Menu {
+                                ForEach(ExportFormat.allCases) { format in
+                                    Button {
+                                        exportFormat = format
+                                        selectionMode = .export
+                                        selectedReports.removeAll()
+                                    } label: {
+                                        Label("Export as \(format.rawValue)", systemImage: format.icon)
+                                    }
+                                }
                             } label: {
                                 Label("Export Selected", systemImage: "square.and.arrow.up")
                             }
@@ -162,8 +224,23 @@ struct ReportListView: View {
 
                             Divider()
 
-                            Button {
-                                exportAll()
+                            Menu {
+                                ForEach(ExportFormat.allCases) { format in
+                                    Button {
+                                        exportFormat = format
+                                        exportAll()
+                                    } label: {
+                                        Label("Export All as \(format.rawValue)", systemImage: format.icon)
+                                    }
+                                }
+
+                                Divider()
+
+                                Button {
+                                    exportAnalyticsData()
+                                } label: {
+                                    Label("Analytics CSV (raw data)", systemImage: "chart.bar.doc.horizontal")
+                                }
                             } label: {
                                 Label("Export All (\(filteredSummaries.count))", systemImage: "doc.on.doc")
                             }
@@ -186,7 +263,7 @@ struct ReportListView: View {
                         .foregroundStyle(.secondary)
 
                     HStack(spacing: 12) {
-                        if selectionMode == .compare, selectedReports.count == 2 {
+                        if selectionMode == .compare, visibleSelection.count == 2 {
                             Button {
                                 compareSelected()
                             } label: {
@@ -196,21 +273,21 @@ struct ReportListView: View {
                             .buttonStyle(.borderedProminent)
                             .controlSize(.large)
                         }
-                        if selectionMode == .export, !selectedReports.isEmpty {
+                        if selectionMode == .export, !visibleSelection.isEmpty {
                             Button {
                                 exportSelected()
                             } label: {
-                                Label("Export (\(selectedReports.count))", systemImage: "square.and.arrow.up")
+                                Label("Export (\(visibleSelection.count))", systemImage: "square.and.arrow.up")
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.large)
                         }
-                        if selectionMode == .delete, !selectedReports.isEmpty {
+                        if selectionMode == .delete, !visibleSelection.isEmpty {
                             Button(role: .destructive) {
                                 deleteSelected()
                             } label: {
-                                Label("Delete (\(selectedReports.count))", systemImage: "trash")
+                                Label("Delete (\(visibleSelection.count))", systemImage: "trash")
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
@@ -221,7 +298,7 @@ struct ReportListView: View {
                             Button {
                                 selectAll()
                             } label: {
-                                Text(selectedReports.count == filteredSummaries.count ? "Deselect All" : "Select All")
+                                Text(allVisibleSelected ? "Deselect All" : "Select All")
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.bordered)
@@ -239,6 +316,43 @@ struct ReportListView: View {
                 }
                 .padding()
                 .background(.ultraThinMaterial)
+            }
+        }
+        .overlay {
+            if isExporting {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Preparing export…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(20)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .alert(
+            "Export failed",
+            isPresented: Binding(get: { exportError != nil }, set: {
+                if !$0 {
+                    exportError = nil
+                }
+            })
+        ) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
+        .overlay(alignment: .bottom) {
+            if showCopiedToast {
+                Text("Copied to clipboard")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.bottom, 80)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.easeInOut, value: showCopiedToast)
             }
         }
         .sheet(item: $activeSheet) { sheet in
@@ -260,6 +374,30 @@ struct ReportListView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Store Error
+
+    private func storeUnavailableRow(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Saved reports are unavailable")
+                    .font(.subheadline).fontWeight(.semibold)
+            }
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(
+                "Nothing was deleted — your saved reports are still on disk. Quit and relaunch iPadDx to try opening the database again. Reports finished in this session stay listed until you quit."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+        .listRowBackground(Color.orange.opacity(0.08))
     }
 
     // MARK: - Row
@@ -409,44 +547,65 @@ struct ReportListView: View {
     private var selectionModeLabel: String {
         switch selectionMode {
         case .none: ""
-        case .compare: "Select 2 reports to compare (\(selectedReports.count)/2)"
-        case .export: "Select reports to export (\(selectedReports.count) selected)"
-        case .delete: "Select reports to delete (\(selectedReports.count) selected)"
+        case .compare: "Select 2 reports to compare (\(visibleSelection.count)/2)"
+        case .export: "Select reports to export (\(visibleSelection.count) selected)"
+        case .delete: "Select reports to delete (\(visibleSelection.count) selected)"
         }
+    }
+
+    private var allVisibleSelected: Bool {
+        !filteredSummaries.isEmpty && visibleSelection.count == filteredSummaries.count
     }
 
     private func toggleSelection(_ id: UUID) {
         if selectedReports.contains(id) {
             selectedReports.remove(id)
+            selectionOrder.removeAll { $0 == id }
         } else {
-            if selectionMode == .compare, selectedReports.count >= 2 { return }
+            if selectionMode == .compare, visibleSelection.count >= 2 {
+                return
+            }
             selectedReports.insert(id)
+            selectionOrder.append(id)
         }
     }
 
     private func exitSelectionMode() {
         selectionMode = .none
         selectedReports.removeAll()
+        selectionOrder.removeAll()
     }
 
     private func compareSelected() {
-        let ids = Array(selectedReports)
+        // A/B follow the order the user tapped, not SwiftData's fetch order.
+        let visible = visibleSelection
+        let ids = selectionOrder.filter { visible.contains($0) }
         guard ids.count == 2 else { return }
-        let reports = store.loadFullReports(ids: selectedReports)
-        guard reports.count == 2 else { return }
-        activeSheet = .compare(reportA: reports[0], reportB: reports[1])
+        let reports = store.loadFullReports(ids: Set(ids))
+        guard let reportA = reports.first(where: { $0.id == ids[0] }),
+              let reportB = reports.first(where: { $0.id == ids[1] })
+        else { return }
+        activeSheet = .compare(reportA: reportA, reportB: reportB)
     }
 
     private func selectAll() {
-        if selectedReports.count == filteredSummaries.count {
-            selectedReports.removeAll()
+        let visible = filteredSummaries.map(\.id)
+        let visibleSet = Set(visible)
+        if allVisibleSelected {
+            // Only clear what is on screen — hidden selections stay as they were.
+            selectedReports.subtract(visibleSet)
+            selectionOrder.removeAll { visibleSet.contains($0) }
         } else {
-            selectedReports = Set(filteredSummaries.map(\.id))
+            for id in visible where !selectedReports.contains(id) {
+                selectedReports.insert(id)
+                selectionOrder.append(id)
+            }
         }
     }
 
     private func deleteSelected() {
-        for id in selectedReports {
+        // Strictly the visible set — a filtered-out report must never be deleted.
+        for id in visibleSelection {
             store.delete(id)
         }
         exitSelectionMode()
@@ -454,52 +613,84 @@ struct ReportListView: View {
 
     // MARK: - Export
 
-    private func exportSingle(_ id: UUID) {
+    private func exportSingle(_ id: UUID, format: ExportFormat) {
+        guard let report = store.loadFullReport(id: id) else {
+            exportError = "That report could not be loaded from the database, so it was not exported."
+            return
+        }
+        runExport { try [ReportExporter.exportSingle(report: report, format: format)] }
+    }
+
+    private func exportSelected() {
+        exportReports(store.loadFullReports(ids: visibleSelection))
+    }
+
+    private func exportAll() {
+        exportReports(store.loadFullReports(ids: Set(filteredSummaries.map(\.id))))
+    }
+
+    private func exportReports(_ reports: [TestReport]) {
+        guard !reports.isEmpty else {
+            exportError = "There are no reports matching the current filters to export."
+            return
+        }
+        let format = exportFormat
+        runExport { try ReportExporter.exportBatch(reports: reports, format: format) }
+    }
+
+    /// Analytics/raw-data CSV for everything the current filters show.
+    private func exportAnalyticsData() {
+        let reports = store.loadFullReports(ids: Set(filteredSummaries.map(\.id)))
+        guard !reports.isEmpty else {
+            exportError = "There are no reports matching the current filters to export."
+            return
+        }
+        let reportStore = store
+        runExport {
+            guard let url = reportStore.exportAnalyticsCSV(for: reports) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            return [url]
+        }
+    }
+
+    /// Builds export files off the main actor — PDF rendering and CSV assembly are
+    /// O(reports) and freeze the UI on a large store — then presents the share sheet.
+    private func runExport(_ build: @escaping @Sendable () throws -> [URL]) {
+        isExporting = true
         Task {
-            if let report = store.loadFullReport(id: id),
-               let url = store.exportCSV(for: report)
-            {
-                activeSheet = .export(urls: [url])
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<[URL], Error> in
+                do {
+                    return try .success(build())
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            isExporting = false
+            switch result {
+            case let .success(urls) where !urls.isEmpty:
+                activeSheet = .export(urls: urls)
+            case .success:
+                exportError = "No files were produced."
+            case let .failure(error):
+                AppLog("Export failed: \(error)", level: .error, category: "Store")
+                exportError = error.localizedDescription
             }
         }
     }
 
-    private func exportSelected() {
-        let reports = store.loadFullReports(ids: selectedReports)
-        exportReports(reports)
-    }
-
-    private func exportAll() {
-        let ids = Set(filteredSummaries.map(\.id))
-        let reports = store.loadFullReports(ids: ids)
-        exportReports(reports)
-    }
-
-    private func exportReports(_ reports: [TestReport]) {
-        Task.detached {
-            var urls: [URL] = []
-            if reports.count > 1, let summaryURL = await MainActor.run(body: { store.exportSummaryCSV(for: reports) }) {
-                urls.append(summaryURL)
-            } else if let report = reports.first,
-                      let url = await MainActor.run(body: { store.exportCSV(for: report) })
-            {
-                urls.append(url)
-            }
-            await MainActor.run {
-                if !urls.isEmpty {
-                    activeSheet = .export(urls: urls)
-                }
+    private func copySummaryToClipboard(_ id: UUID) {
+        if let report = store.loadFullReport(id: id) {
+            UIPasteboard.general.string = ReportExporter.clipboardSummary(report: report)
+            showCopiedToast = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                showCopiedToast = false
             }
         }
     }
 
     private func gradeColor(_ grade: String) -> Color {
-        switch grade {
-        case "Excellent": .green
-        case "Good": .blue
-        case "Fair": .orange
-        default: .red
-        }
+        Color.gradeColor(grade, scheme: colorScheme)
     }
 }
 

@@ -113,7 +113,7 @@ These are only loaded when a user opens a specific report's detail view or expor
 | Holder | What It Stores | Cap | Verdict |
 |---|---|---|---|
 | `LogStore.entries` | Log messages | 5,000 | Fine |
-| `DiagnosticMetrics.latencyHistory` | RTT samples | 120 | Fine |
+| `DiagnosticMetrics.latencyHistory` | RTT samples | 7,200 | ~1 hour at the 500ms heartbeat (~300KB). Raised from 120, which held only ~60s and silently discarded the earlier history a long soak needs. The chart downsamples to ~400 points for rendering, keeping each bucket's peak so spikes survive. |
 | `DiagnosticMetrics.connectionLog` | Connection events | 50 | Fine |
 | `ConductorService.eventLog` | Conductor events | 100 | Fine |
 | `ConductorService.completedReports` | Current run results | Queue size | Fine — transient |

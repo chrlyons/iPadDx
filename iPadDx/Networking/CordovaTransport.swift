@@ -18,29 +18,29 @@ enum CordovaBridgeManager {
     /// True if the bridge became ready via JS signal; false if it timed out.
     static var isHealthy = false
     private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
-    private static var echoCallbacks: [String: (String) -> Void] = [:]
-    private static var callIdCounter = 0
+    private static var registry = BridgeCallbackRegistry(prefix: "cdv")
     private static var messageHandler: CordovaBridgeMessageHandler?
     private static var navigationDelegate: CordovaBridgeNavigationDelegate?
     private static var plugin: CordovaEchoPlugin?
     private static var commandDelegate: CordovaBridgeCommandDelegate?
 
     static func nextCallId() -> String {
-        callIdCounter += 1
-        return "cdv_\(callIdCounter)"
+        registry.nextCallId()
     }
 
     static func registerCallback(callId: String, callback: @escaping (String) -> Void) {
-        echoCallbacks[callId] = callback
+        registry.register(
+            callId: callId,
+            callback: callback
+        )
     }
 
     static func cancelCallback(callId: String) {
-        echoCallbacks.removeValue(forKey: callId)
+        registry.cancel(callId: callId)
     }
 
     static func handleEchoResult(callId: String, payload: String) {
-        let callback = echoCallbacks.removeValue(forKey: callId)
-        callback?(payload)
+        registry.handle(callId: callId, payload: payload)
     }
 
     static func shared() async -> WKWebView {
@@ -92,21 +92,15 @@ enum CordovaBridgeManager {
         }
 
         // Wait for the JS bridge to signal readiness via the BridgePlugin.ready() call
-        var attempts = 0
-        let maxAttempts = 50 // 5 seconds
-        while attempts < maxAttempts {
-            if isReady { break }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            attempts += 1
-        }
-
-        if !isReady {
+        if let attempt = await waitForBridgeReady(isReady: { isReady }) {
+            AppLog("Cordova bridge ready after \(attempt * 100)ms", category: "CordovaTransport")
+            isHealthy = true
+        } else {
             AppLog("Cordova bridge did not become ready after 5s", level: .error, category: "CordovaTransport")
+            // Mark init completed so subsequent shared() callers take the fast path
+            // and don't deadlock on an un-resumable continuation.
             isReady = true
             isHealthy = false
-        } else {
-            AppLog("Cordova bridge ready after \(attempts * 100)ms", category: "CordovaTransport")
-            isHealthy = true
         }
 
         for cont in readyContinuations {

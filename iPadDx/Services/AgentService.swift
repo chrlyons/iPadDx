@@ -31,6 +31,19 @@ class AgentService {
         case let .orchestrateTest(targetDeviceName, configJSON, role, bridgeTransport):
             let config = (try? JSONDecoder().decode(TestSuiteConfig.self, from: configJSON)) ?? .default
             if role == "responder" {
+                // The responder must refuse an unhealthy bridge too. Without this check
+                // only the controller was gated, so a half-bridged run could complete and
+                // be labelled with a bridge that carried bytes on one side only.
+                if bridgeTransport != "native", !BridgeRegistry.isBridgeHealthy(bridgeTransport) {
+                    AppLog(
+                        "Refusing responder role — bridge \(bridgeTransport) is not healthy",
+                        level: .error,
+                        category: "Agent"
+                    )
+                    status = .failed
+                    sendStatus("failed", detail: "Bridge \(bridgeTransport) failed to initialize")
+                    return
+                }
                 // Clean up any previous partner connection
                 partnerConnection?.onConnectionLost = nil
                 partnerConnection?.disconnect()
@@ -57,6 +70,11 @@ class AgentService {
 
     func cancelTest() {
         testGeneration += 1 // invalidate any pending async work
+        // Stop the suite itself first. Dropping our reference is not enough —
+        // executeTest holds its own strong reference and would otherwise keep
+        // running every remaining phase against a dead socket and then report
+        // the cancelled run to the conductor as completed.
+        testRunner?.cancel()
         partnerEngine?.stop()
         partnerEngine = nil
         partnerConnection?.onConnectionLost = nil
@@ -220,7 +238,9 @@ class AgentService {
 
         // Wait for peer info to arrive (up to 5 seconds, check every 200ms)
         for _ in 0 ..< 25 {
-            if metrics.peerDeviceName != nil { break }
+            if metrics.peerDeviceName != nil {
+                break
+            }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
         if metrics.peerDeviceName == nil {
@@ -229,6 +249,7 @@ class AgentService {
 
         let runner = TestSuiteRunner(connectionManager: manager, metrics: metrics)
         runner.config = config
+        runner.peerBonjourName = targetName
         engine.testSuiteRunner = runner
         testRunner = runner
 
@@ -248,15 +269,36 @@ class AgentService {
         let report = await runner.runFullSuite()
         progressTask.cancel()
 
-        // Send report to conductor
+        // A newer orchestration may have superseded this one while the suite ran.
+        // Reporting now would attribute this run's result to the new test.
+        guard myGeneration == testGeneration else {
+            manager.onConnectionLost = nil
+            engine.stop()
+            manager.disconnect()
+            return
+        }
+
+        // Send report to conductor. A cancelled run still produces a partial report,
+        // so report it as cancelled rather than completed.
+        let wasCancelled = runner.cancelRequested
         if let report {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             if let data = try? encoder.encode(report) {
                 conductorConnection?.send(.orchestrationReport(reportJSON: data))
             }
-            sendStatus("completed", detail: "Test complete — \(report.results.overallGrade)")
+            if wasCancelled {
+                status = .idle
+                sendStatus("cancelled", detail: "Cancelled — partial report sent")
+            } else {
+                status = .completed
+                sendStatus("completed", detail: "Test complete — \(report.results.overallGrade)")
+            }
+        } else if wasCancelled {
+            status = .idle
+            sendStatus("cancelled", detail: "Test cancelled")
         } else {
+            status = .failed
             sendStatus("failed", detail: "Test suite failed to produce a report")
         }
 
@@ -267,7 +309,6 @@ class AgentService {
         partnerEngine = nil
         partnerConnection = nil
         testRunner = nil
-        status = .idle
         testPartnerName = ""
         testProgress = 0
     }

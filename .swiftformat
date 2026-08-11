@@ -7,5 +7,6 @@
 --wraparguments before-first
 --wrapcollections before-first
 --maxwidth 120
+--modifierorder nonisolated,public,internal,fileprivate,private,final
 --swiftversion 5.9
 --exclude .build,DerivedData,build,.venv

@@ -12,12 +12,25 @@ struct SystemSnapshot {
     let batteryLevel: Float // 0.0 - 1.0
     let batteryState: UIDevice.BatteryState
     let thermalState: ProcessInfo.ThermalState
-    let cpuUsage: Double // 0.0 - 100.0
-    let memoryUsedMB: Double
-    let memoryTotalMB: Double
+    /// 0.0 - 100.0, percent of the whole device's CPU capacity — see
+    /// `SystemMonitor.cpuUsageConvention`.
+    let cpuUsage: Double
+    let memoryUsedMB: Double // this process's physical footprint
+    let memoryTotalMB: Double // the device's total RAM
 }
 
 enum SystemMonitor {
+    /// How every CPU percentage in the app is defined. Show this next to any
+    /// CPU number so the reader knows which convention it follows.
+    static let cpuUsageConvention = "% of device CPU (all cores)"
+
+    /// CPU below this is comfortable, above `cpuCautionThreshold` is a problem.
+    /// Calibrated for the device-wide convention above: a single fully
+    /// saturated thread is only ~1/coreCount of the device, so the interesting
+    /// range is much lower than the classic per-core-sum numbers.
+    static let cpuGoodThreshold: Double = 15
+    static let cpuCautionThreshold: Double = 40
+
     static func enableBatteryMonitoring() {
         UIDevice.current.isBatteryMonitoringEnabled = true
     }
@@ -57,6 +70,26 @@ enum SystemMonitor {
         }
     }
 
+    // MARK: - Thermal Transition Tracking
+
+    final class ThermalTracker {
+        private var lastState: String = "Nominal"
+        private(set) var transitions: [ThermalTransitionRecord] = []
+
+        func reset() {
+            lastState = thermalStateString(ProcessInfo.processInfo.thermalState)
+            transitions.removeAll()
+        }
+
+        func sample() {
+            let current = thermalStateString(ProcessInfo.processInfo.thermalState)
+            if current != lastState {
+                transitions.append(ThermalTransitionRecord(timestamp: Date(), from: lastState, to: current))
+                lastState = current
+            }
+        }
+    }
+
     // MARK: - Wi-Fi Info
 
     static func currentWiFi() async -> WiFiInfo? {
@@ -73,6 +106,17 @@ enum SystemMonitor {
 
     // MARK: - CPU Usage via Mach kernel
 
+    /// This app's CPU usage as a percentage of everything the device can do.
+    ///
+    /// Convention: **percent of total device capacity, 0–100**. Each thread's
+    /// `cpu_usage` is scaled 0…`TH_USAGE_SCALE`, where `TH_USAGE_SCALE` is one
+    /// fully saturated core, so summing live threads gives "busy cores"; that
+    /// is divided by `activeProcessorCount` to normalize. The alternative
+    /// convention (per-core sum, like `top`, where one busy thread reads 100%
+    /// and the max is 100 × cores) is deliberately *not* used: a device-wide
+    /// percentage stays comparable across chips with different core counts,
+    /// which is the entire point of this tool. Every consumer — dashboard
+    /// gauges, test reports, responder metrics — reads this same scale.
     private static func cpuUsage() -> Double {
         var threadList: thread_act_array_t?
         var threadCount = mach_msg_type_number_t()
@@ -80,7 +124,7 @@ enum SystemMonitor {
         let result = task_threads(mach_task_self_, &threadList, &threadCount)
         guard result == KERN_SUCCESS, let threads = threadList else { return 0 }
 
-        var totalUsage: Double = 0
+        var busyCores: Double = 0 // 1.0 == one core fully saturated
         let infoSize = mach_msg_type_number_t(MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<natural_t>
             .size)
 
@@ -95,7 +139,7 @@ enum SystemMonitor {
             }
 
             if kr == KERN_SUCCESS, (info.flags & TH_FLAGS_IDLE) == 0 {
-                totalUsage += Double(info.cpu_usage) / Double(TH_USAGE_SCALE) * 100
+                busyCores += Double(info.cpu_usage) / Double(TH_USAGE_SCALE)
             }
         }
 
@@ -105,13 +149,16 @@ enum SystemMonitor {
             vm_size_t(Int(threadCount) * MemoryLayout<thread_t>.stride)
         )
 
-        // Normalize to 0-100% by dividing by number of active CPU cores
+        // Busy cores -> percent of the whole device
         let coreCount = Double(ProcessInfo.processInfo.activeProcessorCount)
-        return min(totalUsage / max(coreCount, 1), 100)
+        return min(busyCores / max(coreCount, 1) * 100, 100)
     }
 
     // MARK: - Memory Usage via Mach kernel
 
+    /// This process's physical footprint in MB. Note this is *not* comparable
+    /// to `memoryTotalMB` (the device's whole RAM) as a ratio — they are
+    /// different quantities and are labelled separately in the UI.
     private static func memoryUsedMB() -> Double {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)

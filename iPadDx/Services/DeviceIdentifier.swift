@@ -41,14 +41,24 @@ enum DeviceIdentifier {
         #endif
     }
 
-    // MARK: - Chip Family (runtime detection via sysctl)
+    // MARK: - Chip Family
 
+    /// The hardware model identifier (`iPad14,3`) is the authoritative source:
+    /// it names the exact product, and `iPadCatalog` maps it to the exact chip.
+    ///
+    /// `hw.cpufamily` names the *CPU core family*, not the chip — A14 and M1
+    /// share one value (Firestorm/Icestorm) and A15 and M2 share another
+    /// (Avalanche/Blizzard), so sysctl physically cannot tell those apart.
+    /// It is therefore only consulted for hardware the catalog doesn't know
+    /// yet, and for the ambiguous families it reports the shared label rather
+    /// than guessing one of the two chips.
     static var chipFamily: String {
-        // Try sysctl hw.cpufamily first — works without any lookup table
+        if let entry = iPadCatalog.catalog[hardwareIdentifier] {
+            return entry.chip
+        }
         if let chip = chipFromSysctl() {
             return chip
         }
-        // Fallback to catalog lookup
         return iPadCatalog.chipFamily(for: modelName, modelNumber: hardwareIdentifier)
     }
 
@@ -70,7 +80,21 @@ enum DeviceIdentifier {
         )
     }
 
-    // MARK: - sysctl chip detection
+    // MARK: - sysctl chip detection (fallback only)
+
+    /// `CPUFAMILY_ARM_*` constants from `<mach/machine.h>`, keyed by the value
+    /// `hw.cpufamily` reports. Two of these core families ship in more than one
+    /// chip, so their label names both — sysctl has no way to narrow it down.
+    private static let cpuFamilyNames: [UInt32: String] = [
+        0x07D3_4B9F: "A12", // Vortex/Tempest
+        0x4625_04D2: "A13", // Lightning/Thunder
+        0x1B58_8BB3: "A14/M1", // Firestorm/Icestorm — A14 and M1 are identical here
+        0xDA33_D83D: "A15/M2", // Avalanche/Blizzard — A15 and M2 are identical here
+        0x8765_EDEA: "A16", // Everest/Sawtooth
+        0x2876_F5B5: "A17 Pro", // Coll
+        0xFA33_415E: "M3", // Ibiza
+        0x17D5_B93A: "M4", // Palma
+    ]
 
     private static func chipFromSysctl() -> String? {
         var size: size_t = 0
@@ -81,42 +105,8 @@ enum DeviceIdentifier {
         var cpuSize = MemoryLayout<UInt32>.size
         sysctlbyname("hw.cpufamily", &cpuFamily, &cpuSize, nil, 0)
 
-        // Also get the CPU subtype for more detail
-        var cpuSubtype: UInt32 = 0
-        var subtypeSize = MemoryLayout<UInt32>.size
-        sysctlbyname("hw.cpusubtype", &cpuSubtype, &subtypeSize, nil, 0)
-
-        // Map known cpufamily values to chip names
-        // These are CPUFAMILY_ARM_* constants from <mach/machine.h>
-        let familyMap: [UInt32: String] = [
-            // A12
-            0x07D3_4335: "A12",
-            // A13
-            0x462F_04AA: "A13",
-            // A14
-            0x1B58_8161: "A14",
-            // A15
-            0xDA33_D83D: "A15",
-            // A16
-            0xFA33_D415: "A16",
-            // A17 Pro
-            0x7201_5BDA: "A17 Pro",
-            // M1
-            0x1CF2_EF2D: "M1",
-            // M2
-            0x573B_559F: "M2",
-            // M3
-            0x5F4D_EA93: "M3",
-            // M4
-            0x72C4_868A: "M4",
-        ]
-
-        if let chip = familyMap[cpuFamily] {
-            return chip
-        }
-
-        // Unrecognized CPU family — return nil so the catalog lookup
-        // (based on hardware model number) gets used as fallback
-        return nil
+        // An unrecognized family yields nil, so the caller falls back to the
+        // model-name catalog lookup rather than inventing a chip name.
+        return cpuFamilyNames[cpuFamily]
     }
 }

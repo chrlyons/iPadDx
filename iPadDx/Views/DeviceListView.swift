@@ -1,5 +1,18 @@
 import SwiftUI
 
+private extension PeerDevice {
+    /// Stable list identity for a discovered peer.
+    ///
+    /// `PeerDevice.id` is a fresh UUID on every browse callback, so it cannot
+    /// identify a row across updates. The Bonjour service name is the value
+    /// that actually stays put for the lifetime of the advertised service;
+    /// the display name is the fallback for peers seen before their TXT
+    /// record resolved.
+    var peerIdentity: String {
+        bonjourName ?? name
+    }
+}
+
 struct DeviceListView: View {
     @Environment(BonjourService.self) private var service
     @Binding var detailSelection: DetailView
@@ -101,7 +114,11 @@ struct DeviceListView: View {
                                 .foregroundStyle(.secondary)
                         }
                     } else {
-                        ForEach(service.discoveredPeers) { peer in
+                        // Keyed on the Bonjour service name, not PeerDevice.id:
+                        // browse callbacks rebuild PeerDevice with a fresh UUID
+                        // every time, so the id churns while the device is the
+                        // same one and the rows would animate on every update.
+                        ForEach(service.discoveredPeers, id: \.peerIdentity) { peer in
                             Button {
                                 service.connectToPeer(peer)
                             } label: {
@@ -191,26 +208,28 @@ struct DeviceListView: View {
                 Text("Reports")
             }
 
-            #if DEBUG
-                Section {
-                    Button {
-                        detailSelection = .console
-                    } label: {
-                        HStack {
-                            Image(systemName: "terminal")
-                                .foregroundStyle(.green)
-                            Text("Console")
-                            Spacer()
-                            if detailSelection == .console {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.blue)
-                            }
+            // Available in Release too: this is a field-diagnostics tool, and the
+            // console is where latency anomalies, Bonjour discovery flaps and
+            // disconnect reasons are recorded. Hiding it outside DEBUG would put the
+            // evidence out of reach on exactly the devices being investigated.
+            Section {
+                Button {
+                    detailSelection = .console
+                } label: {
+                    HStack {
+                        Image(systemName: "terminal")
+                            .foregroundStyle(.green)
+                        Text("Console")
+                        Spacer()
+                        if detailSelection == .console {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.blue)
                         }
                     }
-                } header: {
-                    Text("Developer")
                 }
-            #endif
+            } header: {
+                Text("Diagnostics")
+            }
 
             // Mode section
             Section {
@@ -278,7 +297,7 @@ struct DeviceListView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(available) { peer in
+                        ForEach(available, id: \.peerIdentity) { peer in
                             Button {
                                 service.connectAgentFromConductor(peer)
                             } label: {

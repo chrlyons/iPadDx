@@ -11,10 +11,11 @@ enum ConnectionSecurity {
         let secOptions = tlsOptions.securityProtocolOptions
 
         // Configure PSK ciphersuite
-        sec_protocol_options_append_tls_ciphersuite(
-            secOptions,
-            tls_ciphersuite_t(rawValue: UInt16(TLS_PSK_WITH_AES_128_GCM_SHA256))!
-        )
+        guard let ciphersuite = tls_ciphersuite_t(rawValue: UInt16(TLS_PSK_WITH_AES_128_GCM_SHA256)) else {
+            AppLog("PSK ciphersuite unavailable — falling back to default TLS", level: .error, category: "Security")
+            return NWParameters(tls: tlsOptions)
+        }
+        sec_protocol_options_append_tls_ciphersuite(secOptions, ciphersuite)
 
         // Add the pre-shared key and identity
         let pskBytes = Array("iPadDx-2026-diagnostic-psk".utf8)
@@ -59,6 +60,10 @@ class ConnectionManager {
     }
 
     var onConnectionLost: (() -> Void)?
+    /// Reports why the connection ended, so the owner can record it in the
+    /// disconnect history. Fires once per lost connection, before `onConnectionLost`.
+    var onDisconnect: ((DisconnectReason, String) -> Void)?
+    var lastDisconnectReason: DisconnectReason = .unknown
     private var receiveHandler: ((Data) -> Void)?
     private let queue = DispatchQueue(label: "com.ipadconnection.connection")
     private var readyContinuation: CheckedContinuation<Bool, Never>?
@@ -100,14 +105,17 @@ class ConnectionManager {
         transport.accept(conn, queue: queue)
     }
 
-    func send(_ message: DiagnosticMessage) {
+    /// Sends a message. Returns false if it could not be queued (not connected, or encode failed).
+    /// `completion` is invoked only when the message was actually handed to the transport.
+    @discardableResult
+    func send(_ message: DiagnosticMessage, completion: ((NWError?) -> Void)? = nil) -> Bool {
         guard isConnected else {
             AppLog(
                 "send DROPPED (connected=\(isConnected))",
                 level: .warning,
                 category: "CM:\(label)"
             )
-            return
+            return false
         }
         do {
             let data = try message.encode()
@@ -116,18 +124,121 @@ class ConnectionManager {
                 if let error {
                     AppLog("Send error: \(error)", level: .error, category: "CM")
                 }
+                completion?(error)
             }
+            return true
         } catch {
             AppLog("Encode error: \(error)", level: .error, category: "CM")
+            return false
+        }
+    }
+
+    /// Resumes a continuation exactly once, from any thread.
+    ///
+    /// The transport completion and the watchdog run on different queues and either can
+    /// win, so the guard has to be thread-safe: resuming twice traps, resuming never hangs.
+    private final class SingleResume: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Bool, Never>?
+
+        init(_ continuation: CheckedContinuation<Bool, Never>) {
+            self.continuation = continuation
+        }
+
+        /// Returns true if this call actually consumed the continuation.
+        @discardableResult
+        func resume(_ value: Bool) -> Bool {
+            lock.lock()
+            let pending = continuation
+            continuation = nil
+            lock.unlock()
+            pending?.resume(returning: value)
+            return pending != nil
+        }
+    }
+
+    /// Sends a message and waits until the transport has accepted it.
+    ///
+    /// Used by the throughput phases so that a large transfer applies real backpressure
+    /// instead of queueing every chunk in memory at once. Returns false if the message
+    /// could not be queued, or if the transport never reported completion within
+    /// `timeout` — a bridge whose JS/Dart callback is lost, or a connection cancelled
+    /// mid-send, must not strand the whole test suite.
+    func sendAwaitingCompletion(_ message: DiagnosticMessage, timeout: TimeInterval = 20) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let once = SingleResume(continuation)
+            let queued = send(message) { error in
+                once.resume(error == nil)
+            }
+            if !queued {
+                once.resume(false)
+                return
+            }
+            // Only report a timeout if it actually fired first — logging unconditionally
+            // would emit a spurious warning for every successful send, flooding the log
+            // and adding main-actor work in the middle of a measurement.
+            queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+                if once.resume(false) {
+                    AppLog(
+                        "send timed out after \(Int(timeout))s — transport never reported completion",
+                        level: .warning,
+                        category: "CM:\(self?.label ?? "?")"
+                    )
+                }
+            }
         }
     }
 
     func disconnect() {
         AppLog("disconnect called", category: "CM:\(label)")
+        lastDisconnectReason = .userInitiated
         transport.disconnect()
         Task { @MainActor in
             isConnected = false
         }
+    }
+
+    /// Classifies a transport error into a disconnect reason.
+    ///
+    /// Pattern-matches the real `NWError` cases rather than searching the error's
+    /// description for substrings — the old approach matched "61" anywhere in the
+    /// text and mistook unrelated errors for connection-refused.
+    static func classifyError(_ error: Error) -> DisconnectReason {
+        guard let nwError = error as? NWError else { return .networkError }
+        switch nwError {
+        case let .posix(code):
+            switch code {
+            case .ECONNREFUSED:
+                return .connectionRefused
+            case .ETIMEDOUT:
+                return .keepaliveTimeout
+            case .ENETDOWN, .ENETUNREACH, .EHOSTUNREACH, .ENETRESET:
+                return .pathChanged
+            case .ECONNRESET, .ECONNABORTED, .EPIPE, .ENOTCONN:
+                return .remoteDisconnect
+            default:
+                return .networkError
+            }
+        case .tls:
+            return .tlsError
+        case .dns:
+            return .networkError
+        @unknown default:
+            return .networkError
+        }
+    }
+
+    /// Human-readable detail for the disconnect history.
+    static func describeError(_ error: Error) -> String {
+        if let nwError = error as? NWError {
+            switch nwError {
+            case let .posix(code): return "POSIX \(code)"
+            case let .tls(status): return "TLS status \(status)"
+            case let .dns(type): return "DNS error \(type)"
+            @unknown default: return String(describing: nwError)
+            }
+        }
+        return String(describing: error)
     }
 
     /// Wait for the connection to reach .ready state, or timeout.
@@ -189,12 +300,17 @@ class ConnectionManager {
                     }
                 case let .failed(error):
                     AppLog("state: FAILED — \(error)", level: .error, category: "CM:\(self.label)")
+                    self.lastDisconnectReason = ConnectionManager.classifyError(error)
                     if let continuation = self.readyContinuation {
                         self.readyContinuation = nil
                         continuation.resume(returning: false)
                     }
                     if self.isConnected {
                         self.isConnected = false
+                        self.onDisconnect?(
+                            self.lastDisconnectReason,
+                            ConnectionManager.describeError(error)
+                        )
                         self.onConnectionLost?()
                     }
                 case .disconnected:
@@ -205,6 +321,11 @@ class ConnectionManager {
                     }
                     if self.isConnected {
                         self.isConnected = false
+                        // A cancel we initiated is already tagged .userInitiated by disconnect().
+                        let reason = self.lastDisconnectReason == .userInitiated
+                            ? DisconnectReason.userInitiated
+                            : .remoteDisconnect
+                        self.onDisconnect?(reason, "transport reported disconnected")
                         self.onConnectionLost?()
                     }
                 }
@@ -227,6 +348,8 @@ class ConnectionManager {
                     guard let self else { return }
                     if self.isConnected {
                         self.isConnected = false
+                        self.lastDisconnectReason = .remoteDisconnect
+                        self.onDisconnect?(.remoteDisconnect, "peer closed the stream (EOF)")
                         self.onConnectionLost?()
                     }
                 }
@@ -237,6 +360,11 @@ class ConnectionManager {
                     guard let self else { return }
                     if self.isConnected {
                         self.isConnected = false
+                        self.lastDisconnectReason = ConnectionManager.classifyError(error)
+                        self.onDisconnect?(
+                            self.lastDisconnectReason,
+                            ConnectionManager.describeError(error)
+                        )
                         self.onConnectionLost?()
                     }
                 }

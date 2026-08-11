@@ -23,7 +23,11 @@ class DiagnosticEngine {
     private var incomingThroughputStartTime: Date?
     private var incomingThroughputTestID: UUID?
     private var incomingThroughputExpectedBytes: Int = 0
-    private let maxLatencyHistory = 120
+    private var incomingThroughputBytesReceived: Int = 0
+    /// Fails an inbound transfer that stalls, so a dropped sender can't leave the
+    /// receiver waiting forever for bytes that will never arrive.
+    private var incomingThroughputTimeout: Task<Void, Never>?
+    private let maxLatencyHistory = DiagnosticMetrics.defaultLatencyHistory
     private var lastPathUpdate: TimeInterval = 0
     private var systemTimer: Timer?
     // Responder-side metric collection during remote test
@@ -32,6 +36,7 @@ class DiagnosticEngine {
     private var responderPeakMemoryMB: Double = 0
     private var responderWorstThermal: String = "Nominal"
     private var responderBatteryStart: Float = -1
+    private var metricsBroadcastTask: Task<Void, Never>?
 
     init(connectionManager: ConnectionManager, metrics: DiagnosticMetrics) {
         self.connectionManager = connectionManager
@@ -43,6 +48,11 @@ class DiagnosticEngine {
         metrics.connectionStartTime = Date()
         metrics.batteryAtConnectionStart = SystemMonitor.batteryLevel()
         metrics.logEvent("Connected")
+        // Record why connections end — this is what populates the disconnect
+        // history and root-cause display on the dashboard.
+        connectionManager.onDisconnect = { [weak self] reason, detail in
+            self?.metrics.logDisconnect(reason: reason, detail: detail)
+        }
         sendPeerInfo()
         startPingLoop()
         startSystemMonitor()
@@ -50,14 +60,23 @@ class DiagnosticEngine {
         updateSystemMetrics()
     }
 
+    /// Tears the engine down. This is also called for ordinary mode transitions
+    /// (entering agent mode, for example), so it must NOT count as a disconnect —
+    /// real drops are recorded through `ConnectionManager.onDisconnect`, which is
+    /// the sole writer of the disconnect history and count.
     func stop() {
         pingTimer?.invalidate()
         pingTimer = nil
         systemTimer?.invalidate()
         systemTimer = nil
+        metricsBroadcastTask?.cancel()
+        metricsBroadcastTask = nil
+        incomingThroughputTimeout?.cancel()
+        incomingThroughputTimeout = nil
+        incomingThroughputTestID = nil
+        incomingThroughputStartTime = nil
         pendingPings.removeAll()
-        metrics.logEvent("Disconnected")
-        metrics.disconnectionCount += 1
+        metrics.logEvent("Engine stopped")
     }
 
     func handleMessage(_ data: Data) {
@@ -88,29 +107,36 @@ class DiagnosticEngine {
             onPeerNameUpdated?(deviceName)
 
         case let .throughputStart(testID, byteCount):
-            // Remote is starting a throughput test — record the start time
-            incomingThroughputStartTime = Date()
-            incomingThroughputTestID = testID
-            incomingThroughputExpectedBytes = byteCount
+            // Remote is starting a throughput test — start the clock and the byte counter.
+            beginIncomingThroughput(testID: testID, expectedBytes: byteCount)
 
-        case let .throughputAck(testID, _, duration):
-            if testID == incomingThroughputTestID, let startTime = incomingThroughputStartTime {
-                // Remote finished sending — measure how long it took to receive
-                let elapsed = Date().timeIntervalSince(startTime)
-                let bytesPerSec = Double(incomingThroughputExpectedBytes) / elapsed
-                metrics.throughputBytesPerSec = bytesPerSec
-                incomingThroughputTestID = nil
-                incomingThroughputStartTime = nil
-            } else if testID == throughputTestID, duration > 0 {
-                // This is an ack for a test we initiated (shouldn't happen in new flow)
-                let bytesPerSec = Double(throughputBytesSent) / duration
-                metrics.throughputBytesPerSec = bytesPerSec
+        case let .throughputData(testID, payload):
+            // Count the bytes that actually arrived. When the full transfer has landed,
+            // ack back with the measurement — the *receiver* is the authority on throughput.
+            guard testID == incomingThroughputTestID else { break }
+            incomingThroughputBytesReceived += payload.count
+            if incomingThroughputBytesReceived >= incomingThroughputExpectedBytes {
+                finishIncomingThroughput()
+            }
+
+        case let .throughputAck(testID, bytesReceived, duration):
+            // The peer measured our transfer and sent the result back.
+            //
+            // There are two independent senders of throughput transfers: this engine's
+            // own dashboard test, and TestSuiteRunner's phase (which mints its own id).
+            // Each filters on its OWN id, so the ack must be offered to both — gating
+            // the forward on the engine's id silently starved the suite phase.
+            guard duration > 0, bytesReceived > 0 else { break }
+            if testID == throughputTestID {
+                metrics.throughputBytesPerSec = Double(bytesReceived) / duration
                 metrics.throughputTestInProgress = false
                 throughputTestID = nil
             }
-
-        case .throughputData:
-            break
+            testSuiteRunner?.handleThroughputAck(
+                testID: testID,
+                bytesReceived: bytesReceived,
+                duration: duration
+            )
 
         case let .testPing(id, sequence, timestamp):
             connectionManager.send(.testPong(id: id, sequence: sequence, originalTimestamp: timestamp))
@@ -126,12 +152,18 @@ class DiagnosticEngine {
                 responderPeakMemoryMB = 0
                 responderWorstThermal = "Nominal"
                 responderBatteryStart = SystemMonitor.batteryLevel()
+                startMetricsBroadcast()
             } else if !running, responderTestActive {
                 // Remote test ended — send our metrics back
                 responderTestActive = false
+                metricsBroadcastTask?.cancel()
+                metricsBroadcastTask = nil
                 sendResponderMetrics()
             }
             onTestSuiteStatus?(message)
+
+        case let .liveMetrics(cpu, memoryMB, thermalState, _):
+            metrics.appendRemoteMetrics(cpu: cpu, memoryMB: memoryMB, thermalState: thermalState)
 
         case let .responderMetrics(peakCpu, avgCpu, peakMemoryMB, thermalState, batteryDrain):
             testSuiteRunner?.handleResponderMetrics(
@@ -161,38 +193,120 @@ class DiagnosticEngine {
         }
     }
 
-    func runThroughputTest(byteCount: Int = 1_000_000) {
+    /// Runs a real throughput transfer to the peer.
+    ///
+    /// Every chunk carries actual payload bytes; the peer counts what arrives and
+    /// replies with `throughputAck`, which is what sets `metrics.throughputBytesPerSec`.
+    /// Nothing here estimates or extrapolates the rate.
+    func runThroughputTest(byteCount: Int = 10_000_000) {
         guard !metrics.throughputTestInProgress else { return }
         metrics.throughputTestInProgress = true
 
         let testID = UUID()
         throughputTestID = testID
-        throughputBytesSent = byteCount
+        throughputBytesSent = 0
         throughputTestStart = Date()
 
-        // Send throughputStart which tells the other side to start timing,
-        // then send throughputData messages (properly framed), then the
-        // receiver acks with the elapsed time.
         connectionManager.send(.throughputStart(testID: testID, byteCount: byteCount))
 
-        // Send data as framed throughputData messages
-        let chunkSize = 32768
-        var remaining = byteCount
+        Task { @MainActor in
+            let sent = await Self.sendThroughputPayload(
+                over: connectionManager,
+                testID: testID,
+                byteCount: byteCount
+            )
+            throughputBytesSent = sent
 
-        Task {
-            while remaining > 0 {
-                let sendSize = min(chunkSize, remaining)
-                connectionManager.send(.throughputData(testID: testID))
-                remaining -= sendSize
-                try? await Task.sleep(nanoseconds: 500_000) // 0.5ms yield
+            // The measurement arrives via .throughputAck. If the peer never acks
+            // (dropped connection, old build), give up rather than reporting a number
+            // we did not measure.
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            if throughputTestID == testID {
+                AppLog(
+                    "Throughput test \(testID) got no ack from peer — no result recorded",
+                    level: .warning,
+                    category: "Engine"
+                )
+                // Clear the previous run's figure rather than leaving it on screen as
+                // if it were this run's result.
+                metrics.throughputBytesPerSec = 0
+                metrics.throughputTestInProgress = false
+                throughputTestID = nil
             }
-            // Signal completion
-            let elapsed = Date().timeIntervalSince(self.throughputTestStart ?? Date())
-            connectionManager.send(.throughputAck(testID: testID, bytesReceived: byteCount, duration: elapsed))
-            metrics.throughputBytesPerSec = Double(byteCount) / max(elapsed, 0.001)
-            metrics.throughputTestInProgress = false
-            throughputTestID = nil
         }
+    }
+
+    /// Streams `byteCount` real bytes as framed `throughputData` messages, awaiting
+    /// each send's transport completion so the transfer applies genuine backpressure.
+    /// Returns the number of payload bytes actually handed to the transport.
+    static func sendThroughputPayload(
+        over connectionManager: ConnectionManager,
+        testID: UUID,
+        byteCount: Int,
+        isCancelled: () -> Bool = { false },
+        onProgress: (Double) -> Void = { _ in }
+    ) async -> Int {
+        var remaining = byteCount
+        var sent = 0
+        while remaining > 0 {
+            if isCancelled() {
+                break
+            }
+            let size = min(ThroughputPayload.chunkSize, remaining)
+            let queued = await connectionManager.sendAwaitingCompletion(
+                .throughputData(testID: testID, payload: ThroughputPayload.chunk(ofSize: size))
+            )
+            if !queued {
+                break
+            }
+            remaining -= size
+            sent += size
+            onProgress(Double(sent) / Double(byteCount))
+        }
+        return sent
+    }
+
+    // MARK: - Inbound throughput measurement
+
+    private func beginIncomingThroughput(testID: UUID, expectedBytes: Int) {
+        incomingThroughputTimeout?.cancel()
+        incomingThroughputTestID = testID
+        incomingThroughputExpectedBytes = expectedBytes
+        incomingThroughputBytesReceived = 0
+        incomingThroughputStartTime = Date()
+
+        incomingThroughputTimeout = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard let self, incomingThroughputTestID == testID else { return }
+            AppLog(
+                "Inbound throughput \(testID) stalled at \(incomingThroughputBytesReceived)/\(expectedBytes) bytes",
+                level: .warning,
+                category: "Engine"
+            )
+            // Ack what genuinely arrived so the sender reports a real (degraded) rate
+            // rather than hanging.
+            finishIncomingThroughput()
+        }
+    }
+
+    private func finishIncomingThroughput() {
+        guard let testID = incomingThroughputTestID,
+              let startTime = incomingThroughputStartTime else { return }
+        let elapsed = Date().timeIntervalSince(startTime)
+        let received = incomingThroughputBytesReceived
+
+        incomingThroughputTimeout?.cancel()
+        incomingThroughputTimeout = nil
+        incomingThroughputTestID = nil
+        incomingThroughputStartTime = nil
+        incomingThroughputBytesReceived = 0
+
+        guard received > 0, elapsed > 0 else { return }
+        connectionManager.send(.throughputAck(
+            testID: testID,
+            bytesReceived: received,
+            duration: elapsed
+        ))
     }
 
     // MARK: - Private
@@ -245,7 +359,14 @@ class DiagnosticEngine {
         metrics.isExpensive = path.isExpensive
         metrics.isConstrained = path.isConstrained
         if let iface = path.availableInterfaces.first {
+            // A change of interface mid-test means the link moved underneath the
+            // measurement — worth recording, because it invalidates comparisons.
+            if let previous = metrics.interfaceName, previous != iface.name {
+                metrics.pathChangeCount += 1
+                metrics.logEvent("Link changed: \(previous) → \(iface.name)")
+            }
             metrics.interfaceType = iface.type
+            metrics.interfaceName = iface.name
         }
     }
 
@@ -282,6 +403,21 @@ class DiagnosticEngine {
                currentIdx > worstIdx
             {
                 responderWorstThermal = thermal
+            }
+        }
+    }
+
+    private func startMetricsBroadcast() {
+        metricsBroadcastTask?.cancel()
+        metricsBroadcastTask = Task {
+            while !Task.isCancelled {
+                let snap = SystemMonitor.snapshot()
+                connectionManager.send(.liveMetrics(
+                    cpu: snap.cpuUsage, memoryMB: snap.memoryUsedMB,
+                    thermalState: SystemMonitor.thermalStateString(snap.thermalState),
+                    timestamp: Date().timeIntervalSince1970
+                ))
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
     }
