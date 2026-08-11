@@ -66,6 +66,7 @@ enum ReportExporter {
         Date: \(ISO8601DateFormatter().string(from: report.date))
         Grade: \(r.overallGrade)
         Bridge: \(report.bridgeTransport ?? "native")
+        Link: \(report.results.linkConditions?.summary ?? "Unknown")
         Latency: avg \(f(r.latencyBurst.avg))ms, p95 \(f(r.latencyBurst.p95))ms
         Throughput: \(r.sustainedThroughput.formattedSpeed)
         Jitter: \(f(r.jitterMeasurement.averageJitter))ms
@@ -96,6 +97,7 @@ enum ReportExporter {
             "Date", "Local Device", "Remote Device", "Local Chip", "Remote Chip", "Bridge", "Grade",
             "Latency Avg (ms)", "Latency P95 (ms)", "Throughput (B/s)", "Jitter (ms)",
             "Packet Loss (%)", "Duration (s)",
+            "Link", "Interface", "Direct P2P", "Link Changes", "Disconnects", "Discovery Flaps", "SSID",
         ]
         var rows: [String] = [headers.joined(separator: ",")]
 
@@ -117,6 +119,13 @@ enum ReportExporter {
                 f(r.results.jitterMeasurement.averageJitter),
                 f(r.results.packetLossStress.lostPercent),
                 f(r.durationSeconds),
+                csvEscape(r.results.linkConditions?.summary ?? "Unknown"),
+                csvEscape(r.results.linkConditions?.interfaceName ?? ""),
+                (r.results.linkConditions?.usedPeerToPeer ?? false) ? "yes" : "no",
+                String(r.results.linkConditions?.pathChanges ?? 0),
+                String(r.results.linkConditions?.disconnects.count ?? 0),
+                String(r.results.linkConditions?.discoveryFlaps ?? 0),
+                csvEscape(r.results.linkConditions?.ssid ?? ""),
             ]
             rows.append(row.joined(separator: ","))
         }

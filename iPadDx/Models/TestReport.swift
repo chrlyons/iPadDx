@@ -199,6 +199,8 @@ struct TestSuiteResults: Codable {
     /// Phase 6 results. Previously computed and then discarded because there was
     /// nowhere to put them.
     let heavyLoad: HeavyLoadResult?
+    /// The network path the test actually ran over.
+    let linkConditions: LinkConditions?
 
     init(
         latencyBurst: LatencyBurstResult,
@@ -210,7 +212,8 @@ struct TestSuiteResults: Codable {
         overallGrade: String,
         responderMetrics: ResponderMetricsResult? = nil,
         dnsResolution: DNSResolutionResult? = nil,
-        heavyLoad: HeavyLoadResult? = nil
+        heavyLoad: HeavyLoadResult? = nil,
+        linkConditions: LinkConditions? = nil
     ) {
         self.latencyBurst = latencyBurst
         self.sustainedThroughput = sustainedThroughput
@@ -222,6 +225,7 @@ struct TestSuiteResults: Codable {
         self.responderMetrics = responderMetrics
         self.dnsResolution = dnsResolution
         self.heavyLoad = heavyLoad
+        self.linkConditions = linkConditions
     }
 
     /// Support decoding reports written before responderMetrics, dnsResolution or heavyLoad existed
@@ -237,6 +241,7 @@ struct TestSuiteResults: Codable {
         responderMetrics = try container.decodeIfPresent(ResponderMetricsResult.self, forKey: .responderMetrics)
         dnsResolution = try container.decodeIfPresent(DNSResolutionResult.self, forKey: .dnsResolution)
         heavyLoad = try container.decodeIfPresent(HeavyLoadResult.self, forKey: .heavyLoad)
+        linkConditions = try container.decodeIfPresent(LinkConditions.self, forKey: .linkConditions)
     }
 }
 
@@ -272,6 +277,51 @@ struct ThermalTransitionRecord: Codable, Identifiable {
     let timestamp: Date
     let from: String
     let to: String
+}
+
+/// What the network path actually looked like while the test ran.
+///
+/// The distinction that matters for peer-to-peer work is AWDL versus infrastructure
+/// Wi-Fi. `NWInterface.type` reports `.wifi` for BOTH, so the only reliable signal is
+/// the interface NAME: Apple's peer-to-peer links appear as `awdl0`. Without this a
+/// stored report cannot say whether it measured a direct device-to-device link or a
+/// round trip through an access point.
+struct LinkConditions: Codable {
+    /// e.g. "en0", "awdl0"
+    let interfaceName: String?
+    /// e.g. "Wi-Fi", "Ethernet"
+    let interfaceType: String
+    /// True when the path ran over an Apple peer-to-peer link (AWDL).
+    let usedPeerToPeer: Bool
+    let pathStatus: String
+    let isExpensive: Bool
+    let isConstrained: Bool
+    let ssid: String?
+    let bssid: String?
+    /// How many times the interface set changed during the test. Anything above 0
+    /// means the link moved underneath the measurement.
+    let pathChanges: Int
+    /// Connection drops recorded during the test window.
+    let disconnects: [LinkDisconnect]
+    /// Times the peer vanished from Bonjour browse results and returned during the run.
+    /// Non-zero points at discovery/radio instability rather than a throughput problem.
+    let discoveryFlaps: Int?
+
+    /// Neither form involves the internet — this distinguishes a DIRECT radio link
+    /// between the two devices from one that still hops through a local access point.
+    var summary: String {
+        let link = usedPeerToPeer
+            ? "Direct device-to-device (AWDL)"
+            : "Local network via access point"
+        let iface = interfaceName.map { " · \($0)" } ?? ""
+        return "\(link)\(iface)"
+    }
+}
+
+struct LinkDisconnect: Codable {
+    let timestamp: Date
+    let reason: String
+    let detail: String
 }
 
 struct DNSResolutionResult: Codable {

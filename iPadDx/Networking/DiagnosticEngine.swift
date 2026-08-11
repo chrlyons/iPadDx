@@ -359,7 +359,14 @@ class DiagnosticEngine {
         metrics.isExpensive = path.isExpensive
         metrics.isConstrained = path.isConstrained
         if let iface = path.availableInterfaces.first {
+            // A change of interface mid-test means the link moved underneath the
+            // measurement — worth recording, because it invalidates comparisons.
+            if let previous = metrics.interfaceName, previous != iface.name {
+                metrics.pathChangeCount += 1
+                metrics.logEvent("Link changed: \(previous) → \(iface.name)")
+            }
             metrics.interfaceType = iface.type
+            metrics.interfaceName = iface.name
         }
     }
 

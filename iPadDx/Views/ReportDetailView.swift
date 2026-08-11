@@ -227,6 +227,22 @@ struct ReportDetailView: View {
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(.orange.opacity(0.12), in: Capsule())
                 }
+                if let link = report.results.linkConditions {
+                    Text(link.summary)
+                        .font(.caption2).fontWeight(.medium)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(
+                            (link.usedPeerToPeer ? Color.teal : Color.gray).opacity(0.15),
+                            in: Capsule()
+                        )
+                    if link.pathChanges > 0 || !link.disconnects.isEmpty {
+                        Text(
+                            "\(link.pathChanges) link change(s), \(link.disconnects.count) drop(s)"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                    }
+                }
             }
             Spacer()
             VStack(alignment: .trailing) {

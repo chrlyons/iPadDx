@@ -47,12 +47,48 @@ struct DisconnectEvent: Identifiable {
 
 enum AnomalySeverity: String { case warning, critical }
 
+/// A latency spike, captured together with what the device was doing at the time.
+///
+/// The count alone is not actionable — the useful question is always "what else was
+/// happening?". A spike during a thermal event, a discovery flap or a specific test
+/// phase points somewhere very different from an isolated one on an idle link.
 struct LatencyAnomaly: Identifiable {
     let id: Int
     let value: Double
     let mean: Double
     let threshold: Double
     let severity: AnomalySeverity
+
+    // Context captured at the moment of the spike
+    let timestamp: Date
+    let cpuUsage: Double
+    let thermalState: String
+    /// Interface in use, e.g. "awdl0" for a direct device-to-device link.
+    let interfaceName: String?
+    /// Test phase running at the time, when a suite is in progress.
+    let phase: String?
+
+    /// How far above the mean the sample was, in standard deviations.
+    var sigma: Double {
+        let stddev = (threshold - mean) / 3
+        guard stddev > 0 else { return 0 }
+        return (value - mean) / stddev
+    }
+
+    var contextSummary: String {
+        var parts: [String] = []
+        if let phase {
+            parts.append(phase)
+        }
+        if let interfaceName {
+            parts.append(interfaceName)
+        }
+        parts.append(String(format: "CPU %.0f%%", cpuUsage))
+        if thermalState != "Nominal" {
+            parts.append("thermal \(thermalState)")
+        }
+        return parts.joined(separator: " · ")
+    }
 }
 
 // MARK: - Remote Metrics (Feature #5)
@@ -90,6 +126,8 @@ class DiagnosticMetrics {
     var connectionLog: [ConnectionEvent] = []
     var disconnectHistory: [DisconnectEvent] = []
     var anomalies: [LatencyAnomaly] = []
+    /// Test phase currently running, so anomalies can be attributed to a phase.
+    var currentTestPhase: String?
     var remoteMetricsHistory: [RemoteMetricsSample] = []
 
     // Packet loss
@@ -104,6 +142,18 @@ class DiagnosticMetrics {
     // Network path
     var pathStatus: NWPath.Status = .unsatisfied
     var interfaceType: NWInterface.InterfaceType?
+    /// The BSD name of the active interface ("en0", "awdl0"). This is the only
+    /// reliable way to tell an Apple peer-to-peer link from infrastructure Wi-Fi —
+    /// NWInterface.type reports .wifi for both.
+    var interfaceName: String?
+    /// Number of times the active interface set changed since the connection opened.
+    var pathChangeCount: Int = 0
+    /// Times this peer vanished from Bonjour browse results and came back.
+    ///
+    /// The primary signal for an unstable discovery/AWDL radio: a device whose
+    /// peer-to-peer radio is contended (AWDL time-slices with Bluetooth) drops out of
+    /// mDNS browse results and returns, even while a TCP connection appears healthy.
+    var discoveryFlapCount: Int = 0
     var isExpensive: Bool = false
     var isConstrained: Bool = false
 
@@ -173,10 +223,31 @@ class DiagnosticMetrics {
         let stddev = (recent.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(recent.count)).squareRoot()
         guard stddev > 0.5 else { return }
         if sample > mean + 3 * stddev {
-            anomalies.append(LatencyAnomaly(
-                id: sampleCounter, value: sample, mean: mean, threshold: mean + 3 * stddev,
-                severity: sample > mean + 5 * stddev ? .critical : .warning
-            ))
+            let severity: AnomalySeverity = sample > mean + 5 * stddev ? .critical : .warning
+            let anomaly = LatencyAnomaly(
+                id: sampleCounter,
+                value: sample,
+                mean: mean,
+                threshold: mean + 3 * stddev,
+                severity: severity,
+                timestamp: Date(),
+                cpuUsage: cpuUsage,
+                thermalState: thermalState,
+                interfaceName: interfaceName,
+                phase: currentTestPhase
+            )
+            anomalies.append(anomaly)
+            // Log it: a count on a chart cannot be exported, correlated or read after
+            // the fact. This puts every spike in the console log with its context.
+            AppLog(
+                String(
+                    format: "Latency anomaly (%@): %.1fms vs mean %.1fms (%.1fσ) — %@",
+                    severity.rawValue, sample, mean, anomaly.sigma, anomaly.contextSummary
+                ),
+                level: severity == .critical ? .error : .warning,
+                category: "Anomaly"
+            )
+            logEvent(String(format: "%@ latency spike: %.1fms", severity.rawValue.capitalized, sample))
             if anomalies.count > 50 {
                 anomalies.removeFirst()
             }
@@ -275,6 +346,23 @@ class DiagnosticMetrics {
             return String(format: "%dh %02dm %02ds", hours, minutes, seconds)
         }
         return String(format: "%dm %02ds", minutes, seconds)
+    }
+
+    /// True when the path is an Apple peer-to-peer (AWDL) link.
+    var usesPeerToPeerLink: Bool {
+        interfaceName?.hasPrefix("awdl") ?? false
+    }
+
+    /// How the link reads on the dashboard.
+    ///
+    /// Both forms are local — no internet is involved either way. The distinction is
+    /// whether the two devices are talking over a DIRECT radio link (AWDL) or still
+    /// routing through a local access point.
+    var linkDescription: String {
+        guard let name = interfaceName else { return interfaceTypeString }
+        return usesPeerToPeerLink
+            ? "Direct device-to-device · \(name)"
+            : "Via access point · \(name)"
     }
 
     var interfaceTypeString: String {

@@ -17,6 +17,14 @@ class BonjourService {
     var conductorService: ConductorService?
     var agentService: AgentService?
     private var browseRefreshTimer: Timer?
+    /// Every peer we have ever seen this session, keyed by Bonjour service name.
+    ///
+    /// Retained even while a peer is absent from browse results so that its identity
+    /// AND its discovery-flap count survive a disappearance. Losing the object on every
+    /// dropout is what would hide a flapping peer.
+    private var knownPeers: [String: PeerDevice] = [:]
+    /// Peers currently missing from browse results, and when they went missing.
+    private var missingSince: [String: Date] = [:]
     private var reverseTestEngines: [DiagnosticEngine] = []
 
     var localDeviceName: String {
@@ -453,13 +461,29 @@ class BonjourService {
                 // Building a fresh one on every browse callback gave it a new UUID and
                 // silently discarded everything learned from peerInfo (stableDeviceID,
                 // chipFamily, model, role), as well as churning SwiftUI list identity.
-                if let existing = discoveredPeers.first(where: { $0.bonjourName == name || $0.name == name }) {
+                if let existing = knownPeers[name] {
                     existing.endpoint = result.endpoint
                     existing.bonjourName = existing.bonjourName ?? name
+                    // Reappearing after a dropout is a discovery flap — the signal to
+                    // watch when a device's Bonjour/AWDL radio is unreliable (AWDL
+                    // time-slices the 2.4GHz radio with Bluetooth).
+                    if let goneAt = missingSince.removeValue(forKey: name) {
+                        let gap = Date().timeIntervalSince(goneAt)
+                        existing.metrics.discoveryFlapCount += 1
+                        existing.metrics.logEvent(
+                            String(format: "Rediscovered after %.1fs absent from Bonjour", gap)
+                        )
+                        AppLog(
+                            String(format: "Bonjour flap: %@ returned after %.1fs", name, gap),
+                            level: .warning,
+                            category: "Bonjour"
+                        )
+                    }
                     newPeers.append(existing)
                 } else {
                     let peer = PeerDevice(name: name, endpoint: result.endpoint)
                     peer.bonjourName = name
+                    knownPeers[name] = peer
                     newPeers.append(peer)
                 }
             }
@@ -470,7 +494,11 @@ class BonjourService {
             AppLog("Discovered: \(p.name)", category: "Bonjour")
         }
         for p in removed {
-            AppLog("Lost: \(p.name)", category: "Bonjour")
+            AppLog("Lost: \(p.name)", level: .warning, category: "Bonjour")
+            if let key = p.bonjourName ?? Optional(p.name) {
+                missingSince[key] = Date()
+            }
+            p.metrics.logEvent("Disappeared from Bonjour browse results")
         }
         discoveredPeers = newPeers
     }

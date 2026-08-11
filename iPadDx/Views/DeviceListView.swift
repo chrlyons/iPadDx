@@ -208,26 +208,28 @@ struct DeviceListView: View {
                 Text("Reports")
             }
 
-            #if DEBUG
-                Section {
-                    Button {
-                        detailSelection = .console
-                    } label: {
-                        HStack {
-                            Image(systemName: "terminal")
-                                .foregroundStyle(.green)
-                            Text("Console")
-                            Spacer()
-                            if detailSelection == .console {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.blue)
-                            }
+            // Available in Release too: this is a field-diagnostics tool, and the
+            // console is where latency anomalies, Bonjour discovery flaps and
+            // disconnect reasons are recorded. Hiding it outside DEBUG would put the
+            // evidence out of reach on exactly the devices being investigated.
+            Section {
+                Button {
+                    detailSelection = .console
+                } label: {
+                    HStack {
+                        Image(systemName: "terminal")
+                            .foregroundStyle(.green)
+                        Text("Console")
+                        Spacer()
+                        if detailSelection == .console {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.blue)
                         }
                     }
-                } header: {
-                    Text("Developer")
                 }
-            #endif
+            } header: {
+                Text("Diagnostics")
+            }
 
             // Mode section
             Section {

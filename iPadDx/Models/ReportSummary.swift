@@ -45,6 +45,16 @@ struct ReportSummary: Identifiable {
 
     /// Bridge transport
     let bridgeTransport: String
+    /// Whether the run used an Apple peer-to-peer (AWDL) link rather than an access
+    /// point. Kept on the summary so analytics can split peer-to-peer from
+    /// infrastructure without loading every full report.
+    let usedPeerToPeer: Bool
+    /// Times the link changed mid-run. Non-zero means the measurement is suspect.
+    let linkChanges: Int
+    /// Connection drops during the run.
+    let linkDisconnects: Int
+    /// Bonjour discovery dropouts during the run.
+    let discoveryFlaps: Int
 
     /// Computed helpers matching DeviceInfo API
     var localChipFamily: String {
@@ -115,6 +125,10 @@ extension ReportSummary {
         loadSampleCount = entity.loadSampleCount
 
         bridgeTransport = entity.bridgeTransport
+        usedPeerToPeer = entity.usedPeerToPeer
+        linkChanges = entity.linkChanges
+        linkDisconnects = entity.linkDisconnects
+        discoveryFlaps = entity.discoveryFlaps
     }
 
     init(from report: TestReport, source: String = "local") {
@@ -166,6 +180,10 @@ extension ReportSummary {
         loadSampleCount = u.sampleCount
 
         bridgeTransport = report.bridgeTransport ?? "native"
+        usedPeerToPeer = report.results.linkConditions?.usedPeerToPeer ?? false
+        linkChanges = report.results.linkConditions?.pathChanges ?? 0
+        linkDisconnects = report.results.linkConditions?.disconnects.count ?? 0
+        discoveryFlaps = report.results.linkConditions?.discoveryFlaps ?? 0
     }
 }
 

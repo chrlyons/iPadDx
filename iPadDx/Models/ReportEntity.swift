@@ -4,6 +4,12 @@ import SwiftData
 @Model
 class ReportEntity {
     @Attribute(.unique) var reportID: UUID
+    /// Link characteristics. Defaulted so stores written before these existed
+    /// migrate without a schema break.
+    var usedPeerToPeer: Bool = false
+    var linkChanges: Int = 0
+    var linkDisconnects: Int = 0
+    var discoveryFlaps: Int = 0
     var date: Date
     var durationSeconds: Double
     var overallGrade: String
@@ -76,6 +82,10 @@ class ReportEntity {
         overallGrade = report.results.overallGrade
         self.source = source
         bridgeTransport = report.bridgeTransport ?? "native"
+        usedPeerToPeer = report.results.linkConditions?.usedPeerToPeer ?? false
+        linkChanges = report.results.linkConditions?.pathChanges ?? 0
+        linkDisconnects = report.results.linkConditions?.disconnects.count ?? 0
+        discoveryFlaps = report.results.linkConditions?.discoveryFlaps ?? 0
 
         localName = report.localDevice.name
         localModel = report.localDevice.model

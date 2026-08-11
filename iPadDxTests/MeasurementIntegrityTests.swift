@@ -210,3 +210,79 @@ final class ThroughputAckRoutingTests: XCTestCase {
         XCTAssertNil(runner.pendingThroughputAck)
     }
 }
+
+/// Tests for link-condition capture.
+///
+/// The question these exist to serve: was a run a DIRECT device-to-device radio link
+/// (AWDL, no access point), or did it still hop through a local AP? Neither involves
+/// the internet, and `NWInterface.type` reports `.wifi` for both, so the interface
+/// name is the only thing that separates them.
+final class LinkConditionsTests: XCTestCase {
+    private func conditions(
+        interfaceName: String?,
+        changes: Int = 0,
+        disconnects: [LinkDisconnect] = []
+    ) -> LinkConditions {
+        LinkConditions(
+            interfaceName: interfaceName,
+            interfaceType: "Wi-Fi",
+            usedPeerToPeer: interfaceName?.hasPrefix("awdl") ?? false,
+            pathStatus: "satisfied",
+            isExpensive: false,
+            isConstrained: false,
+            ssid: "TestNet",
+            bssid: nil,
+            pathChanges: changes,
+            disconnects: disconnects,
+            discoveryFlaps: 0
+        )
+    }
+
+    func testAwdlInterfaceIsReportedAsDirectDeviceToDevice() {
+        let link = conditions(interfaceName: "awdl0")
+        XCTAssertTrue(link.usedPeerToPeer)
+        XCTAssertTrue(link.summary.contains("Direct device-to-device"))
+        XCTAssertTrue(link.summary.contains("awdl0"))
+    }
+
+    func testAccessPointInterfaceIsNotReportedAsDirect() {
+        let link = conditions(interfaceName: "en0")
+        XCTAssertFalse(link.usedPeerToPeer)
+        XCTAssertTrue(link.summary.contains("access point"))
+        // Must never imply the internet was involved — both forms are local.
+        XCTAssertFalse(link.summary.lowercased().contains("internet"))
+    }
+
+    func testLinkConditionsSurviveEncodingRoundTrip() throws {
+        let link = conditions(
+            interfaceName: "awdl0",
+            changes: 2,
+            disconnects: [LinkDisconnect(timestamp: Date(), reason: "pathChanged", detail: "POSIX ENETDOWN")]
+        )
+        let decoded = try JSONDecoder().decode(
+            LinkConditions.self,
+            from: JSONEncoder().encode(link)
+        )
+        XCTAssertTrue(decoded.usedPeerToPeer)
+        XCTAssertEqual(decoded.pathChanges, 2)
+        XCTAssertEqual(decoded.disconnects.count, 1)
+        XCTAssertEqual(decoded.disconnects.first?.reason, "pathChanged")
+        XCTAssertEqual(decoded.ssid, "TestNet")
+    }
+
+    func testOlderReportsWithoutLinkConditionsStillDecode() throws {
+        let json = """
+        {
+          "latencyBurst": {"min":1,"max":2,"avg":1.5,"median":1.5,"p95":2,"sampleCount":10,"samples":[1,2]},
+          "sustainedThroughput": {"bytesPerSecond":1000,"totalBytes":1000,"durationSeconds":1},
+          "jitterMeasurement": {"averageJitter":1,"maxJitter":2,"sampleCount":10},
+          "packetLossStress": {"sent":10,"received":10,"lostPercent":0,"durationSeconds":1},
+          "latencyUnderLoad": {"baselineAvg":1,"underLoadAvg":1,"degradationPercent":0,"sampleCount":10},
+          "systemMetrics": {"batteryStart":1,"batteryEnd":1,"batteryDrainPercent":0,"peakCpuUsage":1,"avgCpuUsage":1,"peakMemoryMB":1,"thermalStateDuringTest":"Nominal"},
+          "overallGrade": "Good"
+        }
+        """
+        let decoded = try JSONDecoder().decode(TestSuiteResults.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.linkConditions)
+    }
+}

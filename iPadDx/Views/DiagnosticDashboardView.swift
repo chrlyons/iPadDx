@@ -7,6 +7,7 @@ struct DiagnosticDashboardView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var uptimeTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var uptimeDisplay: String = "0m 00s"
+    @State private var showAnomalies = false
 
     private var metrics: DiagnosticMetrics {
         peer.metrics
@@ -130,6 +131,9 @@ struct DiagnosticDashboardView: View {
                 connectionLogSection
             }
             .padding()
+        }
+        .sheet(isPresented: $showAnomalies) {
+            AnomalyDetailSheet(anomalies: metrics.anomalies)
         }
         .navigationTitle(peer.name)
         .toolbar {
@@ -276,31 +280,39 @@ struct DiagnosticDashboardView: View {
                 .chartXAxis(.hidden)
                 .frame(height: 200)
 
-                // Anomaly count badge
+                // Anomaly count badge — tap to drill into the individual spikes
                 if !metrics.anomalies.isEmpty {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(Color.anomalyColor(.warning, scheme: colorScheme))
-                        let critCount = metrics.anomalies.filter { $0.severity == .critical }.count
-                        let warnCount = metrics.anomalies.filter { $0.severity == .warning }.count
-                        Text("\(metrics.anomalies.count) anomalies detected")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        if critCount > 0 {
-                            Text("\(critCount) critical")
+                    Button {
+                        showAnomalies = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.caption2)
-                                .fontWeight(.medium)
-                                .foregroundStyle(Color.anomalyColor(.critical, scheme: colorScheme))
-                        }
-                        if warnCount > 0 {
-                            Text("\(warnCount) warning")
-                                .font(.caption2)
-                                .fontWeight(.medium)
                                 .foregroundStyle(Color.anomalyColor(.warning, scheme: colorScheme))
+                            let critCount = metrics.anomalies.filter { $0.severity == .critical }.count
+                            let warnCount = metrics.anomalies.filter { $0.severity == .warning }.count
+                            Text("\(metrics.anomalies.count) anomalies detected")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            if critCount > 0 {
+                                Text("\(critCount) critical")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundStyle(Color.anomalyColor(.critical, scheme: colorScheme))
+                            }
+                            if warnCount > 0 {
+                                Text("\(warnCount) warning")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundStyle(Color.anomalyColor(.warning, scheme: colorScheme))
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
-                        Spacer()
                     }
+                    .buttonStyle(.plain)
                 }
             } else {
                 HStack {
@@ -669,5 +681,112 @@ struct DiagnosticDashboardView: View {
             return String(format: "%dh %02dm", hours, minutes)
         }
         return String(format: "%dm %02ds", minutes, seconds)
+    }
+}
+
+// MARK: - Anomaly Drill-Down
+
+/// Lists every recorded latency spike with the context captured at the time.
+///
+/// A count on a chart says something happened; this says what. Each row carries the
+/// severity, how far above the mean the sample sat, and what the device was doing —
+/// which test phase, which interface (a direct `awdl0` link behaves very differently
+/// from one via an access point), CPU load and thermal state.
+struct AnomalyDetailSheet: View {
+    let anomalies: [LatencyAnomaly]
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var critical: [LatencyAnomaly] {
+        anomalies.filter { $0.severity == .critical }
+    }
+
+    private var warnings: [LatencyAnomaly] {
+        anomalies.filter { $0.severity == .warning }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if anomalies.isEmpty {
+                    ContentUnavailableView(
+                        "No anomalies",
+                        systemImage: "checkmark.circle",
+                        description: Text("No latency spikes beyond 3σ have been recorded on this connection.")
+                    )
+                } else {
+                    List {
+                        Section {
+                            HStack(spacing: 16) {
+                                countTile("Critical", critical.count, .critical)
+                                countTile("Warning", warnings.count, .warning)
+                            }
+                            .padding(.vertical, 4)
+                        } footer: {
+                            Text(
+                                "Critical is beyond 5σ from the rolling 30-sample mean; warning is beyond 3σ. Most recent first."
+                            )
+                        }
+
+                        Section("Spikes") {
+                            ForEach(anomalies.reversed()) { anomaly in
+                                anomalyRow(anomaly)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Latency Anomalies")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func countTile(_ label: String, _ count: Int, _ severity: AnomalySeverity) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(count)")
+                .font(.title2).fontWeight(.bold)
+                .foregroundStyle(Color.anomalyColor(severity, scheme: colorScheme))
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func anomalyRow(_ anomaly: LatencyAnomaly) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: anomaly.severity == .critical
+                    ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.anomalyColor(anomaly.severity, scheme: colorScheme))
+                Text(String(format: "%.1f ms", anomaly.value))
+                    .font(.subheadline).fontWeight(.semibold)
+                    .monospacedDigit()
+                Text(String(format: "%.1fσ above mean", anomaly.sigma))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(anomaly.timestamp, style: .time)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            Text(String(format: "baseline %.1f ms · threshold %.1f ms", anomaly.mean, anomaly.threshold))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            Text(anomaly.contextSummary)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 2)
     }
 }

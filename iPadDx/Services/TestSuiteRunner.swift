@@ -152,6 +152,10 @@ class TestSuiteRunner {
     private let thermalTracker = SystemMonitor.ThermalTracker()
     /// Drives the background load generators used by the under-load phases.
     private var loadGeneratorActive = false
+    /// Baselines so link conditions describe THIS run's window, not all time.
+    private var linkPathChangesAtStart = 0
+    private var linkDisconnectsAtStart = 0
+    private var linkDiscoveryFlapsAtStart = 0
     /// In-flight throughput transfer awaiting the peer's measurement.
     /// Internal rather than private so tests can verify ack routing.
     private(set) var throughputTestID: UUID?
@@ -215,6 +219,10 @@ class TestSuiteRunner {
             reason: "iPadDx test suite running"
         )
         suiteStartTime = Date()
+        // Baselines for the link-conditions snapshot built at the end of the run.
+        linkPathChangesAtStart = metrics.pathChangeCount
+        linkDisconnectsAtStart = metrics.disconnectHistory.count
+        linkDiscoveryFlapsAtStart = metrics.discoveryFlapCount
         batteryStart = SystemMonitor.batteryLevel()
         cpuSamples.removeAll()
         peakMemoryMB = 0
@@ -432,6 +440,7 @@ class TestSuiteRunner {
         }
 
         progress = 1.0
+        metrics.currentTestPhase = nil
 
         // Build report
         let batteryEnd = SystemMonitor.batteryLevel()
@@ -450,6 +459,21 @@ class TestSuiteRunner {
             thermalStateDuringTest: worstThermalState,
             thermalTransitions: thermalTracker.transitions.isEmpty ? nil : thermalTracker.transitions
         )
+
+        let link = buildLinkConditions()
+        if link.pathChanges > 0 {
+            errorLog.append(
+                "Link changed \(link.pathChanges) time(s) during the test — results may not be comparable"
+            )
+        }
+        if !link.disconnects.isEmpty {
+            errorLog.append("Connection dropped \(link.disconnects.count) time(s) during the test")
+        }
+        if let flaps = link.discoveryFlaps, flaps > 0 {
+            errorLog.append(
+                "Peer vanished from Bonjour discovery \(flaps) time(s) during the test — discovery/radio instability"
+            )
+        }
 
         let remoteInfo = buildRemoteDeviceInfo()
         if remoteInfo.name == "Unknown" || remoteInfo.model == "Unknown" {
@@ -486,7 +510,8 @@ class TestSuiteRunner {
                 overallGrade: grade.rawValue,
                 responderMetrics: responderMetrics,
                 dnsResolution: dnsResult,
-                heavyLoad: heavyLoad
+                heavyLoad: heavyLoad,
+                linkConditions: link
             ),
             durationSeconds: Date().timeIntervalSince(suiteStartTime ?? Date()),
             errors: errorLog.isEmpty ? nil : errorLog,
@@ -544,6 +569,8 @@ class TestSuiteRunner {
 
     private func runPhase<T>(_ phase: TestPhase, test: () async -> T) async -> T {
         currentPhase = phase
+        // Attribute any latency anomaly raised during this phase to it.
+        metrics.currentTestPhase = phase.rawValue
         phaseProgress = 0
         phaseStatuses[phase] = .running
         liveLatency = 0
@@ -1015,6 +1042,32 @@ class TestSuiteRunner {
             p99: LatencyBurstResult.percentile(sorted, 0.99),
             histogram: LatencyBurstResult.buildHistogram(samples: rtts),
             anomalyCount: LatencyBurstResult.anomalyCount(in: rtts)
+        )
+    }
+
+    /// Snapshots the network path this run actually used.
+    private func buildLinkConditions() -> LinkConditions {
+        let newDisconnects = metrics.disconnectHistory
+            .dropFirst(linkDisconnectsAtStart)
+            .map {
+                LinkDisconnect(
+                    timestamp: $0.timestamp,
+                    reason: $0.reason.rawValue,
+                    detail: $0.detail
+                )
+            }
+        return LinkConditions(
+            interfaceName: metrics.interfaceName,
+            interfaceType: metrics.interfaceTypeString,
+            usedPeerToPeer: metrics.usesPeerToPeerLink,
+            pathStatus: String(describing: metrics.pathStatus),
+            isExpensive: metrics.isExpensive,
+            isConstrained: metrics.isConstrained,
+            ssid: metrics.peerSSID,
+            bssid: metrics.peerBSSID,
+            pathChanges: max(0, metrics.pathChangeCount - linkPathChangesAtStart),
+            disconnects: Array(newDisconnects),
+            discoveryFlaps: max(0, metrics.discoveryFlapCount - linkDiscoveryFlapsAtStart)
         )
     }
 
