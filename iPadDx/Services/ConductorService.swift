@@ -95,6 +95,16 @@ class ConductorService {
     /// Runs that were never executed (device offline, unschedulable). Counted separately
     /// from completedCount so "completed" only ever means "produced a measurement".
     private(set) var skippedCount: Int = 0
+    /// Runs that ended in a terminal failure.
+    private(set) var failedCount: Int = 0
+    /// Runs stopped by queue cancellation — neither a measurement nor a failure.
+    private(set) var cancelledCount: Int = 0
+
+    /// Every run that reached a terminal state, however it ended.
+    var finishedCount: Int {
+        completedCount + failedCount + cancelledCount + skippedCount
+    }
+
     /// Runs a failed attempt asked the scheduler to try again.
     private var requeueBuffer: [TestRun] = []
 
@@ -326,6 +336,7 @@ class ConductorService {
             conn.connectionManager.send(.orchestrationCancel)
             conn.agentStatus = .idle
             conn.currentTestPartner = nil
+            conn.currentTestPartnerID = nil
             conn.testProgress = 0
             conn.testPhase = ""
         }
@@ -348,6 +359,8 @@ class ConductorService {
         }
         failedRuns.removeAll()
         skippedCount = 0
+        failedCount = 0
+        cancelledCount = 0
         completedCount = 0
         runningPairs.removeAll()
         requeueBuffer.removeAll()
@@ -442,19 +455,26 @@ class ConductorService {
 
                     let task = Task { [weak self] in
                         guard let self else { return }
-                        let needsRequeue = await executeRun(run)
+                        let disposition = await executeRun(run)
                         runningPairs.removeAll { $0 == run.label }
-                        if needsRequeue {
+                        switch disposition {
+                        case .completed:
+                            completedCount += 1
+                        case .failed:
+                            failedCount += 1
+                        case .cancelled:
+                            cancelledCount += 1
+                        case .requeued:
                             await awaitRetryDelay()
                             if cancelRequested {
                                 failedRuns.append(run)
+                                failedCount += 1
                             } else {
                                 requeueBuffer.append(run)
                             }
-                        } else {
-                            completedCount += 1
                         }
-                        queueStatus = .running(pairIndex: completedCount, total: total)
+                        // Progress reflects everything finished, not just successes.
+                        queueStatus = .running(pairIndex: finishedCount, total: total)
                     }
                     activeTasks[run.id] = task
                     launched = true
@@ -496,22 +516,54 @@ class ConductorService {
         for conn in fleet {
             conn.agentStatus = .idle
             conn.currentTestPartner = nil
+            conn.currentTestPartnerID = nil
             conn.testProgress = 0
             conn.testPhase = ""
         }
         selfBusy = false
 
+        var parts = ["\(completedCount) completed"]
+        if failedCount > 0 {
+            parts.append("\(failedCount) failed")
+        }
+        if cancelledCount > 0 {
+            parts.append("\(cancelledCount) cancelled")
+        }
+        if skippedCount > 0 {
+            parts.append("\(skippedCount) skipped")
+        }
+        let breakdown = parts.joined(separator: ", ")
         if cancelRequested {
-            log("Queue cancelled — \(completedCount)/\(total) completed", level: .warning)
+            log("Queue cancelled — \(breakdown) of \(total)", level: .warning)
         } else {
-            let skippedNote = skippedCount > 0 ? ", \(skippedCount) skipped" : ""
-            log("Queue finished — \(completedCount)/\(total) run(s)\(skippedNote)", level: .success)
+            log(
+                "Queue finished — \(breakdown) of \(total)",
+                level: failedCount > 0 ? .warning : .success
+            )
         }
         runningPairs.removeAll()
         testQueue.removeAll()
+        let wasCancelled = cancelRequested
         cancelRequested = false
         selfRunner = nil
-        queueStatus = .completed
+        // Only claim completion when the queue actually ran to the end. Reporting
+        // `.completed` after a cancel made the dashboard say "All tests completed".
+        queueStatus = wasCancelled ? .failed("Cancelled — \(breakdown)") : .completed
+    }
+
+    /// Human-readable outcome of the last finished queue.
+    var lastQueueBreakdown: String {
+        var parts = ["\(completedCount) completed"]
+        if failedCount > 0 {
+            parts.append("\(failedCount) failed")
+        }
+        if cancelledCount > 0 {
+            parts.append("\(cancelledCount) cancelled")
+        }
+        if skippedCount > 0 {
+            parts.append("\(skippedCount) skipped")
+        }
+        return parts.joined(separator: ", ")
     }
 
     /// True while the conductor device itself is one of the endpoints of a running test.
@@ -546,10 +598,24 @@ class ConductorService {
         case permanentFailure
     }
 
-    /// Runs one pair and reports what should happen next.
+    /// What the scheduler should record for a finished attempt.
     ///
-    /// - Returns: true if the scheduler should put this run back on the queue.
-    private func executeRun(_ run: TestRun) async -> Bool {
+    /// A plain Bool conflated success, cancellation and terminal failure, so every
+    /// one of them incremented `completedCount` — a queue where nothing worked still
+    /// reported "N/N completed".
+    enum RunDisposition {
+        /// Produced a measurement.
+        case completed
+        /// Terminal failure — recorded in `failedRuns`.
+        case failed
+        /// Stopped because the queue was cancelled. Not a measurement, not a failure.
+        case cancelled
+        /// Will be attempted again.
+        case requeued
+    }
+
+    /// Runs one pair and reports how it ended.
+    private func executeRun(_ run: TestRun) async -> RunDisposition {
         let isSelfA = run.deviceA.id == selfDeviceID
         let isSelfB = run.deviceB.id == selfDeviceID
 
@@ -565,21 +631,24 @@ class ConductorService {
         }
 
         switch outcome {
-        case .succeeded, .cancelled:
-            return false
+        case .succeeded:
+            return .completed
+        case .cancelled:
+            return .cancelled
         case .permanentFailure:
             failedRuns.append(run)
-            return false
+            return .failed
         case .retryableFailure:
             // Retrying is the SCHEDULER's job. Re-entering executeRun from inside the
             // failing frame would run the retry underneath the failed run's own cleanup.
             let attempts = retryCount[run.id, default: 0]
-            guard !cancelRequested, shouldRetry(run) else {
+            guard !cancelRequested else { return .cancelled }
+            guard shouldRetry(run) else {
                 failedRuns.append(run)
                 if attempts > 0 {
                     log("\(run.label) failed after \(attempts) attempt(s)", level: .error)
                 }
-                return false
+                return .failed
             }
             let nextAttempt = attempts + 1
             retryCount[run.id] = nextAttempt
@@ -587,7 +656,7 @@ class ConductorService {
                 "Will retry \(run.label) (attempt \(nextAttempt)/\(maxRetries))",
                 level: .warning
             )
-            return true
+            return .requeued
         }
     }
 
@@ -602,6 +671,7 @@ class ConductorService {
                 conn.agentStatus = .idle
             }
             conn.currentTestPartner = nil
+            conn.currentTestPartnerID = nil
             conn.testProgress = 0
             conn.testPhase = ""
         }
@@ -728,11 +798,13 @@ class ConductorService {
         connA.agentStatus = .testing
         connA.lastStatusUpdate = Date()
         connA.currentTestPartner = run.deviceB.name
+        connA.currentTestPartnerID = run.deviceB.id
         connA.testProgress = 0
         connA.testPhase = ""
         connB.agentStatus = .testing
         connB.lastStatusUpdate = Date()
         connB.currentTestPartner = run.deviceA.name
+        connB.currentTestPartnerID = run.deviceA.id
         connB.testProgress = 0
         connB.testPhase = ""
 
@@ -794,12 +866,14 @@ class ConductorService {
         if connA.connectionManager.isConnected {
             connA.agentStatus = .idle
             connA.currentTestPartner = nil
+            connA.currentTestPartnerID = nil
             connA.testProgress = 0
             connA.testPhase = ""
         }
         if connB.connectionManager.isConnected {
             connB.agentStatus = .idle
             connB.currentTestPartner = nil
+            connB.currentTestPartnerID = nil
             connB.testProgress = 0
             connB.testPhase = ""
         }
@@ -829,6 +903,7 @@ class ConductorService {
                 log("\(connection.peer.name): \(detail)", level: .warning)
                 connection.agentStatus = .idle
                 connection.currentTestPartner = nil
+                connection.currentTestPartnerID = nil
                 connection.testProgress = 0
             case "running":
                 if let pct = parseProgress(from: detail) {
@@ -847,8 +922,9 @@ class ConductorService {
             }
             if let report = try? decoder.decode(TestReport.self, from: reportJSON) {
                 // The controller agent sent this report. Its partner is the responder.
-                let partnerName = connection.currentTestPartner
-                let responderConn = fleet.first { $0.peer.name == partnerName }
+                // Resolve by stable id — display names are mutated by peerInfo.
+                let responderConn = connection.currentTestPartnerID
+                    .flatMap { id in fleet.first { $0.peer.id == id } }
                 let patched = patchDeviceInfo(
                     in: report,
                     controllerConn: connection,

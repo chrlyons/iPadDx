@@ -348,3 +348,108 @@ final class LatencyWindowTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(DiagnosticMetrics.defaultLatencyHistory, 7200)
     }
 }
+
+/// Guards against unmeasured zero placeholders being treated as real measurements.
+///
+/// Cancelled and disabled phases persist zeros, and since cancelled runs now produce
+/// partial reports those zeros reach the store. Zero is a plausible-looking latency,
+/// jitter, loss and throughput, so any aggregate that averages raw fields is dragged
+/// toward zero by runs that measured nothing.
+final class MeasurementValidityTests: XCTestCase {
+
+    /// `latencyAvg` etc. are passed explicitly so the "unmeasured" fixture is exactly
+    /// what TestSuiteRunner persists for a skipped or cancelled phase: zero counts AND
+    /// zero values. Keeping non-zero values with zero counts would make the test pass
+    /// for the wrong reason.
+    private func results(latencySamples: Int, latencyAvg: Double,
+                         jitterSamples: Int, jitterAvg: Double,
+                         lossSent: Int, lossPercent: Double,
+                         throughput: Double,
+                         underLoadSamples: Int, baseline: Double,
+                         degradation: Double) -> TestSuiteResults {
+        TestSuiteResults(
+            latencyBurst: LatencyBurstResult(
+                min: latencyAvg, max: latencyAvg, avg: latencyAvg,
+                median: latencyAvg, p95: latencyAvg,
+                sampleCount: latencySamples, samples: []
+            ),
+            sustainedThroughput: ThroughputResult(
+                bytesPerSecond: throughput, totalBytes: 100, durationSeconds: 1
+            ),
+            jitterMeasurement: JitterResult(
+                averageJitter: jitterAvg, maxJitter: jitterAvg, sampleCount: jitterSamples
+            ),
+            packetLossStress: PacketLossResult(
+                sent: lossSent, received: lossSent, lostPercent: lossPercent, durationSeconds: 1
+            ),
+            latencyUnderLoad: LatencyUnderLoadResult(
+                baselineAvg: baseline, underLoadAvg: 20,
+                degradationPercent: degradation, sampleCount: underLoadSamples
+            ),
+            systemMetrics: SystemMetricsResult(
+                batteryStart: 1, batteryEnd: 1, batteryDrainPercent: 0,
+                peakCpuUsage: 1, avgCpuUsage: 1, peakMemoryMB: 1,
+                thermalStateDuringTest: "Nominal"
+            ),
+            overallGrade: "Good"
+        )
+    }
+
+    private var measured: TestSuiteResults {
+        results(latencySamples: 100, latencyAvg: 10,
+                jitterSamples: 150, jitterAvg: 3,
+                lossSent: 500, lossPercent: 2,
+                throughput: 5_000_000,
+                underLoadSamples: 50, baseline: 10, degradation: 50)
+    }
+
+    /// A cancelled run: exactly the all-zero placeholder TestSuiteRunner persists.
+    private var unmeasured: TestSuiteResults {
+        results(latencySamples: 0, latencyAvg: 0,
+                jitterSamples: 0, jitterAvg: 0,
+                lossSent: 0, lossPercent: 0,
+                throughput: 0,
+                underLoadSamples: 0, baseline: 0, degradation: 0)
+    }
+
+    func testMeasuredResultsExposeTheirValues() {
+        let r = measured
+        XCTAssertEqual(r.measuredLatencyAvg, 10)
+        XCTAssertEqual(r.measuredJitter, 3)
+        XCTAssertEqual(r.measuredPacketLoss, 2)
+        XCTAssertEqual(r.measuredThroughput, 5_000_000)
+        XCTAssertEqual(r.measuredLoadDegradation, 50)
+    }
+
+    func testUnmeasuredResultsExposeNilNotZero() {
+        let r = unmeasured
+        XCTAssertNil(r.measuredLatencyAvg, "zero latency from a cancelled phase is not a measurement")
+        XCTAssertNil(r.measuredJitter)
+        XCTAssertNil(r.measuredPacketLoss)
+        XCTAssertNil(r.measuredThroughput)
+        XCTAssertNil(r.measuredLoadDegradation)
+    }
+
+    func testLoadDegradationNeedsARealBaseline() {
+        // Samples collected but no baseline: degradation is not comparable.
+        let r = results(latencySamples: 100, latencyAvg: 10,
+                        jitterSamples: 150, jitterAvg: 3,
+                        lossSent: 500, lossPercent: 2,
+                        throughput: 1,
+                        underLoadSamples: 50, baseline: 0, degradation: 50)
+        XCTAssertNil(r.measuredLoadDegradation)
+    }
+
+    func testAggregatingIgnoresUnmeasuredReports() {
+        // One good run at 10ms plus two cancelled runs must average 10ms, not 3.3ms.
+        let all = [measured, unmeasured, unmeasured]
+        let values = all.compactMap(\.measuredLatencyAvg)
+        XCTAssertEqual(values.count, 1)
+        XCTAssertEqual(values.reduce(0, +) / Double(values.count), 10, accuracy: 0.0001)
+
+        // What the old code did: average the raw field across all three reports.
+        let naive = all.map(\.latencyBurst.avg).reduce(0, +) / Double(all.count)
+        XCTAssertEqual(naive, 10.0 / 3.0, accuracy: 0.0001)
+        XCTAssertLessThan(naive, 5, "the naive average really is dragged toward zero")
+    }
+}

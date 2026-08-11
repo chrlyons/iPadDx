@@ -186,6 +186,59 @@ enum iPadCatalog {
     }
 }
 
+/// Per-metric validity.
+///
+/// Disabled and cancelled phases leave zero-valued placeholders in the results, and
+/// since cancelled runs now produce partial reports those zeros reach the store. Zero
+/// is a plausible-looking value for latency, jitter, loss and throughput, so any
+/// aggregate MUST filter on these rather than averaging raw fields.
+extension TestSuiteResults {
+    var hasLatency: Bool {
+        latencyBurst.sampleCount > 0
+    }
+
+    var hasJitter: Bool {
+        jitterMeasurement.sampleCount > 0
+    }
+
+    var hasPacketLoss: Bool {
+        packetLossStress.sent > 0
+    }
+
+    var hasThroughput: Bool {
+        sustainedThroughput.bytesPerSecond > 0
+    }
+
+    var hasLoadDegradation: Bool {
+        latencyUnderLoad.sampleCount > 0 && latencyUnderLoad.baselineAvg > 0
+    }
+
+    /// Values that were genuinely measured, for aggregation.
+    var measuredLatencyAvg: Double? {
+        hasLatency ? latencyBurst.avg : nil
+    }
+
+    var measuredLatencyP95: Double? {
+        hasLatency ? latencyBurst.p95 : nil
+    }
+
+    var measuredJitter: Double? {
+        hasJitter ? jitterMeasurement.averageJitter : nil
+    }
+
+    var measuredPacketLoss: Double? {
+        hasPacketLoss ? packetLossStress.lostPercent : nil
+    }
+
+    var measuredThroughput: Double? {
+        hasThroughput ? sustainedThroughput.bytesPerSecond : nil
+    }
+
+    var measuredLoadDegradation: Double? {
+        hasLoadDegradation ? latencyUnderLoad.degradationPercent : nil
+    }
+}
+
 struct TestSuiteResults: Codable {
     let latencyBurst: LatencyBurstResult
     let sustainedThroughput: ThroughputResult

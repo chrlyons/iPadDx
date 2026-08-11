@@ -55,6 +55,16 @@ private enum DateRangePreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// Mean over values that were actually measured.
+///
+/// Skipped and cancelled phases persist zeros, and zero is indistinguishable from a
+/// real latency/jitter/loss/throughput reading, so a raw average silently drags every
+/// figure toward zero. Returns nil when nothing measured the metric.
+func measuredMean(_ values: [Double]) -> Double? {
+    guard !values.isEmpty else { return nil }
+    return values.reduce(0, +) / Double(values.count)
+}
+
 struct ReportAnalyticsView: View {
     @Environment(ReportStore.self) private var store
     @State private var selectedPair: String = "All"
@@ -388,39 +398,26 @@ struct ReportAnalyticsView: View {
             summaryItem("Reports", "\(count)", .blue)
             summaryItem(
                 "Avg Latency",
-                count > 0
-                    ? String(format: "%.1fms", items.map(\.latencyAvg).reduce(0, +) / Double(count))
-                    : "-",
+                measuredMean(items.compactMap(\.measuredLatencyAvg))
+                    .map { String(format: "%.1fms", $0) } ?? "-",
                 .blue
             )
             summaryItem(
                 "Avg Throughput",
-                count > 0
-                    ? String(
-                        format: "%.1f MB/s",
-                        items.map(\.throughputBps).reduce(0, +) / Double(count) / 1_000_000
-                    )
-                    : "-",
+                measuredMean(items.compactMap(\.measuredThroughput))
+                    .map { String(format: "%.1f MB/s", $0 / 1_000_000) } ?? "-",
                 .purple
             )
             summaryItem(
                 "Avg Jitter",
-                count > 0
-                    ? String(
-                        format: "%.1fms",
-                        items.map(\.jitterAvg).reduce(0, +) / Double(count)
-                    )
-                    : "-",
+                measuredMean(items.compactMap(\.measuredJitter))
+                    .map { String(format: "%.1fms", $0) } ?? "-",
                 .orange
             )
             summaryItem(
                 "Avg Loss",
-                count > 0
-                    ? String(
-                        format: "%.1f%%",
-                        items.map(\.packetLossPercent).reduce(0, +) / Double(count)
-                    )
-                    : "-",
+                measuredMean(items.compactMap(\.measuredPacketLoss))
+                    .map { String(format: "%.1f%%", $0) } ?? "-",
                 .red
             )
             summaryItem("OS Versions", "\(uniqueOSVersions.count)", .indigo)
@@ -828,12 +825,12 @@ struct ReportAnalyticsView: View {
             return OSAggregate(
                 version: version,
                 count: items.count,
-                avgLatency: items.map(\.latencyAvg).reduce(0, +) / n,
-                avgLatencyP95: items.map(\.latencyP95).reduce(0, +) / n,
-                avgThroughputMBps: items.map(\.throughputBps).reduce(0, +) / n / 1_000_000,
-                avgJitter: items.map(\.jitterAvg).reduce(0, +) / n,
-                avgPacketLoss: items.map(\.packetLossPercent).reduce(0, +) / n,
-                avgLoadDegradation: items.map(\.loadDegradation).reduce(0, +) / n,
+                avgLatency: measuredMean(items.compactMap(\.measuredLatencyAvg)) ?? 0,
+                avgLatencyP95: measuredMean(items.compactMap(\.measuredLatencyP95)) ?? 0,
+                avgThroughputMBps: (measuredMean(items.compactMap(\.measuredThroughput)) ?? 0) / 1_000_000,
+                avgJitter: measuredMean(items.compactMap(\.measuredJitter)) ?? 0,
+                avgPacketLoss: measuredMean(items.compactMap(\.measuredPacketLoss)) ?? 0,
+                avgLoadDegradation: measuredMean(items.map(\.loadDegradation)) ?? 0,
                 failRate: Double(failCount) / n * 100
             )
         }

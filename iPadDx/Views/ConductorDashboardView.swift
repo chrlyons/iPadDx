@@ -155,10 +155,12 @@ struct ConductorDashboardView: View {
                         }
                     }
 
-                case let .running(completed, total):
+                case let .running(finished, total):
                     VStack(spacing: 8) {
-                        ProgressView(value: Double(completed), total: Double(total)) {
-                            Text("\(completed)/\(total) completed")
+                        ProgressView(value: Double(finished), total: Double(total)) {
+                            // "finished" covers failed and skipped runs too, so don't
+                            // label the progress figure as completed.
+                            Text("\(finished)/\(total) finished")
                                 .font(.caption)
                         }
                         .tint(.blue)
@@ -179,9 +181,11 @@ struct ConductorDashboardView: View {
 
                 case .completed:
                     HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("All tests completed")
+                        let clean = conductor.failedCount == 0 && conductor.skippedCount == 0
+                        Image(systemName: clean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(clean ? .green : .orange)
+                        // Never claim "all completed" when runs failed or were skipped.
+                        Text(clean ? "All tests completed" : conductor.lastQueueBreakdown)
                             .font(.subheadline)
                         Spacer()
                     }

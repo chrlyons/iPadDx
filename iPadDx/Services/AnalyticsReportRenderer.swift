@@ -143,27 +143,38 @@ enum AnalyticsReportRenderer {
     // MARK: - Summary
 
     private static func drawSummaryTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
-        let cols: [CGFloat] = [0.30, 0.175, 0.175, 0.175, 0.175]
-        let headers = ["Metric", "Average", "Min", "Max", "Median"]
+        let cols: [CGFloat] = [0.28, 0.15, 0.15, 0.15, 0.15, 0.12]
+        let headers = ["Metric", "Average", "Min", "Max", "Median", "n"]
 
         cursor.drawTableRow(headers, columnWidths: cols, totalWidth: width, isHeader: true)
 
+        // Only reports that actually measured a metric contribute to it. Disabled and
+        // cancelled phases leave zero placeholders, and zero reads as a real value for
+        // every one of these, so averaging raw fields would drag results toward zero.
+        // `n` shows how many reports backed each row.
         let rows: [(String, [Double])] = [
-            ("Avg Latency (ms)", reports.map(\.results.latencyBurst.avg)),
-            ("P95 Latency (ms)", reports.map(\.results.latencyBurst.p95)),
-            ("Throughput (MB/s)", reports.map { $0.results.sustainedThroughput.bytesPerSecond / 1_000_000 }),
-            ("Avg Jitter (ms)", reports.map(\.results.jitterMeasurement.averageJitter)),
-            ("Packet Loss (%)", reports.map(\.results.packetLossStress.lostPercent)),
-            ("Load Degradation (%)", reports.map(\.results.latencyUnderLoad.degradationPercent)),
+            ("Avg Latency (ms)", reports.compactMap(\.results.measuredLatencyAvg)),
+            ("P95 Latency (ms)", reports.compactMap(\.results.measuredLatencyP95)),
+            ("Throughput (MB/s)", reports.compactMap { $0.results.measuredThroughput.map { $0 / 1_000_000 } }),
+            ("Avg Jitter (ms)", reports.compactMap(\.results.measuredJitter)),
+            ("Packet Loss (%)", reports.compactMap(\.results.measuredPacketLoss)),
+            ("Load Degradation (%)", reports.compactMap(\.results.measuredLoadDegradation)),
         ]
 
         for (label, values) in rows {
+            guard !values.isEmpty else {
+                cursor.drawTableRow(
+                    [label, "N/A", "N/A", "N/A", "N/A", "0"],
+                    columnWidths: cols, totalWidth: width, isHeader: false
+                )
+                continue
+            }
             let avg = values.reduce(0, +) / Double(values.count)
             let sorted = values.sorted()
             let mid = sorted.count / 2
             let med = sorted.count.isMultiple(of: 2) ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
             cursor.drawTableRow(
-                [label, f(avg), f(sorted.first ?? 0), f(sorted.last ?? 0), f(med)],
+                [label, f(avg), f(sorted.first ?? 0), f(sorted.last ?? 0), f(med), String(values.count)],
                 columnWidths: cols, totalWidth: width, isHeader: false
             )
         }

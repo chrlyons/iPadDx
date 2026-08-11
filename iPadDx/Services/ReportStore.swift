@@ -146,16 +146,22 @@ class ReportStore {
     func bridgeComparison(local: String, remote: String) -> [BridgeComparisonRow] {
         let pairSummaries = summaries(forChipPair: local, remote: remote)
         let grouped = Dictionary(grouping: pairSummaries) { $0.bridgeTransport }
+        /// Average only over rows that measured each metric — a cancelled or partial
+        /// run's zeros would otherwise pull a bridge's figures down and make it look
+        /// faster or cleaner than it actually is.
+        func mean(_ values: [Double]) -> Double {
+            guard !values.isEmpty else { return 0 }
+            return values.reduce(0, +) / Double(values.count)
+        }
         return grouped.map { bridge, items in
-            let n = Double(items.count)
-            return BridgeComparisonRow(
+            BridgeComparisonRow(
                 bridge: bridge,
                 reportCount: items.count,
-                avgLatency: items.map(\.latencyAvg).reduce(0, +) / n,
-                avgJitter: items.map(\.jitterAvg).reduce(0, +) / n,
-                avgPacketLoss: items.map(\.packetLossPercent).reduce(0, +) / n,
-                avgThroughput: items.map(\.throughputBps).reduce(0, +) / n,
-                avgGradeScore: items.map { BridgeComparisonRow.gradeScore($0.overallGrade) }.reduce(0, +) / n
+                avgLatency: mean(items.compactMap(\.measuredLatencyAvg)),
+                avgJitter: mean(items.compactMap(\.measuredJitter)),
+                avgPacketLoss: mean(items.compactMap(\.measuredPacketLoss)),
+                avgThroughput: mean(items.compactMap(\.measuredThroughput)),
+                avgGradeScore: mean(items.map { BridgeComparisonRow.gradeScore($0.overallGrade) })
             )
         }.sorted { $0.bridge < $1.bridge }
     }
@@ -414,14 +420,33 @@ class ReportStore {
 
         var sections: [String] = []
 
-        // Section 1: Overview
+        // Grade distribution is over ALL reports — every report has a grade, including
+        // partial ones, so this denominator is correct.
         let count = Double(reports.count)
-        let avgLatency = reports.map(\.results.latencyBurst.avg).reduce(0, +) / count
-        let avgP95 = reports.map(\.results.latencyBurst.p95).reduce(0, +) / count
-        let avgThroughput = reports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / count / 1_000_000
-        let avgJitter = reports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / count
-        let avgLoss = reports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / count
-        let avgDegradation = reports.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / count
+
+        /// Section 1: Overview
+        ///
+        /// Every statistic is computed over reports that ACTUALLY MEASURED the metric.
+        /// Disabled and cancelled phases leave zero placeholders, and zero is a
+        /// plausible-looking latency/jitter/loss/throughput, so averaging raw fields
+        /// silently drags results toward zero. Metrics with no measurements render N/A.
+        func stats(_ values: [Double]) -> (avg: String, min: String, max: String, med: String, n: Int) {
+            guard !values.isEmpty else { return ("N/A", "N/A", "N/A", "N/A", 0) }
+            return (
+                f(values.reduce(0, +) / Double(values.count)),
+                f(values.min() ?? 0),
+                f(values.max() ?? 0),
+                f(median(values)),
+                values.count
+            )
+        }
+
+        let latency = stats(reports.compactMap(\.results.measuredLatencyAvg))
+        let p95 = stats(reports.compactMap(\.results.measuredLatencyP95))
+        let throughput = stats(reports.compactMap { $0.results.measuredThroughput.map { $0 / 1_000_000 } })
+        let jitter = stats(reports.compactMap(\.results.measuredJitter))
+        let loss = stats(reports.compactMap(\.results.measuredPacketLoss))
+        let degradation = stats(reports.compactMap(\.results.measuredLoadDegradation))
 
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .short
@@ -439,23 +464,14 @@ class ReportStore {
         Bridge Transports,\(csvEscape(bridges.joined(separator: ", ")))
 
         Summary
-        Metric,Average,Min,Max,Median
-        Latency Avg (ms),\(f(avgLatency)),\(f(reports.map(\.results.latencyBurst.avg).min() ?? 0)),\(f(reports
-                .map(\.results.latencyBurst.avg).max() ?? 0)),\(f(median(reports.map(\.results.latencyBurst.avg))))
-        Latency P95 (ms),\(f(avgP95)),\(f(reports.map(\.results.latencyBurst.p95).min() ?? 0)),\(f(reports
-                .map(\.results.latencyBurst.p95).max() ?? 0)),\(f(median(reports.map(\.results.latencyBurst.p95))))
-        Throughput (MB/s),\(f(avgThroughput)),\(f((reports.map(\.results.sustainedThroughput.bytesPerSecond)
-                .min() ?? 0) / 1_000_000)),\(f((reports.map(\.results.sustainedThroughput.bytesPerSecond).max() ?? 0) /
-                1_000_000)),\(f(median(reports.map { $0.results.sustainedThroughput.bytesPerSecond / 1_000_000 })))
-        Jitter Avg (ms),\(f(avgJitter)),\(f(reports.map(\.results.jitterMeasurement.averageJitter)
-                .min() ?? 0)),\(f(reports.map(\.results.jitterMeasurement.averageJitter)
-                .max() ?? 0)),\(f(median(reports.map(\.results.jitterMeasurement.averageJitter))))
-        Packet Loss (%),\(f(avgLoss)),\(f(reports.map(\.results.packetLossStress.lostPercent).min() ?? 0)),\(f(reports
-                .map(\.results.packetLossStress.lostPercent)
-                .max() ?? 0)),\(f(median(reports.map(\.results.packetLossStress.lostPercent))))
-        Load Degradation (%),\(f(avgDegradation)),\(f(reports.map(\.results.latencyUnderLoad.degradationPercent)
-                .min() ?? 0)),\(f(reports.map(\.results.latencyUnderLoad.degradationPercent)
-                .max() ?? 0)),\(f(median(reports.map(\.results.latencyUnderLoad.degradationPercent))))
+        Metric,Average,Min,Max,Median,Reports Measuring
+        Latency Avg (ms),\(latency.avg),\(latency.min),\(latency.max),\(latency.med),\(latency.n)
+        Latency P95 (ms),\(p95.avg),\(p95.min),\(p95.max),\(p95.med),\(p95.n)
+        Throughput (MB/s),\(throughput.avg),\(throughput.min),\(throughput.max),\(throughput.med),\(throughput.n)
+        Jitter Avg (ms),\(jitter.avg),\(jitter.min),\(jitter.max),\(jitter.med),\(jitter.n)
+        Packet Loss (%),\(loss.avg),\(loss.min),\(loss.max),\(loss.med),\(loss.n)
+        Load Degradation (%),\(degradation.avg),\(degradation.min),\(degradation.max),\(degradation.med),\(degradation
+            .n)
         """)
 
         // Section 2: Grade distribution

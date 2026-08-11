@@ -1,5 +1,48 @@
 import Foundation
 
+/// Per-metric validity for a summary row.
+///
+/// Mirrors `TestSuiteResults`: a disabled or cancelled phase stores zeros, and zero is
+/// indistinguishable from a real reading for latency, jitter, loss and throughput.
+/// Aggregations must filter on these instead of averaging the raw columns.
+extension ReportSummary {
+    var hasLatency: Bool {
+        latencySampleCount > 0
+    }
+
+    var hasJitter: Bool {
+        jitterSampleCount > 0
+    }
+
+    var hasPacketLoss: Bool {
+        packetLossSent > 0
+    }
+
+    var hasThroughput: Bool {
+        throughputBps > 0
+    }
+
+    var measuredLatencyAvg: Double? {
+        hasLatency ? latencyAvg : nil
+    }
+
+    var measuredLatencyP95: Double? {
+        hasLatency ? latencyP95 : nil
+    }
+
+    var measuredJitter: Double? {
+        hasJitter ? jitterAvg : nil
+    }
+
+    var measuredPacketLoss: Double? {
+        hasPacketLoss ? packetLossPercent : nil
+    }
+
+    var measuredThroughput: Double? {
+        hasThroughput ? throughputBps : nil
+    }
+}
+
 /// Lightweight summary of a test report for list/analytics views.
 /// Full `TestReport` is loaded on demand only when detail/export is needed.
 struct ReportSummary: Identifiable {
