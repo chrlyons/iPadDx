@@ -330,7 +330,9 @@ struct BridgeInfoView: View {
         guard !rows.isEmpty else { return nil }
         return MeasuredComparison(
             pairLabel: "\(sample.localChip) → \(sample.remoteChip)",
-            rows: rows.sorted { $0.avgLatency < $1.avgLatency },
+            // bridgeComparison only returns rows with measured latency, so the sort
+            // key is always present.
+            rows: rows.sorted { ($0.avgLatency ?? 0) < ($1.avgLatency ?? 0) },
             nativeBaselineMs: rows.first { $0.bridge == "native" }?.avgLatency
         )
     }
@@ -358,7 +360,7 @@ struct BridgeInfoView: View {
     }
 
     private func measuredOverhead(_ comparison: MeasuredComparison) -> some View {
-        let maxLatency = comparison.rows.map(\.avgLatency).max() ?? 0
+        let maxLatency = comparison.rows.compactMap(\.avgLatency).max() ?? 0
         return VStack(alignment: .leading, spacing: 10) {
             Text(
                 "Average round-trip latency measured on this device for \(comparison.pairLabel), from saved test reports."
@@ -415,13 +417,15 @@ struct BridgeInfoView: View {
     }
 
     private func overheadRow(_ row: BridgeComparisonRow, maxLatency: Double, baseline: Double?) -> some View {
-        let ratio = maxLatency > 0 ? row.avgLatency / maxLatency : 0
+        let ratio = maxLatency > 0 ? (row.avgLatency ?? 0) / maxLatency : 0
         let color = Color.bridgeColor(row.bridge, scheme: colorScheme)
         return HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.bridge)
                     .font(.caption)
-                Text("\(row.reportCount) report\(row.reportCount == 1 ? "" : "s")")
+                // Count the reports the figure was averaged over, not every report
+                // filed under this bridge — they differ when a run measured nothing.
+                Text("\(row.measuredLatencyCount) measured")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -435,11 +439,11 @@ struct BridgeInfoView: View {
             .frame(height: 16)
 
             VStack(alignment: .trailing, spacing: 1) {
-                Text(String(format: "%.2f ms", row.avgLatency))
+                Text(row.avgLatency.map { String(format: "%.2f ms", $0) } ?? "—")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 if let baseline, baseline > 0, row.bridge != "native" {
-                    Text(String(format: "%+.0f%%", (row.avgLatency / baseline - 1) * 100))
+                    Text(row.avgLatency.map { String(format: "%+.0f%%", ($0 / baseline - 1) * 100) } ?? "—")
                         .font(.caption2)
                         .fontWeight(.medium)
                         .foregroundStyle(color)

@@ -782,3 +782,55 @@ final class AnalyticsTrendInputTests: XCTestCase {
         XCTAssertNotEqual(period, wider, "period must reflect the measured samples, not all reports")
     }
 }
+
+/// Guards the bridge-overhead comparison.
+///
+/// This is the screen that states "Average round-trip latency measured…", so a zero
+/// there is read as a measurement of an extremely fast bridge. Collapsing "nothing
+/// measured" to 0 at the aggregation boundary put exactly that on screen.
+final class BridgeComparisonValidityTests: XCTestCase {
+    func testRowMetricsAreOptionalSoNotMeasuredCannotBecomeZero() {
+        let row = BridgeComparisonRow(
+            bridge: "cordova",
+            reportCount: 3,
+            measuredLatencyCount: 0,
+            avgLatency: nil,
+            avgJitter: nil,
+            avgPacketLoss: nil,
+            avgThroughput: nil,
+            avgGradeScore: 0
+        )
+        XCTAssertNil(row.avgLatency, "not measured must not be representable as 0.0 ms")
+        XCTAssertNil(row.avgJitter)
+        XCTAssertNil(row.avgPacketLoss)
+        XCTAssertNil(row.avgThroughput)
+    }
+
+    func testMeasuredCountIsSeparateFromReportCount() {
+        // Three reports filed under a bridge, only one of which measured latency:
+        // the displayed average is over 1, and the UI must be able to say so.
+        let row = BridgeComparisonRow(
+            bridge: "flutter",
+            reportCount: 3,
+            measuredLatencyCount: 1,
+            avgLatency: 12.5,
+            avgJitter: nil,
+            avgPacketLoss: nil,
+            avgThroughput: nil,
+            avgGradeScore: 8
+        )
+        XCTAssertEqual(row.reportCount, 3)
+        XCTAssertEqual(row.measuredLatencyCount, 1)
+        XCTAssertEqual(row.avgLatency, 12.5)
+    }
+
+    func testGradeScoreMappingUnchanged() {
+        // Band midpoints on the 12-point scale, not 0-based: Poor is 3, and an
+        // unrecognised grade is the only thing that scores 0.
+        XCTAssertEqual(BridgeComparisonRow.gradeScore("Excellent"), 12)
+        XCTAssertEqual(BridgeComparisonRow.gradeScore("Good"), 9)
+        XCTAssertEqual(BridgeComparisonRow.gradeScore("Fair"), 6)
+        XCTAssertEqual(BridgeComparisonRow.gradeScore("Poor"), 3)
+        XCTAssertEqual(BridgeComparisonRow.gradeScore("Cancelled"), 0)
+    }
+}

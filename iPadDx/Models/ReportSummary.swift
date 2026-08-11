@@ -243,13 +243,21 @@ extension ReportSummary {
 }
 
 /// Comparison metrics across bridges for the same device pair.
+/// One bridge's measured figures for a device pair.
+///
+/// Every metric is optional. Collapsing "no report measured this" to 0 made the bridge
+/// screen state "Average round-trip latency measured…" above a 0.00 ms row — i.e. the
+/// best possible result, presented as a measurement. nil means not measured.
 struct BridgeComparisonRow: Identifiable {
     let bridge: String
     let reportCount: Int
-    let avgLatency: Double
-    let avgJitter: Double
-    let avgPacketLoss: Double
-    let avgThroughput: Double
+    /// Reports that actually measured latency — this is what avgLatency averages,
+    /// and it may be smaller than reportCount.
+    let measuredLatencyCount: Int
+    let avgLatency: Double?
+    let avgJitter: Double?
+    let avgPacketLoss: Double?
+    let avgThroughput: Double?
     let avgGradeScore: Double
 
     var id: String {

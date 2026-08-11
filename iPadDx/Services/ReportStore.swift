@@ -146,22 +146,27 @@ class ReportStore {
     func bridgeComparison(local: String, remote: String) -> [BridgeComparisonRow] {
         let pairSummaries = summaries(forChipPair: local, remote: remote)
         let grouped = Dictionary(grouping: pairSummaries) { $0.bridgeTransport }
-        /// Average only over rows that measured each metric — a cancelled or partial
-        /// run's zeros would otherwise pull a bridge's figures down and make it look
-        /// faster or cleaner than it actually is.
-        func mean(_ values: [Double]) -> Double {
-            guard !values.isEmpty else { return 0 }
+        /// Average only over rows that measured each metric, and return nil rather than
+        /// 0 when nothing did — 0 ms / 0% reads as the best possible result.
+        func mean(_ values: [Double]) -> Double? {
+            guard !values.isEmpty else { return nil }
             return values.reduce(0, +) / Double(values.count)
         }
-        return grouped.map { bridge, items in
-            BridgeComparisonRow(
+        return grouped.compactMap { bridge, items -> BridgeComparisonRow? in
+            let latency = items.compactMap(\.measuredLatencyAvg)
+            // A bridge with no measured latency has nothing to compare; omit it rather
+            // than show a 0.00 ms bar next to bridges that were measured.
+            guard !latency.isEmpty else { return nil }
+            return BridgeComparisonRow(
                 bridge: bridge,
                 reportCount: items.count,
-                avgLatency: mean(items.compactMap(\.measuredLatencyAvg)),
+                measuredLatencyCount: latency.count,
+                avgLatency: mean(latency),
                 avgJitter: mean(items.compactMap(\.measuredJitter)),
                 avgPacketLoss: mean(items.compactMap(\.measuredPacketLoss)),
                 avgThroughput: mean(items.compactMap(\.measuredThroughput)),
-                avgGradeScore: mean(items.map { BridgeComparisonRow.gradeScore($0.overallGrade) })
+                avgGradeScore: items.map { BridgeComparisonRow.gradeScore($0.overallGrade) }
+                    .reduce(0, +) / Double(items.count)
             )
         }.sorted { $0.bridge < $1.bridge }
     }
