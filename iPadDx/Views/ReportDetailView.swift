@@ -437,15 +437,22 @@ struct ReportDetailView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// Shown in place of a value the run never measured. A stored partial report
+    /// rendering "0.0ms" reads as an excellent result rather than as missing data.
+    private var notMeasured: String {
+        "—"
+    }
+
     private func latencyCard(_ report: TestReport) -> some View {
         resultCard("Latency Burst", icon: "bolt.fill", color: .blue) {
             let l = report.results.latencyBurst
+            let ok = report.results.hasLatency
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 5), spacing: 8) {
-                statItem("Min", String(format: "%.1fms", l.min), .green)
-                statItem("Max", String(format: "%.1fms", l.max), .red)
-                statItem("Avg", String(format: "%.1fms", l.avg), .blue)
-                statItem("Median", String(format: "%.1fms", l.median), .indigo)
-                statItem("P95", String(format: "%.1fms", l.p95), .orange)
+                statItem("Min", ok ? String(format: "%.1fms", l.min) : notMeasured, ok ? .green : .gray)
+                statItem("Max", ok ? String(format: "%.1fms", l.max) : notMeasured, ok ? .red : .gray)
+                statItem("Avg", ok ? String(format: "%.1fms", l.avg) : notMeasured, ok ? .blue : .gray)
+                statItem("Median", ok ? String(format: "%.1fms", l.median) : notMeasured, ok ? .indigo : .gray)
+                statItem("P95", ok ? String(format: "%.1fms", l.p95) : notMeasured, ok ? .orange : .gray)
             }
         }
     }
@@ -453,10 +460,11 @@ struct ReportDetailView: View {
     private func throughputCard(_ report: TestReport) -> some View {
         resultCard("Throughput", icon: "arrow.up.arrow.down.circle.fill", color: .purple) {
             let t = report.results.sustainedThroughput
+            let ok = report.results.hasThroughput
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
-                statItem("Speed", t.formattedSpeed, .purple)
-                statItem("Data", formatBytes(t.totalBytes), .cyan)
-                statItem("Duration", String(format: "%.1fs", t.durationSeconds), .gray)
+                statItem("Speed", ok ? t.formattedSpeed : notMeasured, ok ? .purple : .gray)
+                statItem("Data", ok ? formatBytes(t.totalBytes) : notMeasured, ok ? .cyan : .gray)
+                statItem("Duration", ok ? String(format: "%.1fs", t.durationSeconds) : notMeasured, .gray)
             }
         }
     }
@@ -464,9 +472,10 @@ struct ReportDetailView: View {
     private func jitterCard(_ report: TestReport) -> some View {
         resultCard("Jitter", icon: "waveform.path", color: .orange) {
             let j = report.results.jitterMeasurement
+            let ok = report.results.hasJitter
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
-                statItem("Average", String(format: "%.2fms", j.averageJitter), .orange)
-                statItem("Max", String(format: "%.2fms", j.maxJitter), .red)
+                statItem("Average", ok ? String(format: "%.2fms", j.averageJitter) : notMeasured, ok ? .orange : .gray)
+                statItem("Max", ok ? String(format: "%.2fms", j.maxJitter) : notMeasured, ok ? .red : .gray)
                 statItem("Samples", "\(j.sampleCount)", .gray)
             }
         }
@@ -475,11 +484,16 @@ struct ReportDetailView: View {
     private func packetLossCard(_ report: TestReport) -> some View {
         resultCard("Packet Loss", icon: "exclamationmark.triangle.fill", color: .red) {
             let p = report.results.packetLossStress
+            let ok = report.results.hasPacketLoss
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
                 statItem("Sent", "\(p.sent)", .blue)
                 statItem("Received", "\(p.received)", .green)
-                statItem("Loss", String(format: "%.1f%%", p.lostPercent), p.lostPercent < 1 ? .green : .red)
-                statItem("Duration", String(format: "%.1fs", p.durationSeconds), .gray)
+                statItem(
+                    "Loss",
+                    ok ? String(format: "%.1f%%", p.lostPercent) : notMeasured,
+                    ok ? (p.lostPercent < 1 ? .green : .red) : .gray
+                )
+                statItem("Duration", ok ? String(format: "%.1fs", p.durationSeconds) : notMeasured, .gray)
             }
         }
     }
@@ -487,13 +501,18 @@ struct ReportDetailView: View {
     private func latencyUnderLoadCard(_ report: TestReport) -> some View {
         resultCard("Latency Under Load", icon: "flame.fill", color: .orange) {
             let l = report.results.latencyUnderLoad
+            let ok = report.results.hasLoadDegradation
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
-                statItem("Baseline", String(format: "%.1fms", l.baselineAvg), .blue)
-                statItem("Under Load", String(format: "%.1fms", l.underLoadAvg), .orange)
+                statItem("Baseline", ok ? String(format: "%.1fms", l.baselineAvg) : notMeasured, ok ? .blue : .gray)
+                statItem(
+                    "Under Load",
+                    l.sampleCount > 0 ? String(format: "%.1fms", l.underLoadAvg) : notMeasured,
+                    l.sampleCount > 0 ? .orange : .gray
+                )
                 statItem(
                     "Impact",
-                    l.formattedDegradation,
-                    l.degradationPercent <= 0 ? .green : l.degradationPercent < 50 ? .orange : .red
+                    ok ? l.formattedDegradation : notMeasured,
+                    ok ? (l.degradationPercent <= 0 ? .green : l.degradationPercent < 50 ? .orange : .red) : .gray
                 )
                 statItem("Samples", "\(l.sampleCount)", .gray)
             }

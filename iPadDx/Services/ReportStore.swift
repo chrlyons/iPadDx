@@ -242,30 +242,30 @@ class ReportStore {
         OS,\(csvEscape(report.remoteDevice.osVersion))
 
         Latency Burst (\(r.latencyBurst.sampleCount) samples)
-        Min,\(String(format: "%.2f", r.latencyBurst.min))ms
-        Max,\(String(format: "%.2f", r.latencyBurst.max))ms
-        Avg,\(String(format: "%.2f", r.latencyBurst.avg))ms
-        Median,\(String(format: "%.2f", r.latencyBurst.median))ms
-        P95,\(String(format: "%.2f", r.latencyBurst.p95))ms
+        Min,\(detail(r.hasLatency, "%.2f", r.latencyBurst.min, "ms"))
+        Max,\(detail(r.hasLatency, "%.2f", r.latencyBurst.max, "ms"))
+        Avg,\(detail(r.hasLatency, "%.2f", r.latencyBurst.avg, "ms"))
+        Median,\(detail(r.hasLatency, "%.2f", r.latencyBurst.median, "ms"))
+        P95,\(detail(r.hasLatency, "%.2f", r.latencyBurst.p95, "ms"))
 
         Throughput
-        Speed,\(csvEscape(r.sustainedThroughput.formattedSpeed))
-        Bytes,\(r.sustainedThroughput.totalBytes)
-        Duration,\(String(format: "%.2f", r.sustainedThroughput.durationSeconds))s
+        Speed,\(r.hasThroughput ? csvEscape(r.sustainedThroughput.formattedSpeed) : "")
+        Bytes,\(r.hasThroughput ? "\(r.sustainedThroughput.totalBytes)" : "")
+        Duration,\(detail(r.hasThroughput, "%.2f", r.sustainedThroughput.durationSeconds, "s"))
 
         Jitter (\(r.jitterMeasurement.sampleCount) samples)
-        Average,\(String(format: "%.2f", r.jitterMeasurement.averageJitter))ms
-        Max,\(String(format: "%.2f", r.jitterMeasurement.maxJitter))ms
+        Average,\(detail(r.hasJitter, "%.2f", r.jitterMeasurement.averageJitter, "ms"))
+        Max,\(detail(r.hasJitter, "%.2f", r.jitterMeasurement.maxJitter, "ms"))
 
         Packet Loss (\(r.packetLossStress.sent) sent)
         Received,\(r.packetLossStress.received)
-        Lost,\(String(format: "%.1f", r.packetLossStress.lostPercent))%
-        Duration,\(String(format: "%.2f", r.packetLossStress.durationSeconds))s
+        Lost,\(detail(r.hasPacketLoss, "%.1f", r.packetLossStress.lostPercent, "%"))
+        Duration,\(detail(r.hasPacketLoss, "%.2f", r.packetLossStress.durationSeconds, "s"))
 
         Latency Under Load (\(r.latencyUnderLoad.sampleCount) samples)
-        Baseline Avg,\(String(format: "%.2f", r.latencyUnderLoad.baselineAvg))ms
-        Under Load Avg,\(String(format: "%.2f", r.latencyUnderLoad.underLoadAvg))ms
-        Degradation,\(String(format: "%.1f", r.latencyUnderLoad.degradationPercent))%
+        Baseline Avg,\(detail(r.hasLoadDegradation, "%.2f", r.latencyUnderLoad.baselineAvg, "ms"))
+        Under Load Avg,\(detail(r.latencyUnderLoad.sampleCount > 0, "%.2f", r.latencyUnderLoad.underLoadAvg, "ms"))
+        Degradation,\(detail(r.hasLoadDegradation, "%.1f", r.latencyUnderLoad.degradationPercent, "%"))
 
         System Metrics
         Battery Start,\(r.systemMetrics.batteryStart >= 0 ? "\(Int(r.systemMetrics.batteryStart * 100))%" : "N/A")
@@ -677,6 +677,13 @@ class ReportStore {
         let values = reports.compactMap { metric($0.results) }
         guard !values.isEmpty else { return "N/A" }
         return f(values.reduce(0, +) / Double(values.count))
+    }
+
+    /// A formatted value with its unit, or a blank cell when the phase measured nothing.
+    nonisolated private func detail(
+        _ measured: Bool, _ format: String, _ value: Double, _ unit: String
+    ) -> String {
+        measured ? String(format: format, value) + unit : ""
     }
 
     /// A formatted value, or a blank cell when the owning phase measured nothing.

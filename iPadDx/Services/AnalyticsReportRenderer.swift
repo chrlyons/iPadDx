@@ -465,12 +465,14 @@ enum AnalyticsReportRenderer {
                     report.remoteDevice.shortDescription,
                     report.remoteDevice.osVersion,
                     r.overallGrade,
-                    f(r.latencyBurst.avg),
-                    f(r.latencyBurst.p95),
-                    f(r.sustainedThroughput.bytesPerSecond / 1_000_000),
-                    f(r.jitterMeasurement.averageJitter),
-                    f(r.packetLossStress.lostPercent),
-                    f(r.latencyUnderLoad.degradationPercent),
+                    // Per-report rows: a phase that measured nothing prints "—", not a
+                    // zero that reads as an excellent result.
+                    r.measuredLatencyAvg.map(f) ?? "—",
+                    r.measuredLatencyP95.map(f) ?? "—",
+                    r.measuredThroughput.map { f($0 / 1_000_000) } ?? "—",
+                    r.measuredJitter.map(f) ?? "—",
+                    r.measuredPacketLoss.map(f) ?? "—",
+                    r.measuredLoadDegradation.map(f) ?? "—",
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
             )

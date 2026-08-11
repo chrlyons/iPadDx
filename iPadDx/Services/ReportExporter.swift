@@ -58,6 +58,10 @@ enum ReportExporter {
         }
     }
 
+    /// Shown in place of a value a run never measured. Pasting "0.0ms" into a ticket
+    /// or a message reads as an excellent result rather than as missing data.
+    private static let notMeasured = "not measured"
+
     /// Generate a clipboard-friendly summary string.
     static func clipboardSummary(report: TestReport) -> String {
         let r = report.results
@@ -67,10 +71,10 @@ enum ReportExporter {
         Grade: \(r.overallGrade)
         Bridge: \(report.bridgeTransport ?? "native")
         Link: \(report.results.linkConditions?.summary ?? "Unknown")
-        Latency: avg \(f(r.latencyBurst.avg))ms, p95 \(f(r.latencyBurst.p95))ms
-        Throughput: \(r.sustainedThroughput.formattedSpeed)
-        Jitter: \(f(r.jitterMeasurement.averageJitter))ms
-        Packet Loss: \(f(r.packetLossStress.lostPercent))%
+        Latency: \(r.hasLatency ? "avg \(f(r.latencyBurst.avg))ms, p95 \(f(r.latencyBurst.p95))ms" : notMeasured)
+        Throughput: \(r.hasThroughput ? r.sustainedThroughput.formattedSpeed : notMeasured)
+        Jitter: \(r.hasJitter ? "\(f(r.jitterMeasurement.averageJitter))ms" : notMeasured)
+        Packet Loss: \(r.hasPacketLoss ? "\(f(r.packetLossStress.lostPercent))%" : notMeasured)
         Duration: \(f(report.durationSeconds))s
         """
     }

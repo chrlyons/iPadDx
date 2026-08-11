@@ -1,10 +1,16 @@
 .PHONY: build clean lint format check test open help
 
 # Configuration
+#
+# Builds MUST go through the workspace, not the .xcodeproj: Capacitor and Cordova are
+# integrated via CocoaPods, and `-project` cannot resolve those modules — it fails with
+# "Unable to resolve module dependency: 'Cordova'" before compiling any of our code.
 PROJECT = iPadDx.xcodeproj
+WORKSPACE = iPadDx.xcworkspace
 TARGET = iPadDx
 SDK = iphoneos
 SCHEME = iPadDx
+SIM_DEST = platform=iOS Simulator,name=iPad Pro 13-inch (M4)
 SWIFT_FILES = $(shell find iPadDx -name "*.swift" -not -path "*/.*")
 
 help: ## Show this help
@@ -12,22 +18,25 @@ help: ## Show this help
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build for device (no code signing)
-	xcodebuild -project $(PROJECT) -target $(TARGET) -sdk $(SDK) build \
+	xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) -sdk $(SDK) \
+		-destination 'generic/platform=iOS' build \
 		CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
 		2>&1 | tail -5
 
 build-sim: ## Build for iPad simulator
-	xcodebuild -project $(PROJECT) -target $(TARGET) -sdk iphonesimulator build \
+	xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) -sdk iphonesimulator \
+		-destination 'generic/platform=iOS Simulator' build \
+		CODE_SIGNING_ALLOWED=NO \
 		2>&1 | tail -5
 
 clean: ## Clean build artifacts
-	xcodebuild -project $(PROJECT) -target $(TARGET) clean 2>&1 | tail -3
+	xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) clean 2>&1 | tail -3
 	rm -rf build/ DerivedData/
 
-typecheck: ## Type-check all Swift files
-	@SDK_PATH=$$(xcrun --sdk iphoneos --show-sdk-path) && \
-	swiftc -typecheck -sdk "$$SDK_PATH" -target arm64-apple-ios17.0 $(SWIFT_FILES) && \
-	echo "✓ Type check passed" || echo "✗ Type check failed"
+typecheck: ## Type-check via the workspace (bare swiftc cannot resolve the pods)
+	@xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) -sdk iphonesimulator \
+		-destination 'generic/platform=iOS Simulator' build \
+		CODE_SIGNING_ALLOWED=NO 2>&1 | grep -E "error:|BUILD" | tail -10
 
 lint: ## Run SwiftLint
 	@if command -v swiftlint >/dev/null 2>&1; then \
@@ -63,7 +72,7 @@ test: ## Run unit tests on iPad simulator with coverage
 	xcodebuild test \
 		-workspace iPadDx.xcworkspace \
 		-scheme $(SCHEME) \
-		-destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M4)' \
+		-destination '$(SIM_DEST)' \
 		-enableCodeCoverage YES \
 		-resultBundlePath build/TestResults.xcresult \
 		2>&1 | xcbeautify || true
@@ -79,7 +88,7 @@ test-ci: ## Run tests without xcbeautify (for CI)
 	xcodebuild test \
 		-workspace iPadDx.xcworkspace \
 		-scheme $(SCHEME) \
-		-destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M4)' \
+		-destination '$(SIM_DEST)' \
 		-enableCodeCoverage YES \
 		-resultBundlePath build/TestResults.xcresult \
 		2>&1 | tail -30
