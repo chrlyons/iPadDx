@@ -57,11 +57,22 @@ remain like-for-like.
 
 ## Setup
 
-1. Open `iPadDx.xcodeproj` in Xcode
-2. Select your development team in **Signing & Capabilities**
-3. Connect an iPad, select it as the run destination, and press Cmd+R
-4. Repeat for additional iPads
-5. On first launch, set a name for each device
+Capacitor and Cordova are integrated with CocoaPods, so `iPadDx.xcworkspace` and
+`Pods/` are **generated, not committed**. A fresh clone has neither — you must run the
+dependency step first, or Xcode and `xcodebuild` will fail to resolve the `Cordova`
+and `Capacitor` modules.
+
+1. Install dependencies: `make setup` (Homebrew tools), then `make bridges`
+   — or, at minimum, `make pods` to generate `iPadDx.xcworkspace`
+2. Open **`iPadDx.xcworkspace`** in Xcode (`make open`).
+   Opening `iPadDx.xcodeproj` directly will not build: the pods are not in it
+3. Select your development team in **Signing & Capabilities**
+4. Connect an iPad, select it as the run destination, and press Cmd+R
+5. Repeat for additional iPads
+6. On first launch, set a name for each device
+
+Command line: `make build-sim`, `make build` (device) and `make test` all use the
+workspace and will tell you to run `make pods` if it is missing.
 
 ## Usage
 
