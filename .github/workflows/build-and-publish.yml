@@ -239,8 +239,25 @@ jobs:
           # undefined symbols in the app link ~8 minutes later. Assert the symbols the
           # app actually references are defined here, where the cause is obvious.
           STAGED_LIB=../../../Frameworks/ReactNative/libReactNative.a
+
+          # Diagnostics before the assertion. The first version of this guard sent nm's
+          # stderr to /dev/null, so when it reported the symbol missing there was no way
+          # to tell a genuinely incomplete archive from nm failing to read it at all.
+          echo "--- libReactNative.a ---"
+          ls -lh "$STAGED_LIB" | awk '{print "  size: " $5}'
+          echo "  React-Core included in merge: $(echo "$LIBS" | grep -c 'libReact-Core\.a')"
+          echo "  nm exit / symbol counts:"
+          nm -gU "$STAGED_LIB" > /tmp/nm-out.txt 2>/tmp/nm-err.txt; NM_RC=$?
+          echo "    exit=$NM_RC  lines=$(wc -l < /tmp/nm-out.txt | tr -d ' ')"
+          echo "    RCT* defined: $(grep -c 'RCT' /tmp/nm-out.txt || true)"
+          echo "    OBJC classes: $(grep -c 'OBJC_CLASS_\$_' /tmp/nm-out.txt || true)"
+          if [ -s /tmp/nm-err.txt ]; then
+            echo "  nm stderr (first 20 lines):"
+            head -20 /tmp/nm-err.txt | sed 's/^/    /'
+          fi
+
           for sym in '_OBJC_CLASS_$_RCTBridge' '_RCTRegisterModule' '_RCTLogNativeInternal'; do
-            if ! nm -gU "$STAGED_LIB" 2>/dev/null | grep -qF "$sym"; then
+            if ! grep -qF "$sym" /tmp/nm-out.txt; then
               echo "::error::$sym is not defined in libReactNative.a — the app cannot link."
               exit 1
             fi
