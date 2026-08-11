@@ -29,6 +29,23 @@ struct ReportComparisonView: View {
                     comparisonRow("Bridge", bridgeA, bridgeB, lowerIsBetter: false)
                 }
 
+                // DNS Resolution section
+                sectionTitle("DNS Resolution", icon: "magnifyingglass.circle.fill", color: .cyan)
+                comparisonRow(
+                    "Time",
+                    fmtOpt(dnsTime(reportA), "%.0fms"),
+                    fmtOpt(dnsTime(reportB), "%.0fms"),
+                    valueA: dnsTime(reportA),
+                    valueB: dnsTime(reportB),
+                    lowerIsBetter: true
+                )
+                comparisonRow(
+                    "Resolved",
+                    resolvedLabel(reportA),
+                    resolvedLabel(reportB),
+                    lowerIsBetter: false
+                )
+
                 // Latency section
                 sectionTitle("Latency Burst", icon: "bolt.fill", color: .blue)
                 comparisonRow(
@@ -145,6 +162,41 @@ struct ReportComparisonView: View {
                     lowerIsBetter: true
                 )
 
+                // Heavy Load
+                sectionTitle("Heavy Load Stress", icon: "cpu", color: .red)
+                comparisonRow(
+                    "Avg Latency",
+                    fmtOpt(heavyLoad(reportA)?.avgLatency),
+                    fmtOpt(heavyLoad(reportB)?.avgLatency),
+                    valueA: heavyLoad(reportA)?.avgLatency,
+                    valueB: heavyLoad(reportB)?.avgLatency,
+                    lowerIsBetter: true
+                )
+                comparisonRow(
+                    "Max Latency",
+                    fmtOpt(heavyLoad(reportA)?.maxLatency),
+                    fmtOpt(heavyLoad(reportB)?.maxLatency),
+                    valueA: heavyLoad(reportA)?.maxLatency,
+                    valueB: heavyLoad(reportB)?.maxLatency,
+                    lowerIsBetter: true
+                )
+                comparisonRow(
+                    "Speed",
+                    heavyLoad(reportA)?.formattedThroughput ?? "—",
+                    heavyLoad(reportB)?.formattedThroughput ?? "—",
+                    valueA: heavyLoad(reportA)?.throughputBps,
+                    valueB: heavyLoad(reportB)?.throughputBps,
+                    lowerIsBetter: false
+                )
+                comparisonRow(
+                    "Loss %",
+                    fmtOpt(heavyLoad(reportA)?.packetLoss, "%.1f%%"),
+                    fmtOpt(heavyLoad(reportB)?.packetLoss, "%.1f%%"),
+                    valueA: heavyLoad(reportA)?.packetLoss,
+                    valueB: heavyLoad(reportB)?.packetLoss,
+                    lowerIsBetter: true
+                )
+
                 // System
                 sectionTitle("System", icon: "cpu", color: .indigo)
                 comparisonRow(
@@ -247,6 +299,27 @@ struct ReportComparisonView: View {
 
     private func fmt(_ value: Double) -> String {
         String(format: "%.2fms", value)
+    }
+
+    /// Phase 0's resolution time, or nil when the browse never resolved the peer.
+    ///
+    /// A failed browse stores the elapsed timeout, which would otherwise be compared as
+    /// though it were a (merely slow) resolution — and against a report that skipped the
+    /// phase entirely, ranked as the winner.
+    private func dnsTime(_ report: TestReport) -> Double? {
+        report.results.hasDNSResolution ? report.results.dnsResolution?.resolutionTimeMs : nil
+    }
+
+    /// "—" when the phase never ran, so a skipped phase is never shown as a failure.
+    private func resolvedLabel(_ report: TestReport) -> String {
+        guard let dns = report.results.dnsResolution else { return "—" }
+        return dns.resolved ? "Yes" : "No"
+    }
+
+    /// Phase 6's results, or nil when the phase produced no probes — including reports
+    /// stored before Heavy Load was persisted at all.
+    private func heavyLoad(_ report: TestReport) -> HeavyLoadResult? {
+        report.results.hasHeavyLoad ? report.results.heavyLoad : nil
     }
 
     /// Renders a metric that a report may never have measured.

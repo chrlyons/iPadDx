@@ -209,9 +209,12 @@ enum AnalyticsReportRenderer {
         let cols: [CGFloat] = [0.30, 0.25, 0.25, 0.20]
         cursor.drawTableRow(["Grade", "Count", "Percent", ""], columnWidths: cols, totalWidth: width, isHeader: true)
 
-        let grades = ["Excellent", "Good", "Fair", "Poor"]
+        // EVERY grade a report can hold, "Not graded" included. The denominator is the
+        // full report count, so enumerating only the four scored bands dropped ungraded
+        // runs from the table while still counting them below — the percentages then did
+        // not sum to 100.
         let total = Double(reports.count)
-        for grade in grades {
+        for grade in TestSuiteResults.allGradeValues {
             let count = reports.filter { $0.results.overallGrade == grade }.count
             if count > 0 {
                 let pct = Double(count) / total * 100
@@ -356,8 +359,11 @@ enum AnalyticsReportRenderer {
 
         for (version, vReports) in map.sorted(by: { $0.key < $1.key }) {
             let n = Double(vReports.count)
-            let failCount = vReports.filter { $0.results.overallGrade == "Poor" || $0.results.overallGrade == "Fair" }
-                .count
+            // `isFailure` also counts runs that measured nothing. Matching on Poor/Fair
+            // alone left collapsed runs in the denominator with no way to be a failure,
+            // so an OS whose runs all collapsed reported "Fail Rate 0.0%" in the same
+            // PDF that listed every one of them under "Failed Tests".
+            let failCount = vReports.filter(\.results.isFailure).count
             cursor.drawTableRow(
                 [
                     version,
@@ -389,8 +395,8 @@ enum AnalyticsReportRenderer {
 
         for (pair, pairReports) in grouped.sorted(by: { $0.key < $1.key }) {
             let n = Double(pairReports.count)
-            let failCount = pairReports
-                .filter { $0.results.overallGrade == "Poor" || $0.results.overallGrade == "Fair" }.count
+            // Same rule as the per-OS table: a run that measured nothing is a failure.
+            let failCount = pairReports.filter(\.results.isFailure).count
             cursor.drawTableRow(
                 [
                     pair,
@@ -439,7 +445,12 @@ enum AnalyticsReportRenderer {
     // MARK: - All Tests
 
     private static func drawAllTestsTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
-        let cols: [CGFloat] = [0.08, 0.11, 0.09, 0.11, 0.09, 0.06, 0.08, 0.08, 0.08, 0.08, 0.07, 0.07]
+        // Two extra columns so the audit table covers all seven phases: DNS discovery
+        // and Heavy Load were the only phase results the tabular exports dropped.
+        let cols: [CGFloat] = [
+            0.07, 0.10, 0.07, 0.10, 0.07, 0.06,
+            0.07, 0.07, 0.07, 0.06, 0.06, 0.06, 0.07, 0.07,
+        ]
         cursor.drawTableRow(
             [
                 "Date",
@@ -454,6 +465,8 @@ enum AnalyticsReportRenderer {
                 "Jitter",
                 "Loss %",
                 "Degrad %",
+                "DNS (ms)",
+                "Heavy (ms)",
             ],
             columnWidths: cols, totalWidth: width, isHeader: true
         )
@@ -479,6 +492,8 @@ enum AnalyticsReportRenderer {
                     r.measuredJitter.map(f) ?? "—",
                     r.measuredPacketLoss.map(f) ?? "—",
                     r.measuredLoadDegradation.map(f) ?? "—",
+                    r.hasDNSResolution ? f(r.dnsResolution?.resolutionTimeMs ?? 0) : "—",
+                    r.hasHeavyLoad ? f(r.heavyLoad?.avgLatency ?? 0) : "—",
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
             )
@@ -582,6 +597,10 @@ enum AnalyticsReportRenderer {
     /// Trend metrics yield an OPTIONAL value: a regression fitted over zero
     /// placeholders from cancelled runs would invent a slope. One measured 10ms report
     /// plus two cancelled ones must not regress over 10, 0, 0.
+    ///
+    /// Covers ALL SIX analytics metrics. This list also gates whether the Trends section
+    /// renders at all, so omitting Load Degradation hid the whole section from a store
+    /// whose only phase with 3+ measured reports was Latency Under Load.
     private static func trendMetrics()
         -> [(name: String, value: (TestReport) -> Double?, lowerIsBetter: Bool)]
     {
@@ -595,6 +614,7 @@ enum AnalyticsReportRenderer {
             ),
             (name: "Jitter", value: { $0.results.measuredJitter }, lowerIsBetter: true),
             (name: "Packet Loss", value: { $0.results.measuredPacketLoss }, lowerIsBetter: true),
+            (name: "Load Degradation", value: { $0.results.measuredLoadDegradation }, lowerIsBetter: true),
         ]
     }
 

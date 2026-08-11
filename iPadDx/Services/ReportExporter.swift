@@ -63,6 +63,10 @@ enum ReportExporter {
     private static let notMeasured = "not measured"
 
     /// Generate a clipboard-friendly summary string.
+    ///
+    /// Covers ALL SEVEN phases. Listing only latency, throughput, jitter and packet loss
+    /// meant a run configured with just DNS Resolution, Latency Under Load or Heavy Load
+    /// copied as if it had measured nothing at all.
     static func clipboardSummary(report: TestReport) -> String {
         let r = report.results
         return """
@@ -71,12 +75,36 @@ enum ReportExporter {
         Grade: \(r.overallGrade)
         Bridge: \(report.bridgeTransport ?? "native")
         Link: \(report.results.linkConditions?.summary ?? "Unknown")
+        DNS Resolution: \(dnsSummary(r))
         Latency: \(r.hasLatency ? "avg \(f(r.latencyBurst.avg))ms, p95 \(f(r.latencyBurst.p95))ms" : notMeasured)
         Throughput: \(r.hasThroughput ? r.sustainedThroughput.formattedSpeed : notMeasured)
         Jitter: \(r.hasJitter ? "\(f(r.jitterMeasurement.averageJitter))ms" : notMeasured)
         Packet Loss: \(r.hasPacketLoss ? "\(f(r.packetLossStress.lostPercent))%" : notMeasured)
+        Latency Under Load: \(underLoadSummary(r))
+        Heavy Load: \(heavyLoadSummary(r))
         Duration: \(f(report.durationSeconds))s
         """
+    }
+
+    /// Phase 0 — the time taken to resolve the peer's Bonjour service.
+    private static func dnsSummary(_ r: TestSuiteResults) -> String {
+        guard r.hasDNSResolution, let dns = r.dnsResolution else { return notMeasured }
+        return "\(f(dns.resolutionTimeMs))ms"
+    }
+
+    /// Phase 5 — degradation additionally needs a baseline to compare against, so a run
+    /// that probed under load without one still reports the measurement it does have.
+    private static func underLoadSummary(_ r: TestSuiteResults) -> String {
+        guard r.hasLatencyUnderLoad else { return notMeasured }
+        let avg = "avg \(f(r.latencyUnderLoad.underLoadAvg))ms"
+        guard r.hasLoadDegradation else { return avg }
+        return "\(avg), \(r.latencyUnderLoad.formattedDegradation)"
+    }
+
+    /// Phase 6.
+    private static func heavyLoadSummary(_ r: TestSuiteResults) -> String {
+        guard r.hasHeavyLoad, let heavy = r.heavyLoad else { return notMeasured }
+        return "avg \(f(heavy.avgLatency))ms, \(heavy.formattedThroughput), \(f(heavy.packetLoss))% loss"
     }
 
     /// Batch export: returns URLs for all formats requested.
@@ -100,7 +128,9 @@ enum ReportExporter {
         let headers = [
             "Date", "Local Device", "Remote Device", "Local Chip", "Remote Chip", "Bridge", "Grade",
             "Latency Avg (ms)", "Latency P95 (ms)", "Throughput (B/s)", "Jitter (ms)",
-            "Packet Loss (%)", "Duration (s)",
+            "Packet Loss (%)",
+            "Under Load Baseline (ms)", "Under Load Avg (ms)", "Load Degradation (%)",
+            "Duration (s)",
             "Link", "Interface", "Direct P2P", "Link Changes", "Disconnects", "Discovery Flaps", "SSID",
         ]
         var rows: [String] = [headers.joined(separator: ",")]
@@ -109,7 +139,10 @@ enum ReportExporter {
         for r in reports {
             // Every string field is escaped: device names may contain quotes or commas,
             // and an unrecognised iPad falls back to a raw identifier like "iPad16,3".
-            let row = [
+            // Split into typed sub-arrays: as one 23-element literal with mixed
+            // optional-map expressions the type checker gives up
+            // ("unable to type-check this expression in reasonable time").
+            let identity: [String] = [
                 df.string(from: r.date),
                 csvEscape(r.localDevice.name),
                 csvEscape(r.remoteDevice.name),
@@ -117,14 +150,24 @@ enum ReportExporter {
                 csvEscape(r.remoteDevice.chipFamily),
                 csvEscape(r.bridgeTransport ?? "native"),
                 csvEscape(r.results.overallGrade),
-                // Blank, not zero, when a phase never measured: a spreadsheet treats
-                // an empty cell as missing but would average a 0 as a real reading.
+            ]
+            // Blank, not zero, when a phase never measured: a spreadsheet treats
+            // an empty cell as missing but would average a 0 as a real reading.
+            let metrics: [String] = [
                 r.results.measuredLatencyAvg.map(f) ?? "",
                 r.results.measuredLatencyP95.map(f) ?? "",
                 r.results.measuredThroughput.map(f) ?? "",
                 r.results.measuredJitter.map(f) ?? "",
                 r.results.measuredPacketLoss.map(f) ?? "",
+                // The under-load pair is blank unless the phase probed, and degradation
+                // additionally needs a baseline — a 0% degradation cell would read as
+                // "load made no difference" rather than "never measured".
+                r.results.hasLoadDegradation ? f(r.results.latencyUnderLoad.baselineAvg) : "",
+                r.results.hasLatencyUnderLoad ? f(r.results.latencyUnderLoad.underLoadAvg) : "",
+                r.results.measuredLoadDegradation.map(f) ?? "",
                 f(r.durationSeconds),
+            ]
+            let link: [String] = [
                 csvEscape(r.results.linkConditions?.summary ?? "Unknown"),
                 csvEscape(r.results.linkConditions?.interfaceName ?? ""),
                 (r.results.linkConditions?.usedPeerToPeer ?? false) ? "yes" : "no",
@@ -133,7 +176,7 @@ enum ReportExporter {
                 String(r.results.linkConditions?.discoveryFlaps ?? 0),
                 csvEscape(r.results.linkConditions?.ssid ?? ""),
             ]
-            rows.append(row.joined(separator: ","))
+            rows.append((identity + metrics + link).joined(separator: ","))
         }
 
         let csv = rows.joined(separator: "\n") + "\n"

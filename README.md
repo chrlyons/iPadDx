@@ -204,7 +204,12 @@ Only dimensions that actually produced samples are scored; the total is then nor
 - **Excellent**: 9-12 points
 - **Good**: 6-8 points
 - **Fair**: 3-5 points
-- **Poor**: 0-2 points (or a run that measured nothing at all)
+- **Poor**: 0-2 points
+
+A run in which **no scored dimension produced samples** — a throughput-only or
+DNS-only run, or one cancelled before any probe completed — is recorded as
+**Not graded** rather than Poor. Poor means measured and bad; it is not used for
+absence of data.
 
 ## License
 

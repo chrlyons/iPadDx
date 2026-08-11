@@ -50,6 +50,14 @@ extension ReportSummary {
         hasThroughput ? throughputBps : nil
     }
 
+    /// Mirrors `TestSuiteResults.isFailure` using the persisted flag, so the analytics
+    /// UI classifies a report exactly as the PDF and CSV paths do.
+    var isFailure: Bool {
+        !measuredAnything
+            || overallGrade == SignalQuality.poor.rawValue
+            || overallGrade == SignalQuality.fair.rawValue
+    }
+
     var measuredLoadDegradation: Double? {
         hasLoadDegradation ? loadDegradation : nil
     }
@@ -110,6 +118,8 @@ struct ReportSummary: Identifiable {
     let linkDisconnects: Int
     /// Bonjour discovery dropouts during the run.
     let discoveryFlaps: Int
+    /// See `ReportEntity.measuredAnything`.
+    let measuredAnything: Bool
 
     /// Computed helpers matching DeviceInfo API
     var localChipFamily: String {
@@ -184,6 +194,7 @@ extension ReportSummary {
         linkChanges = entity.linkChanges
         linkDisconnects = entity.linkDisconnects
         discoveryFlaps = entity.discoveryFlaps
+        measuredAnything = entity.measuredAnything
     }
 
     init(from report: TestReport, source: String = "local") {
@@ -239,6 +250,7 @@ extension ReportSummary {
         linkChanges = report.results.linkConditions?.pathChanges ?? 0
         linkDisconnects = report.results.linkConditions?.disconnects.count ?? 0
         discoveryFlaps = report.results.linkConditions?.discoveryFlaps ?? 0
+        measuredAnything = !report.results.measuredNothing
     }
 }
 
@@ -258,20 +270,27 @@ struct BridgeComparisonRow: Identifiable {
     let avgJitter: Double?
     let avgPacketLoss: Double?
     let avgThroughput: Double?
-    let avgGradeScore: Double
+    /// nil when no run in this group was graded.
+    let avgGradeScore: Double?
 
     var id: String {
         bridge
     }
 
     /// Convert grade string to numeric score (0-12).
-    static func gradeScore(_ grade: String) -> Double {
-        switch grade {
-        case "Excellent": 12
-        case "Good": 9
-        case "Fair": 6
-        case "Poor": 3
-        default: 0
+    /// Numeric score for a grade band, or nil when the run was not graded.
+    ///
+    /// This used to return 0 by default, which ranked an ungraded run BELOW Poor (3).
+    /// A bridge whose runs were throughput-only — honestly ungraded — therefore
+    /// averaged worse than a bridge actually measured as Poor, inverting the bridge
+    /// comparison the tool exists for. Callers must average only the non-nil scores.
+    static func gradeScore(_ grade: String) -> Double? {
+        guard let quality = SignalQuality(rawValue: grade) else { return nil }
+        switch quality {
+        case .excellent: return 12
+        case .good: return 9
+        case .fair: return 6
+        case .poor: return 3
         }
     }
 }

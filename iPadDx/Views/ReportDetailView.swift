@@ -109,6 +109,13 @@ struct ReportDetailView: View {
                 jitterCard(report)
                 packetLossCard(report)
                 latencyUnderLoadCard(report)
+
+                // Phase 6. `heavyLoad` has been persisted for a while, but nothing
+                // rendered it, so the whole phase was invisible in report detail.
+                if report.results.hasHeavyLoad, let heavy = report.results.heavyLoad {
+                    heavyLoadCard(heavy)
+                }
+
                 systemMetricsCard(report)
             }
             .padding()
@@ -519,6 +526,26 @@ struct ReportDetailView: View {
         }
     }
 
+    // MARK: - Heavy Load
+
+    /// Phase 6 — only reached with `hasHeavyLoad` true, so every figure here was
+    /// genuinely measured.
+    private func heavyLoadCard(_ heavy: HeavyLoadResult) -> some View {
+        resultCard("Heavy Load Stress", icon: "cpu", color: .red) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 5), spacing: 8) {
+                statItem("Avg Latency", String(format: "%.1fms", heavy.avgLatency), .orange)
+                statItem("Max Latency", String(format: "%.1fms", heavy.maxLatency), .red)
+                statItem("Throughput", heavy.formattedThroughput, .purple)
+                statItem(
+                    "Loss",
+                    String(format: "%.1f%%", heavy.packetLoss),
+                    heavy.packetLoss < 1 ? .green : .red
+                )
+                statItem("Samples", "\(heavy.sampleCount)", .gray)
+            }
+        }
+    }
+
     private func systemMetricsCard(_ report: TestReport) -> some View {
         resultCard("System Metrics", icon: "cpu", color: .indigo) {
             let s = report.results.systemMetrics
@@ -632,12 +659,18 @@ struct ReportDetailView: View {
 
         return resultCard("DNS Resolution", icon: "magnifyingglass.circle.fill", color: .cyan) {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
-                statItem("Time", String(format: "%.0fms", dns.resolutionTimeMs), timeColor)
+                // An unresolved browse stores the elapsed timeout, which is not a
+                // resolution time — showing it would read as a (very slow) success.
+                statItem(
+                    "Time",
+                    dns.resolved ? String(format: "%.0fms", dns.resolutionTimeMs) : notMeasured,
+                    dns.resolved ? timeColor : .gray
+                )
                 statItem("Status", dns.resolved ? "Resolved" : "Failed", dns.resolved ? .green : .red)
-                statItem("Service", dns.serviceName, .gray)
+                statItem("Service", dns.serviceName.isEmpty ? notMeasured : dns.serviceName, .gray)
             }
 
-            if dns.resolutionTimeMs > 300 {
+            if dns.resolved, dns.resolutionTimeMs > 300 {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption2)

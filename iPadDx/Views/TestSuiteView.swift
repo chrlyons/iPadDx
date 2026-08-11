@@ -519,6 +519,21 @@ struct TestSuiteView: View {
 
             // Phases that measured nothing — skipped, or cut short by a cancel —
             // show "Not measured" rather than 0.00ms, which reads as a great result.
+            //
+            // All SEVEN phases get a card. DNS Resolution and Heavy Load Stress were
+            // missing here, so two of the phases the runner had just executed produced
+            // no visible result at all.
+            testResultCard("DNS Resolution", icon: "magnifyingglass.circle.fill", color: .cyan) {
+                let dns = report.results.dnsResolution
+                let ok = report.results.hasDNSResolution
+                let serviceName = dns?.serviceName ?? ""
+                // A browse that never resolved stores the elapsed timeout, not a
+                // resolution time, so only a resolved phase shows a number.
+                resultRow("Time", ok ? String(format: "%.0fms", dns?.resolutionTimeMs ?? 0) : notMeasured)
+                resultRow("Resolved", dns.map { $0.resolved ? "Yes" : "No" } ?? notMeasured)
+                resultRow("Service", serviceName.isEmpty ? notMeasured : serviceName)
+            }
+
             testResultCard("Latency Burst", icon: "bolt.fill", color: .blue) {
                 let l = report.results.latencyBurst
                 let ok = report.results.hasLatency
@@ -572,6 +587,18 @@ struct TestSuiteView: View {
                 )
             }
 
+            // Phase 6 was computed, persisted, and then never rendered anywhere.
+            testResultCard("Heavy Load Stress", icon: "cpu", color: .red) {
+                // nil unless the phase produced probes, so every row below is either a
+                // real measurement or "Not measured".
+                let h = report.results.hasHeavyLoad ? report.results.heavyLoad : nil
+                resultRow("Avg Latency", h.map { String(format: "%.2fms", $0.avgLatency) } ?? notMeasured)
+                resultRow("Max Latency", h.map { String(format: "%.2fms", $0.maxLatency) } ?? notMeasured)
+                resultRow("Throughput", h?.formattedThroughput ?? notMeasured)
+                resultRow("Loss", h.map { String(format: "%.1f%%", $0.packetLoss) } ?? notMeasured)
+                resultRow("Samples", "\(h?.sampleCount ?? 0)")
+            }
+
             testResultCard("System Metrics (Controller)", icon: "cpu", color: .indigo) {
                 let s = report.results.systemMetrics
                 resultRow("Battery Drain", String(format: "%.2f%%", s.batteryDrainPercent))
@@ -595,14 +622,20 @@ struct TestSuiteView: View {
 
     // MARK: - Helpers
 
+    /// Exhaustive over `TestPhase` on purpose — no `default`.
+    ///
+    /// This used to switch over the `phase.color` STRING with a `default: .blue` arm, so
+    /// any phase whose colour name was not listed silently rendered blue. Keyed off the
+    /// phase itself, a new case fails to compile until it is given a colour.
     private func phaseColor(_ phase: TestPhase) -> Color {
-        switch phase.color {
-        case "cyan": .cyan
-        case "blue": .blue
-        case "purple": .purple
-        case "orange": .orange
-        case "red": .red
-        default: .blue
+        switch phase {
+        case .dnsResolution: .cyan
+        case .latencyBurst: .blue
+        case .sustainedThroughput: .purple
+        case .jitterMeasurement: .orange
+        case .packetLossStress: .red
+        case .latencyUnderLoad: .orange
+        case .heavyLoad: .red
         }
     }
 
@@ -817,13 +850,19 @@ struct PhaseInfoSheet: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
     }
 
+    /// Exhaustive over `TestPhase` — no `default`.
+    ///
+    /// The string switch this replaced had no "cyan" arm, so the DNS Resolution info
+    /// sheet fell through `default` and drew its icon in Latency Burst's blue.
     private var phaseColor: Color {
-        switch phase.color {
-        case "blue": .blue
-        case "purple": .purple
-        case "orange": .orange
-        case "red": .red
-        default: .blue
+        switch phase {
+        case .dnsResolution: .cyan
+        case .latencyBurst: .blue
+        case .sustainedThroughput: .purple
+        case .jitterMeasurement: .orange
+        case .packetLossStress: .red
+        case .latencyUnderLoad: .orange
+        case .heavyLoad: .red
         }
     }
 }

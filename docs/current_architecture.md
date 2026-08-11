@@ -514,9 +514,9 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Results[Test Suite Results] --> Gate{"Latency and jitter<br/>both collected nothing?"}
-    Gate -->|Yes| PoorEarly[Poor]
-    Gate -->|No| Score["Score only the dimensions<br/>that produced samples"]
+    Results[Test Suite Results] --> Gate{"Did any SCORED dimension<br/>produce samples?"}
+    Gate -->|No| NotGraded["Not graded"]
+    Gate -->|Yes| Score["Score only the dimensions<br/>that produced samples"]
 
     Score --> Lat{Avg Latency}
     Lat -->|"< 10ms"| L3[+3]
@@ -558,12 +558,22 @@ flowchart TD
     style Good fill:#4a9eff,color:#fff
     style Fair fill:#f5a623,color:#333
     style Poor fill:#e85d75,color:#fff
-    style PoorEarly fill:#e85d75,color:#fff
+    style NotGraded fill:#9b9b9b,color:#fff
 ```
 
-**Only dimensions that actually produced measurements are scored.** Latency counts when `sampleCount > 0`, jitter when `sampleCount > 0`, packet loss when `sent > 0`, and load degradation when `sampleCount > 0`. Each scored dimension contributes 3 points to `possible`; the earned total is then normalised as `earned / possible x 12` so the published 9 / 6 / 3 bands stay meaningful however many phases ran.
+**Only dimensions that actually produced measurements are scored.** Latency counts when `sampleCount > 0`, jitter when `sampleCount > 0`, packet loss when `sent > 0`, and load degradation when `sampleCount > 0` *and* a real baseline exists. Each scored dimension contributes 3 points to `possible`; the earned total is then normalised as `earned / possible x 12` so the published 9 / 6 / 3 bands stay meaningful however many phases ran.
 
-This matters because zero sits in the best-scoring band of every dimension. Scoring a phase that was disabled or that collected nothing would award it the full 3 points, so skipping work would *raise* the grade. If no dimension produced samples the grade is Poor, and a run where both latency and jitter came back empty is Poor before any scoring happens.
+**A run with no scored dimension is `Not graded`, not Poor.** The four scored
+dimensions are latency, jitter, packet loss and load degradation — throughput,
+Heavy Load and DNS Resolution are real measurements but contribute no points. A
+run consisting only of those therefore has nothing to score, and `computeGrade`
+returns nil so the report records `TestSuiteResults.notGradedLabel`. Grading it
+Poor would assert the connection was measured and found bad, which is exactly the
+kind of unearned claim the rest of this document exists to prevent. "Not graded"
+is a fifth possible value of `overallGrade`, and anything enumerating grades must
+use `TestSuiteResults.allGradeValues` rather than the four bands.
+
+This matters because zero sits in the best-scoring band of every dimension. Scoring a phase that was disabled or that collected nothing would award it the full 3 points, so skipping work would *raise* the grade. If no scored dimension produced samples there is nothing to normalise against, and the run is recorded as `Not graded` — see the paragraph above. Poor is reserved for runs that were measured and scored below 3 of 12.
 
 ---
 

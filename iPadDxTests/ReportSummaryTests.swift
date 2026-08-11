@@ -98,6 +98,9 @@ final class ReportSummaryTests: XCTestCase {
         XCTAssertEqual(BridgeComparisonRow.gradeScore("Good"), 9)
         XCTAssertEqual(BridgeComparisonRow.gradeScore("Fair"), 6)
         XCTAssertEqual(BridgeComparisonRow.gradeScore("Poor"), 3)
-        XCTAssertEqual(BridgeComparisonRow.gradeScore("Unknown"), 0)
+        // nil, not 0: 0 ranked an ungraded run BELOW Poor (3), so a bridge whose runs
+        // were ungraded averaged worse than one genuinely measured as Poor.
+        XCTAssertNil(BridgeComparisonRow.gradeScore("Unknown"))
+        XCTAssertNil(BridgeComparisonRow.gradeScore(TestSuiteResults.notGradedLabel))
     }
 }

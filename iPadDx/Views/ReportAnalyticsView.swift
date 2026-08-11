@@ -147,18 +147,20 @@ struct ReportAnalyticsView: View {
         .sorted { $0.pair < $1.pair }
     }
 
+    /// Counts EVERY value `overallGrade` can hold, including "Not graded".
+    ///
+    /// The hand-written ["Excellent","Good","Fair","Poor"] literal this replaced dropped
+    /// ungraded reports from the pie while the header still counted them, so the slices
+    /// did not add up to the stated report count. `allGradeValues` is the single list,
+    /// and `Color.gradeColor` supplies the matching colour (grey for ungraded) so the
+    /// two can never drift out of step the way parallel arrays did.
     private var gradeDistribution: [(grade: String, count: Int, color: Color)] {
-        let grades = ["Excellent", "Good", "Fair", "Poor"]
-        let colors: [Color] = [.green, .blue, .orange, .red]
         let summaries = filteredSummaries
-        var result: [(grade: String, count: Int, color: Color)] = []
-        for i in 0 ..< grades.count {
-            let gradeCount = summaries.filter { $0.overallGrade == grades[i] }.count
-            if gradeCount > 0 {
-                result.append((grade: grades[i], count: gradeCount, color: colors[i]))
-            }
+        return TestSuiteResults.allGradeValues.compactMap { grade -> (grade: String, count: Int, color: Color)? in
+            let gradeCount = summaries.filter { $0.overallGrade == grade }.count
+            guard gradeCount > 0 else { return nil }
+            return (grade: grade, count: gradeCount, color: Color.gradeColor(grade))
         }
-        return result
     }
 
     var body: some View {
@@ -513,6 +515,10 @@ struct ReportAnalyticsView: View {
             ("Throughput", { $0.measuredThroughput }, false),
             ("Jitter", { $0.measuredJitter }, true),
             ("Packet Loss", { $0.measuredPacketLoss }, true),
+            // Phase 5's headline number. Omitted here for a long time even though the
+            // metric picker offers it, so the badge row silently covered 5 of the 6
+            // analytics metrics.
+            ("Load Degradation", { $0.measuredLoadDegradation }, true),
         ]
 
         return metrics.compactMap { metric in
@@ -827,6 +833,23 @@ struct ReportAnalyticsView: View {
 
     // MARK: - OS Version Breakdown
 
+    /// The `ReportSummary` equivalent of `TestSuiteResults.isFailure`.
+    ///
+    /// A run that measured nothing at all is COUNTED as a failure rather than dropped
+    /// from the denominator: it is the truest failure there is, and excluding it would
+    /// Mirrors `TestSuiteResults.isFailure` exactly, via the persisted
+    /// `measuredAnything` flag.
+    ///
+    /// Reconstructing "measured nothing" from the summary's four scored columns was
+    /// wrong: DNS Resolution, Heavy Load and Latency Under Load are real measurements
+    /// that the summary does not carry, so a DNS-only or Heavy Load-only run was
+    /// counted as a failure here while the PDF and CSV — which load the full report —
+    /// counted it as a success. The flag is computed from the full results at save
+    /// time so both paths agree.
+    private func isFailure(_ summary: ReportSummary) -> Bool {
+        summary.isFailure
+    }
+
     private var osVersionAggregates: [OSAggregate] {
         var map: [String: [ReportSummary]] = [:]
         for summary in filteredSummaries {
@@ -839,7 +862,7 @@ struct ReportAnalyticsView: View {
         }
         return map.map { version, items in
             let n = Double(items.count)
-            let failCount = items.filter { $0.overallGrade == "Poor" || $0.overallGrade == "Fair" }.count
+            let failCount = items.filter(isFailure).count
             return OSAggregate(
                 version: version,
                 count: items.count,

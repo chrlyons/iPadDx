@@ -573,8 +573,13 @@ struct DiagnosticDashboardView: View {
                         .foregroundStyle(Color.adaptive(.blue, scheme: colorScheme))
                     VStack(alignment: .leading) {
                         Text("Run Test Suite").font(.headline)
-                        Text("6 standardized tests for latency, throughput, jitter, stress, and more")
-                            .font(.caption).foregroundStyle(.secondary)
+                        // Derived, not hardcoded: the literal said 6 while the suite
+                        // had grown to 7 phases.
+                        Text(
+                            "\(TestPhase.allCases.count) standardized tests for "
+                                + "latency, throughput, jitter, stress, and more"
+                        )
+                        .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Image(systemName: "chevron.right").foregroundStyle(.secondary)

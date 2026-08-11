@@ -10,6 +10,14 @@ class ReportEntity {
     var linkChanges: Int = 0
     var linkDisconnects: Int = 0
     var discoveryFlaps: Int = 0
+    /// Whether the run measured ANY phase, mirroring TestSuiteResults.measuredNothing.
+    ///
+    /// ReportSummary carries only the four scored columns, so it cannot tell that a
+    /// DNS-only, Heavy Load-only or under-load-only run measured something. Without
+    /// this the analytics UI marked those as failures while the PDF and CSV — which
+    /// load the full report — did not. Defaults true so reports written before this
+    /// existed are not retroactively branded failures.
+    var measuredAnything: Bool = true
     var date: Date
     var durationSeconds: Double
     var overallGrade: String
@@ -86,6 +94,7 @@ class ReportEntity {
         linkChanges = report.results.linkConditions?.pathChanges ?? 0
         linkDisconnects = report.results.linkConditions?.disconnects.count ?? 0
         discoveryFlaps = report.results.linkConditions?.discoveryFlaps ?? 0
+        measuredAnything = !report.results.measuredNothing
 
         localName = report.localDevice.name
         localModel = report.localDevice.model

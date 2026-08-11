@@ -165,8 +165,9 @@ class ReportStore {
                 avgJitter: mean(items.compactMap(\.measuredJitter)),
                 avgPacketLoss: mean(items.compactMap(\.measuredPacketLoss)),
                 avgThroughput: mean(items.compactMap(\.measuredThroughput)),
-                avgGradeScore: items.map { BridgeComparisonRow.gradeScore($0.overallGrade) }
-                    .reduce(0, +) / Double(items.count)
+                // Only graded runs contribute; an ungraded run has no score, and
+                // treating it as 0 would rank it below Poor.
+                avgGradeScore: mean(items.compactMap { BridgeComparisonRow.gradeScore($0.overallGrade) })
             )
         }.sorted { $0.bridge < $1.bridge }
     }
@@ -249,6 +250,11 @@ class ReportStore {
         Chip,\(csvEscape(report.remoteDevice.chipFamily))
         OS,\(csvEscape(report.remoteDevice.osVersion))
 
+        DNS Resolution
+        Resolved,\(r.dnsResolution.map { $0.resolved ? "yes" : "no" } ?? "")
+        Time,\(r.hasDNSResolution ? String(format: "%.0f", r.dnsResolution?.resolutionTimeMs ?? 0) + "ms" : "")
+        Service,\(csvEscape(r.dnsResolution?.serviceName ?? ""))
+
         Latency Burst (\(r.latencyBurst.sampleCount) samples)
         Min,\(detail(r.hasLatency, "%.2f", r.latencyBurst.min, "ms"))
         Max,\(detail(r.hasLatency, "%.2f", r.latencyBurst.max, "ms"))
@@ -274,6 +280,12 @@ class ReportStore {
         Baseline Avg,\(detail(r.hasLoadDegradation, "%.2f", r.latencyUnderLoad.baselineAvg, "ms"))
         Under Load Avg,\(detail(r.latencyUnderLoad.sampleCount > 0, "%.2f", r.latencyUnderLoad.underLoadAvg, "ms"))
         Degradation,\(detail(r.hasLoadDegradation, "%.1f", r.latencyUnderLoad.degradationPercent, "%"))
+
+        Heavy Load Stress (\(r.heavyLoad?.sampleCount ?? 0) samples)
+        Avg Latency,\(detail(r.hasHeavyLoad, "%.2f", r.heavyLoad?.avgLatency ?? 0, "ms"))
+        Max Latency,\(detail(r.hasHeavyLoad, "%.2f", r.heavyLoad?.maxLatency ?? 0, "ms"))
+        Throughput,\(r.hasHeavyLoad ? csvEscape(r.heavyLoad?.formattedThroughput ?? "") : "")
+        Packet Loss,\(detail(r.hasHeavyLoad, "%.1f", r.heavyLoad?.packetLoss ?? 0, "%"))
 
         System Metrics
         Battery Start,\(r.systemMetrics.batteryStart >= 0 ? "\(Int(r.systemMetrics.batteryStart * 100))%" : "N/A")
@@ -341,6 +353,13 @@ class ReportStore {
             "Load Under Load Avg (ms)",
             "Load Degradation %",
             "Load Samples",
+            "DNS Resolved",
+            "DNS Time (ms)",
+            "Heavy Avg Latency (ms)",
+            "Heavy Max Latency (ms)",
+            "Heavy Throughput (B/s)",
+            "Heavy Packet Loss %",
+            "Heavy Samples",
             "Battery Start %",
             "Battery End %",
             "Battery Drain %",
@@ -400,6 +419,15 @@ class ReportStore {
                 cell(t.latencyUnderLoad.sampleCount > 0, "%.2f", t.latencyUnderLoad.underLoadAvg),
                 cell(t.hasLoadDegradation, "%.1f", t.latencyUnderLoad.degradationPercent),
                 "\(t.latencyUnderLoad.sampleCount)",
+                // DNS and Heavy Load — the two phases the tabular exports dropped
+                // entirely, so an audit spreadsheet covered only five of seven phases.
+                t.dnsResolution.map { $0.resolved ? "yes" : "no" } ?? "",
+                cell(t.hasDNSResolution, "%.0f", t.dnsResolution?.resolutionTimeMs ?? 0),
+                cell(t.hasHeavyLoad, "%.2f", t.heavyLoad?.avgLatency ?? 0),
+                cell(t.hasHeavyLoad, "%.2f", t.heavyLoad?.maxLatency ?? 0),
+                cell(t.hasHeavyLoad, "%.0f", t.heavyLoad?.throughputBps ?? 0),
+                cell(t.hasHeavyLoad, "%.1f", t.heavyLoad?.packetLoss ?? 0),
+                "\(t.heavyLoad?.sampleCount ?? 0)",
                 s.batteryStart >= 0 ? "\(Int(s.batteryStart * 100))" : "",
                 s.batteryEnd >= 0 ? "\(Int(s.batteryEnd * 100))" : "",
                 String(format: "%.2f", s.batteryDrainPercent),
@@ -433,7 +461,9 @@ class ReportStore {
         var sections: [String] = []
 
         // Grade distribution is over ALL reports — every report has a grade, including
-        // partial ones, so this denominator is correct.
+        // partial ones, which carry `TestSuiteResults.notGradedLabel`. This denominator
+        // is only correct because the rows below enumerate
+        // `TestSuiteResults.allGradeValues` rather than the four scored bands.
         let count = Double(reports.count)
 
         /// Section 1: Overview
@@ -487,25 +517,22 @@ class ReportStore {
         """)
 
         // Section 2: Grade distribution
-        let grades = ["Excellent", "Good", "Fair", "Poor"]
-        let gradeCounts = grades.map { grade in reports.filter { $0.results.overallGrade == grade }.count }
+        let gradeRows = zip(TestSuiteResults.allGradeValues, gradeCounts(reports))
+            .map { grade, n in "\(csvEscape(grade)),\(n),\(f(Double(n) / count * 100))%" }
         sections.append("""
         Grade Distribution
         Grade,Count,Percent
-        \(grades.enumerated()
-            .map { "\($0.element),\(gradeCounts[$0.offset]),\(f(Double(gradeCounts[$0.offset]) / count * 100))%" }
-            .joined(separator: "\n"))
+        \(gradeRows.joined(separator: "\n"))
         """)
 
         // Section 3: Bridge Comparison (only if multiple bridges)
         if bridges.count > 1 {
             var bridgeRows = [
-                "Bridge,Reports,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),Excellent,Good,Fair,Poor",
+                "Bridge,Reports,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),\(gradeColumnHeader)",
             ]
             for bridge in bridges {
                 let br = reports.filter { ($0.bridgeTransport ?? "native") == bridge }
-                let bn = Double(br.count)
-                guard bn > 0 else { continue }
+                guard !br.isEmpty else { continue }
                 let row = [
                     csvEscape(bridge),
                     "\(br.count)",
@@ -515,11 +542,7 @@ class ReportStore {
                     measuredAvg(br) { $0.measuredJitter },
                     measuredAvg(br) { $0.measuredPacketLoss },
                     measuredAvg(br) { $0.measuredLoadDegradation },
-                    "\(br.filter { $0.results.overallGrade == "Excellent" }.count)",
-                    "\(br.filter { $0.results.overallGrade == "Good" }.count)",
-                    "\(br.filter { $0.results.overallGrade == "Fair" }.count)",
-                    "\(br.filter { $0.results.overallGrade == "Poor" }.count)",
-                ]
+                ] + gradeCounts(br).map { "\($0)" }
                 bridgeRows.append(row.joined(separator: ","))
             }
             sections.append("Bridge Comparison\n" + bridgeRows.joined(separator: "\n"))
@@ -532,13 +555,12 @@ class ReportStore {
         var pairRows: [String]
         if bridges.count > 1 {
             pairRows = [
-                "Pair,Bridge,Count,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),Excellent,Good,Fair,Poor",
+                "Pair,Bridge,Count,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),\(gradeColumnHeader)",
             ]
             for (pair, pairReports) in grouped.sorted(by: { $0.key < $1.key }) {
                 let byBridge = Dictionary(grouping: pairReports) { $0.bridgeTransport ?? "native" }
                 for bridge in byBridge.keys.sorted() {
                     let br = byBridge[bridge]!
-                    let n = Double(br.count)
                     let row = [
                         csvEscape(pair), csvEscape(bridge), "\(br.count)",
                         measuredAvg(br) { $0.measuredLatencyAvg },
@@ -547,20 +569,15 @@ class ReportStore {
                         measuredAvg(br) { $0.measuredJitter },
                         measuredAvg(br) { $0.measuredPacketLoss },
                         measuredAvg(br) { $0.measuredLoadDegradation },
-                        "\(br.filter { $0.results.overallGrade == "Excellent" }.count)",
-                        "\(br.filter { $0.results.overallGrade == "Good" }.count)",
-                        "\(br.filter { $0.results.overallGrade == "Fair" }.count)",
-                        "\(br.filter { $0.results.overallGrade == "Poor" }.count)",
-                    ]
+                    ] + gradeCounts(br).map { "\($0)" }
                     pairRows.append(row.joined(separator: ","))
                 }
             }
         } else {
             pairRows = [
-                "Pair,Count,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),Excellent,Good,Fair,Poor",
+                "Pair,Count,Avg Latency (ms),P95 Latency (ms),Throughput (MB/s),Avg Jitter (ms),Packet Loss (%),Load Degradation (%),\(gradeColumnHeader)",
             ]
             for (pair, pairReports) in grouped.sorted(by: { $0.key < $1.key }) {
-                let n = Double(pairReports.count)
                 let row = [
                     csvEscape(pair), "\(pairReports.count)",
                     measuredAvg(pairReports) { $0.measuredLatencyAvg },
@@ -569,11 +586,7 @@ class ReportStore {
                     measuredAvg(pairReports) { $0.measuredJitter },
                     measuredAvg(pairReports) { $0.measuredPacketLoss },
                     measuredAvg(pairReports) { $0.measuredLoadDegradation },
-                    "\(pairReports.filter { $0.results.overallGrade == "Excellent" }.count)",
-                    "\(pairReports.filter { $0.results.overallGrade == "Good" }.count)",
-                    "\(pairReports.filter { $0.results.overallGrade == "Fair" }.count)",
-                    "\(pairReports.filter { $0.results.overallGrade == "Poor" }.count)",
-                ]
+                ] + gradeCounts(pairReports).map { "\($0)" }
                 pairRows.append(row.joined(separator: ","))
             }
         }
@@ -629,8 +642,11 @@ class ReportStore {
         ]
         for (pair, pairReports) in osGrouped.sorted(by: { $0.key < $1.key }) {
             let n = Double(pairReports.count)
-            let failCount = pairReports
-                .filter { $0.results.overallGrade == "Poor" || $0.results.overallGrade == "Fair" }.count
+            // `isFailure` also counts runs that measured nothing. Matching on Poor/Fair
+            // alone left collapsed runs in the denominator with no way to be a failure,
+            // so an OS pair whose runs all collapsed reported a 0% fail rate in the same
+            // CSV that listed every one of them under "Failed Tests".
+            let failCount = pairReports.filter(\.results.isFailure).count
             let row = [
                 csvEscape(pair), "\(pairReports.count)",
                 measuredAvg(pairReports) { $0.measuredLatencyAvg },
@@ -685,6 +701,23 @@ class ReportStore {
         let values = reports.compactMap { metric($0.results) }
         guard !values.isEmpty else { return "N/A" }
         return f(values.reduce(0, +) / Double(values.count))
+    }
+
+    /// The grade columns shared by every breakdown section: one per value `overallGrade`
+    /// can hold, `TestSuiteResults.notGradedLabel` included.
+    ///
+    /// Header and counts are derived from the SAME list so the grade columns always
+    /// reconcile with the row's report count. Hand-written Excellent/Good/Fair/Poor
+    /// headers silently dropped every ungraded run.
+    nonisolated private var gradeColumnHeader: String {
+        TestSuiteResults.allGradeValues.map { csvEscape($0) }.joined(separator: ",")
+    }
+
+    /// How many of `reports` hold each of `TestSuiteResults.allGradeValues`, in that order.
+    nonisolated private func gradeCounts(_ reports: [TestReport]) -> [Int] {
+        TestSuiteResults.allGradeValues.map { grade in
+            reports.filter { $0.results.overallGrade == grade }.count
+        }
     }
 
     /// A formatted value with its unit, or a blank cell when the phase measured nothing.

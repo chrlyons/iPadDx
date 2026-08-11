@@ -508,7 +508,9 @@ final class SummaryValidityTests: XCTestCase {
             loadBaselineAvg: loadBaseline, loadUnderLoadAvg: 20,
             loadDegradation: degradation, loadSampleCount: loadSamples,
             bridgeTransport: "native",
-            usedPeerToPeer: false, linkChanges: 0, linkDisconnects: 0, discoveryFlaps: 0
+            usedPeerToPeer: false, linkChanges: 0, linkDisconnects: 0, discoveryFlaps: 0,
+            measuredAnything: latencySamples > 0 || jitterSamples > 0
+                || lossSent > 0 || throughput > 0
         )
     }
 
@@ -824,14 +826,14 @@ final class BridgeComparisonValidityTests: XCTestCase {
         XCTAssertEqual(row.avgLatency, 12.5)
     }
 
-    func testGradeScoreMappingUnchanged() {
-        // Band midpoints on the 12-point scale, not 0-based: Poor is 3, and an
-        // unrecognised grade is the only thing that scores 0.
+    func testGradeScoreIsNilForAnythingThatIsNotABand() {
+        // Band midpoints on the 12-point scale. Anything that is not one of the four
+        // bands has NO score — returning 0 ranked it below Poor (3).
         XCTAssertEqual(BridgeComparisonRow.gradeScore("Excellent"), 12)
         XCTAssertEqual(BridgeComparisonRow.gradeScore("Good"), 9)
         XCTAssertEqual(BridgeComparisonRow.gradeScore("Fair"), 6)
         XCTAssertEqual(BridgeComparisonRow.gradeScore("Poor"), 3)
-        XCTAssertEqual(BridgeComparisonRow.gradeScore("Cancelled"), 0)
+        XCTAssertNil(BridgeComparisonRow.gradeScore("Cancelled"))
     }
 }
 
@@ -1044,8 +1046,8 @@ final class UngradedRunTests: XCTestCase {
         // It must not be mistaken for a band by grade filters or distributions.
         let bands = SignalQuality.allCases.map(\.rawValue)
         XCTAssertFalse(bands.contains(TestSuiteResults.notGradedLabel))
-        // And it must score 0 rather than colliding with a real band's score.
-        XCTAssertEqual(BridgeComparisonRow.gradeScore(TestSuiteResults.notGradedLabel), 0)
+        // And it must have NO score — 0 would rank it below Poor.
+        XCTAssertNil(BridgeComparisonRow.gradeScore(TestSuiteResults.notGradedLabel))
     }
 }
 
@@ -1144,5 +1146,139 @@ final class PhaseCoverageTests: XCTestCase {
         XCTAssertTrue(r.hasLatencyUnderLoad)
         XCTAssertFalse(r.hasLoadDegradation, "no baseline means no comparable degradation")
         XCTAssertFalse(r.measuredNothing)
+    }
+}
+
+/// Guards CSV column alignment.
+///
+/// The per-report CSV grew from 13 to 23 columns across this work, with headers and
+/// values built as separate lists. A mismatch silently shifts every field after the
+/// insertion point — the exact corruption the escaping fix was meant to prevent.
+final class CSVColumnAlignmentTests: XCTestCase {
+    private func report(measured: Bool) -> TestReport {
+        TestReport(
+            id: UUID(),
+            date: Date(),
+            localDevice: DeviceInfo(
+                name: "A, with comma", model: "iPad", modelNumber: "iPad16,3", osVersion: "18.0"
+            ),
+            remoteDevice: DeviceInfo(
+                name: "B \"quoted\"", model: "iPad", modelNumber: "iPad15,7", osVersion: "18.0"
+            ),
+            results: TestSuiteResults(
+                latencyBurst: LatencyBurstResult(
+                    min: 1, max: 2, avg: 1.5, median: 1.5, p95: 2,
+                    sampleCount: measured ? 100 : 0, samples: []
+                ),
+                sustainedThroughput: ThroughputResult(
+                    bytesPerSecond: measured ? 5_000_000 : 0, totalBytes: 10, durationSeconds: 1
+                ),
+                jitterMeasurement: JitterResult(
+                    averageJitter: 1, maxJitter: 2, sampleCount: measured ? 150 : 0
+                ),
+                packetLossStress: PacketLossResult(
+                    sent: measured ? 500 : 0, received: measured ? 500 : 0,
+                    lostPercent: 0, durationSeconds: 1
+                ),
+                latencyUnderLoad: LatencyUnderLoadResult(
+                    baselineAvg: measured ? 10 : 0, underLoadAvg: measured ? 15 : 0,
+                    degradationPercent: 50, sampleCount: measured ? 50 : 0
+                ),
+                systemMetrics: SystemMetricsResult(
+                    batteryStart: 1, batteryEnd: 1, batteryDrainPercent: 0,
+                    peakCpuUsage: 1, avgCpuUsage: 1, peakMemoryMB: 1,
+                    thermalStateDuringTest: "Nominal"
+                ),
+                overallGrade: measured ? "Good" : TestSuiteResults.notGradedLabel
+            ),
+            durationSeconds: 42,
+            errors: nil,
+            skippedPhases: nil,
+            bridgeTransport: "native"
+        )
+    }
+
+    /// Splits a CSV line on commas that are not inside quotes.
+    private func fields(_ line: String) -> [String] {
+        var out: [String] = []
+        var current = ""
+        var inQuotes = false
+        for ch in line {
+            if ch == "\"" {
+                inQuotes.toggle()
+                current.append(ch)
+            } else if ch == ",", !inQuotes {
+                out.append(current)
+                current = ""
+            } else {
+                current.append(ch)
+            }
+        }
+        out.append(current)
+        return out
+    }
+
+    private func exportedLines(_ reports: [TestReport]) throws -> [String] {
+        let urls = try ReportExporter.exportBatch(reports: reports, format: .csv)
+        let url = try XCTUnwrap(urls.first)
+        defer { try? FileManager.default.removeItem(at: url) }
+        return try String(contentsOf: url, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+    }
+
+    func testHeaderAndRowColumnCountsMatch() throws {
+        let lines = try exportedLines([report(measured: true), report(measured: false)])
+        let headerCount = fields(lines[0]).count
+        XCTAssertGreaterThan(headerCount, 20, "sanity: the wide per-report CSV")
+        for (index, line) in lines.dropFirst().enumerated() {
+            XCTAssertEqual(
+                fields(line).count, headerCount,
+                "row \(index) has \(fields(line).count) fields but the header has \(headerCount)"
+            )
+        }
+    }
+
+    func testUnmeasuredRowUsesBlanksNotZeros() throws {
+        let lines = try exportedLines([report(measured: false)])
+        let headers = fields(lines[0])
+        let values = fields(lines[1])
+        for name in ["Latency Avg (ms)", "Throughput (B/s)", "Jitter (ms)", "Load Degradation (%)"] {
+            let index = try XCTUnwrap(headers.firstIndex(of: name), "missing column \(name)")
+            XCTAssertEqual(values[index], "", "\(name) must be blank, not 0, when unmeasured")
+        }
+    }
+
+    /// The summary CSV grew DNS and Heavy Load columns; header and values are built
+    /// as separate lists there too.
+    @MainActor
+    func testSummaryCSVHeaderAndRowsAlign() throws {
+        let store = ReportStore()
+        let url = try XCTUnwrap(
+            store.exportSummaryCSV(for: [report(measured: true), report(measured: false)])
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+        let lines = try String(contentsOf: url, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        let headerCount = fields(lines[0]).count
+        XCTAssertGreaterThan(headerCount, 30, "sanity: the wide summary CSV")
+        for (index, line) in lines.dropFirst().enumerated() {
+            XCTAssertEqual(
+                fields(line).count, headerCount,
+                "summary row \(index) has \(fields(line).count) fields, header has \(headerCount)"
+            )
+        }
+        for column in ["DNS Resolved", "Heavy Samples", "Heavy Avg Latency (ms)"] {
+            XCTAssertTrue(
+                fields(lines[0]).contains(column),
+                "summary CSV must cover all seven phases — missing \(column)"
+            )
+        }
+    }
+
+    func testDeviceNamesWithCommasAndQuotesDoNotShiftColumns() throws {
+        // The names in the fixture contain both; if escaping regressed, the field
+        // count above would drift.
+        let lines = try exportedLines([report(measured: true)])
+        XCTAssertEqual(fields(lines[1]).count, fields(lines[0]).count)
     }
 }

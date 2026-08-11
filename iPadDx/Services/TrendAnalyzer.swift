@@ -122,51 +122,44 @@ enum TrendAnalyzer {
         return days > 0 ? "\(days)d span, \(dates.count) reports" : "same day, \(dates.count) reports"
     }
 
+    /// Every metric the analytics PDF trends, in the same order, so the two cannot drift.
+    ///
+    /// Values are OPTIONAL on purpose: disabled and cancelled phases persist zero
+    /// placeholders, and a regression fitted over those would invent a slope — one
+    /// measured 10ms report plus two cancelled ones must not regress over 10, 0, 0.
+    private static func metrics()
+        -> [(name: String, value: (ReportSummary) -> Double?, lowerIsBetter: Bool)]
+    {
+        [
+            (name: "Avg Latency", value: { $0.measuredLatencyAvg }, lowerIsBetter: true),
+            (name: "P95 Latency", value: { $0.measuredLatencyP95 }, lowerIsBetter: true),
+            (name: "Throughput", value: { $0.measuredThroughput }, lowerIsBetter: false),
+            (name: "Jitter", value: { $0.measuredJitter }, lowerIsBetter: true),
+            (name: "Packet Loss", value: { $0.measuredPacketLoss }, lowerIsBetter: true),
+            (name: "Load Degradation", value: { $0.measuredLoadDegradation }, lowerIsBetter: true),
+        ]
+    }
+
     /// Analyze all key metrics from report summaries.
     /// Analyses every metric at once. Used by the PDF trend section and available to
     /// any caller that wants the full set rather than one metric at a time.
+    ///
+    /// Each metric is fitted over the reports that actually measured IT, so a store with
+    /// three throughput reports still trends throughput even when latency was disabled.
     static func analyzeAll(summaries: [ReportSummary]) -> [TrendResult] {
-        guard summaries.count >= 3 else { return [] }
         let sorted = summaries.sorted { $0.date < $1.date }
-        let period = describePeriod(dates: sorted.map(\.date))
-
-        var results: [TrendResult] = []
-
-        if let t = analyzeTrend(
-            samples: sorted.map { (date: $0.date, value: $0.latencyAvg) },
-            metric: "Avg Latency", lowerIsBetter: true, period: period
-        ) {
-            results.append(t)
+        return metrics().compactMap { metric -> TrendResult? in
+            let samples: [(date: Date, value: Double)] = sorted.compactMap { summary in
+                metric.value(summary).map { (date: summary.date, value: $0) }
+            }
+            // The period describes the window the regression actually covers, which is
+            // the measured subset — not the full report range.
+            return analyzeTrend(
+                samples: samples,
+                metric: metric.name,
+                lowerIsBetter: metric.lowerIsBetter,
+                period: describePeriod(dates: samples.map(\.date))
+            )
         }
-
-        if let t = analyzeTrend(
-            samples: sorted.map { (date: $0.date, value: $0.latencyP95) },
-            metric: "P95 Latency", lowerIsBetter: true, period: period
-        ) {
-            results.append(t)
-        }
-
-        if let t = analyzeTrend(
-            samples: sorted.map { (date: $0.date, value: $0.throughputBps) },
-            metric: "Throughput", lowerIsBetter: false, period: period
-        ) {
-            results.append(t)
-        }
-
-        if let t = analyzeTrend(
-            samples: sorted.map { (date: $0.date, value: $0.jitterAvg) },
-            metric: "Jitter", lowerIsBetter: true, period: period
-        ) {
-            results.append(t)
-        }
-
-        if let t = analyzeTrend(
-            samples: sorted.map { (date: $0.date, value: $0.packetLossPercent) },
-            metric: "Packet Loss", lowerIsBetter: true, period: period
-        ) {
-            results.append(t)
-        }
-
-        return results
     }
 }

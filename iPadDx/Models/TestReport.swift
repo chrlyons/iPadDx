@@ -196,6 +196,27 @@ extension TestSuiteResults {
     /// Shown when a run produced measurements but none in a scored dimension.
     static let notGradedLabel = "Not graded"
 
+    /// EVERY value `overallGrade` can hold — the four scored bands plus "Not graded".
+    ///
+    /// Anything enumerating grades must use this. Hand-written
+    /// ["Excellent","Good","Fair","Poor"] literals dropped ungraded reports from grade
+    /// distributions while still dividing by the full report count, so the percentages
+    /// did not sum to 100.
+    static let allGradeValues: [String] =
+        SignalQuality.allCases.map(\.rawValue) + [notGradedLabel]
+
+    /// Whether this run should count as a failure in fail-rate statistics.
+    ///
+    /// A run that measured nothing is the truest failure; previously those were
+    /// excluded from fail counts while staying in the denominator, so a report set
+    /// where every run collapsed showed "Fail Rate 0.0%" in the same PDF that listed
+    /// them all under "Failed Tests".
+    var isFailure: Bool {
+        measuredNothing
+            || overallGrade == SignalQuality.poor.rawValue
+            || overallGrade == SignalQuality.fair.rawValue
+    }
+
     var hasLatency: Bool {
         latencyBurst.sampleCount > 0
     }

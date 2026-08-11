@@ -210,16 +210,32 @@ struct TestInfoView: View {
             Label("Grading Algorithm", systemImage: "star.leadinghalf.filled")
                 .font(.headline)
 
-            Text("Each test contributes 0–3 points to a composite score (max 12). The grade is based on the total:")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(
+                "Each scored test contributes 0–3 points. Only phases that actually produced "
+                    + "measurements count, and the total is normalised onto a 12-point scale, "
+                    + "so skipping a phase neither raises nor lowers the grade:"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             VStack(spacing: 6) {
-                gradeRow("Excellent", "9–12 points", .green)
-                gradeRow("Good", "6–8 points", .blue)
-                gradeRow("Fair", "3–5 points", .orange)
-                gradeRow("Poor", "0–2 points", .red)
+                gradeRow(SignalQuality.excellent.rawValue, "9–12 points", .green)
+                gradeRow(SignalQuality.good.rawValue, "6–8 points", .blue)
+                gradeRow(SignalQuality.fair.rawValue, "3–5 points", .orange)
+                gradeRow(SignalQuality.poor.rawValue, "0–2 points", .red)
+                // The fifth value overallGrade can hold. Documenting only the four
+                // bands left "Not graded" reports looking like a bug in the app.
+                gradeRow(TestSuiteResults.notGradedLabel, "nothing scorable measured", .gray)
             }
+
+            Text(
+                "Only Latency, Jitter, Packet Loss and Load Degradation are scored. A run that "
+                    + "measured none of them — a throughput-only run, or one cancelled early — is "
+                    + "reported as \"\(TestSuiteResults.notGradedLabel)\" rather than Poor, because "
+                    + "nothing was measured badly; nothing was measured at all."
+            )
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
 
             Divider()
 
