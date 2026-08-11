@@ -517,38 +517,59 @@ struct TestSuiteView: View {
             .padding()
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
 
+            // Phases that measured nothing — skipped, or cut short by a cancel —
+            // show "Not measured" rather than 0.00ms, which reads as a great result.
             testResultCard("Latency Burst", icon: "bolt.fill", color: .blue) {
                 let l = report.results.latencyBurst
-                resultRow("Min", String(format: "%.2fms", l.min))
-                resultRow("Max", String(format: "%.2fms", l.max))
-                resultRow("Avg", String(format: "%.2fms", l.avg))
-                resultRow("Median", String(format: "%.2fms", l.median))
-                resultRow("P95", String(format: "%.2fms", l.p95))
+                let ok = report.results.hasLatency
+                resultRow("Min", ok ? String(format: "%.2fms", l.min) : notMeasured)
+                resultRow("Max", ok ? String(format: "%.2fms", l.max) : notMeasured)
+                resultRow("Avg", ok ? String(format: "%.2fms", l.avg) : notMeasured)
+                resultRow("Median", ok ? String(format: "%.2fms", l.median) : notMeasured)
+                resultRow("P95", ok ? String(format: "%.2fms", l.p95) : notMeasured)
                 resultRow("Samples", "\(l.sampleCount)")
             }
 
             testResultCard("Throughput", icon: "arrow.up.arrow.down.circle.fill", color: .purple) {
-                resultRow("Speed", report.results.sustainedThroughput.formattedSpeed)
-                resultRow("Data Sent", formatBytes(report.results.sustainedThroughput.totalBytes))
-                resultRow("Duration", String(format: "%.2fs", report.results.sustainedThroughput.durationSeconds))
+                let t = report.results.sustainedThroughput
+                let ok = report.results.hasThroughput
+                resultRow("Speed", ok ? t.formattedSpeed : notMeasured)
+                resultRow("Data Sent", ok ? formatBytes(t.totalBytes) : notMeasured)
+                resultRow("Duration", ok ? String(format: "%.2fs", t.durationSeconds) : notMeasured)
             }
 
             testResultCard("Jitter", icon: "waveform.path", color: .orange) {
-                resultRow("Average", String(format: "%.2fms", report.results.jitterMeasurement.averageJitter))
-                resultRow("Max", String(format: "%.2fms", report.results.jitterMeasurement.maxJitter))
-                resultRow("Samples", "\(report.results.jitterMeasurement.sampleCount)")
+                let j = report.results.jitterMeasurement
+                let ok = report.results.hasJitter
+                resultRow("Average", ok ? String(format: "%.2fms", j.averageJitter) : notMeasured)
+                resultRow("Max", ok ? String(format: "%.2fms", j.maxJitter) : notMeasured)
+                resultRow("Samples", "\(j.sampleCount)")
             }
 
             testResultCard("Packet Loss Stress", icon: "exclamationmark.triangle.fill", color: .red) {
-                resultRow("Sent", "\(report.results.packetLossStress.sent)")
-                resultRow("Received", "\(report.results.packetLossStress.received)")
-                resultRow("Loss", String(format: "%.1f%%", report.results.packetLossStress.lostPercent))
+                let p = report.results.packetLossStress
+                resultRow("Sent", "\(p.sent)")
+                resultRow("Received", "\(p.received)")
+                resultRow(
+                    "Loss",
+                    report.results.hasPacketLoss ? String(format: "%.1f%%", p.lostPercent) : notMeasured
+                )
             }
 
             testResultCard("Latency Under Load", icon: "flame.fill", color: .orange) {
-                resultRow("Baseline", String(format: "%.2fms", report.results.latencyUnderLoad.baselineAvg))
-                resultRow("Under Load", String(format: "%.2fms", report.results.latencyUnderLoad.underLoadAvg))
-                resultRow("Impact", report.results.latencyUnderLoad.formattedDegradation)
+                let u = report.results.latencyUnderLoad
+                resultRow(
+                    "Baseline",
+                    report.results.hasLoadDegradation ? String(format: "%.2fms", u.baselineAvg) : notMeasured
+                )
+                resultRow(
+                    "Under Load",
+                    u.sampleCount > 0 ? String(format: "%.2fms", u.underLoadAvg) : notMeasured
+                )
+                resultRow(
+                    "Impact",
+                    report.results.hasLoadDegradation ? u.formattedDegradation : notMeasured
+                )
             }
 
             testResultCard("System Metrics (Controller)", icon: "cpu", color: .indigo) {
@@ -636,6 +657,11 @@ struct TestSuiteView: View {
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// Shown in place of a value the run never measured.
+    private var notMeasured: String {
+        "Not measured"
     }
 
     private func resultRow(_ label: String, _ value: String) -> some View {

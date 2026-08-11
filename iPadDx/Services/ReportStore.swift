@@ -368,25 +368,29 @@ class ReportStore {
                 csvEscape(r.bridgeTransport ?? "native"),
                 csvEscape(t.overallGrade),
                 String(format: "%.1f", r.durationSeconds),
-                String(format: "%.2f", t.latencyBurst.min),
-                String(format: "%.2f", t.latencyBurst.max),
-                String(format: "%.2f", t.latencyBurst.avg),
-                String(format: "%.2f", t.latencyBurst.median),
-                String(format: "%.2f", t.latencyBurst.p95),
+                // A phase that measured nothing blanks its WHOLE column group, not
+                // just the headline value. Sample counts stay numeric — 0 is a truthful
+                // count — but every derived figure is left empty so a spreadsheet reads
+                // it as missing rather than averaging a placeholder zero.
+                cell(t.hasLatency, "%.2f", t.latencyBurst.min),
+                cell(t.hasLatency, "%.2f", t.latencyBurst.max),
+                cell(t.hasLatency, "%.2f", t.latencyBurst.avg),
+                cell(t.hasLatency, "%.2f", t.latencyBurst.median),
+                cell(t.hasLatency, "%.2f", t.latencyBurst.p95),
                 "\(t.latencyBurst.sampleCount)",
-                String(format: "%.2f", t.sustainedThroughput.bytesPerSecond / 1_000_000),
-                "\(t.sustainedThroughput.totalBytes)",
-                String(format: "%.2f", t.sustainedThroughput.durationSeconds),
-                String(format: "%.2f", t.jitterMeasurement.averageJitter),
-                String(format: "%.2f", t.jitterMeasurement.maxJitter),
+                cell(t.hasThroughput, "%.2f", t.sustainedThroughput.bytesPerSecond / 1_000_000),
+                t.hasThroughput ? "\(t.sustainedThroughput.totalBytes)" : "",
+                cell(t.hasThroughput, "%.2f", t.sustainedThroughput.durationSeconds),
+                cell(t.hasJitter, "%.2f", t.jitterMeasurement.averageJitter),
+                cell(t.hasJitter, "%.2f", t.jitterMeasurement.maxJitter),
                 "\(t.jitterMeasurement.sampleCount)",
                 "\(t.packetLossStress.sent)",
                 "\(t.packetLossStress.received)",
-                String(format: "%.1f", t.packetLossStress.lostPercent),
-                String(format: "%.2f", t.packetLossStress.durationSeconds),
-                String(format: "%.2f", t.latencyUnderLoad.baselineAvg),
-                String(format: "%.2f", t.latencyUnderLoad.underLoadAvg),
-                String(format: "%.1f", t.latencyUnderLoad.degradationPercent),
+                cell(t.hasPacketLoss, "%.1f", t.packetLossStress.lostPercent),
+                cell(t.hasPacketLoss, "%.2f", t.packetLossStress.durationSeconds),
+                cell(t.hasLoadDegradation, "%.2f", t.latencyUnderLoad.baselineAvg),
+                cell(t.latencyUnderLoad.sampleCount > 0, "%.2f", t.latencyUnderLoad.underLoadAvg),
+                cell(t.hasLoadDegradation, "%.1f", t.latencyUnderLoad.degradationPercent),
                 "\(t.latencyUnderLoad.sampleCount)",
                 s.batteryStart >= 0 ? "\(Int(s.batteryStart * 100))" : "",
                 s.batteryEnd >= 0 ? "\(Int(s.batteryEnd * 100))" : "",
@@ -673,6 +677,11 @@ class ReportStore {
         let values = reports.compactMap { metric($0.results) }
         guard !values.isEmpty else { return "N/A" }
         return f(values.reduce(0, +) / Double(values.count))
+    }
+
+    /// A formatted value, or a blank cell when the owning phase measured nothing.
+    nonisolated private func cell(_ measured: Bool, _ format: String, _ value: Double) -> String {
+        measured ? String(format: format, value) : ""
     }
 
     nonisolated private func f(_ value: Double) -> String {

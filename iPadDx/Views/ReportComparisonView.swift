@@ -33,18 +33,18 @@ struct ReportComparisonView: View {
                 sectionTitle("Latency Burst", icon: "bolt.fill", color: .blue)
                 comparisonRow(
                     "Min",
-                    fmt(reportA.results.latencyBurst.min),
-                    fmt(reportB.results.latencyBurst.min),
-                    valueA: reportA.results.latencyBurst.min,
-                    valueB: reportB.results.latencyBurst.min,
+                    fmtOpt(reportA.results.hasLatency ? reportA.results.latencyBurst.min : nil),
+                    fmtOpt(reportB.results.hasLatency ? reportB.results.latencyBurst.min : nil),
+                    valueA: reportA.results.hasLatency ? reportA.results.latencyBurst.min : nil,
+                    valueB: reportB.results.hasLatency ? reportB.results.latencyBurst.min : nil,
                     lowerIsBetter: true
                 )
                 comparisonRow(
                     "Max",
-                    fmt(reportA.results.latencyBurst.max),
-                    fmt(reportB.results.latencyBurst.max),
-                    valueA: reportA.results.latencyBurst.max,
-                    valueB: reportB.results.latencyBurst.max,
+                    fmtOpt(reportA.results.hasLatency ? reportA.results.latencyBurst.max : nil),
+                    fmtOpt(reportB.results.hasLatency ? reportB.results.latencyBurst.max : nil),
+                    valueA: reportA.results.hasLatency ? reportA.results.latencyBurst.max : nil,
+                    valueB: reportB.results.hasLatency ? reportB.results.latencyBurst.max : nil,
                     lowerIsBetter: true
                 )
                 comparisonRow(
@@ -57,10 +57,10 @@ struct ReportComparisonView: View {
                 )
                 comparisonRow(
                     "Median",
-                    fmt(reportA.results.latencyBurst.median),
-                    fmt(reportB.results.latencyBurst.median),
-                    valueA: reportA.results.latencyBurst.median,
-                    valueB: reportB.results.latencyBurst.median,
+                    fmtOpt(reportA.results.hasLatency ? reportA.results.latencyBurst.median : nil),
+                    fmtOpt(reportB.results.hasLatency ? reportB.results.latencyBurst.median : nil),
+                    valueA: reportA.results.hasLatency ? reportA.results.latencyBurst.median : nil,
+                    valueB: reportB.results.hasLatency ? reportB.results.latencyBurst.median : nil,
                     lowerIsBetter: true
                 )
                 comparisonRow(
@@ -76,8 +76,8 @@ struct ReportComparisonView: View {
                 sectionTitle("Throughput", icon: "arrow.up.arrow.down.circle.fill", color: .purple)
                 comparisonRow(
                     "Speed",
-                    reportA.results.sustainedThroughput.formattedSpeed,
-                    reportB.results.sustainedThroughput.formattedSpeed,
+                    reportA.results.hasThroughput ? reportA.results.sustainedThroughput.formattedSpeed : "—",
+                    reportB.results.hasThroughput ? reportB.results.sustainedThroughput.formattedSpeed : "—",
                     valueA: reportA.results.measuredThroughput,
                     valueB: reportB.results.measuredThroughput,
                     lowerIsBetter: false
@@ -95,10 +95,10 @@ struct ReportComparisonView: View {
                 )
                 comparisonRow(
                     "Max",
-                    fmt(reportA.results.jitterMeasurement.maxJitter),
-                    fmt(reportB.results.jitterMeasurement.maxJitter),
-                    valueA: reportA.results.jitterMeasurement.maxJitter,
-                    valueB: reportB.results.jitterMeasurement.maxJitter,
+                    fmtOpt(reportA.results.hasJitter ? reportA.results.jitterMeasurement.maxJitter : nil),
+                    fmtOpt(reportB.results.hasJitter ? reportB.results.jitterMeasurement.maxJitter : nil),
+                    valueA: reportA.results.hasJitter ? reportA.results.jitterMeasurement.maxJitter : nil,
+                    valueB: reportB.results.hasJitter ? reportB.results.jitterMeasurement.maxJitter : nil,
                     lowerIsBetter: true
                 )
 
@@ -116,24 +116,30 @@ struct ReportComparisonView: View {
                 sectionTitle("Latency Under Load", icon: "flame.fill", color: .orange)
                 comparisonRow(
                     "Baseline",
-                    fmt(reportA.results.latencyUnderLoad.baselineAvg),
-                    fmt(reportB.results.latencyUnderLoad.baselineAvg),
-                    valueA: reportA.results.latencyUnderLoad.baselineAvg,
-                    valueB: reportB.results.latencyUnderLoad.baselineAvg,
+                    fmtOpt(reportA.results.hasLoadDegradation ? reportA.results.latencyUnderLoad.baselineAvg : nil),
+                    fmtOpt(reportB.results.hasLoadDegradation ? reportB.results.latencyUnderLoad.baselineAvg : nil),
+                    valueA: reportA.results.hasLoadDegradation ? reportA.results.latencyUnderLoad.baselineAvg : nil,
+                    valueB: reportB.results.hasLoadDegradation ? reportB.results.latencyUnderLoad.baselineAvg : nil,
                     lowerIsBetter: true
                 )
                 comparisonRow(
                     "Under Load",
-                    fmt(reportA.results.latencyUnderLoad.underLoadAvg),
-                    fmt(reportB.results.latencyUnderLoad.underLoadAvg),
-                    valueA: reportA.results.latencyUnderLoad.underLoadAvg,
-                    valueB: reportB.results.latencyUnderLoad.underLoadAvg,
+                    fmtOpt(reportA.results.latencyUnderLoad.sampleCount > 0 ? reportA.results.latencyUnderLoad
+                        .underLoadAvg : nil),
+                    fmtOpt(reportB.results.latencyUnderLoad.sampleCount > 0 ? reportB.results.latencyUnderLoad
+                        .underLoadAvg : nil),
+                    valueA: reportA.results.latencyUnderLoad.sampleCount > 0 ? reportA.results.latencyUnderLoad
+                        .underLoadAvg : nil,
+                    valueB: reportB.results.latencyUnderLoad.sampleCount > 0 ? reportB.results.latencyUnderLoad
+                        .underLoadAvg : nil,
                     lowerIsBetter: true
                 )
                 comparisonRow(
                     "Impact",
-                    reportA.results.latencyUnderLoad.formattedDegradation,
-                    reportB.results.latencyUnderLoad.formattedDegradation,
+                    reportA.results.hasLoadDegradation
+                        ? reportA.results.latencyUnderLoad.formattedDegradation : "—",
+                    reportB.results.hasLoadDegradation
+                        ? reportB.results.latencyUnderLoad.formattedDegradation : "—",
                     valueA: reportA.results.measuredLoadDegradation,
                     valueB: reportB.results.measuredLoadDegradation,
                     lowerIsBetter: true

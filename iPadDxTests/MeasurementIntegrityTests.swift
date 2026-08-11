@@ -639,3 +639,80 @@ final class TrendSampleValidityTests: XCTestCase {
         }
     }
 }
+
+/// Per-report presentation must not show a placeholder as a measurement.
+///
+/// Aggregation was fixed first, but a single cancelled report rendered "0.00ms" in
+/// the summary CSV, the side-by-side comparison and the post-run cards — where zero
+/// reads as the *best* result, not as missing data.
+final class PhaseGroupValidityTests: XCTestCase {
+
+    private func results(latencySamples: Int, throughput: Double,
+                         jitterSamples: Int, lossSent: Int,
+                         loadSamples: Int, baseline: Double) -> TestSuiteResults {
+        TestSuiteResults(
+            latencyBurst: LatencyBurstResult(
+                min: 1, max: 2, avg: 1.5, median: 1.5, p95: 2,
+                sampleCount: latencySamples, samples: []
+            ),
+            sustainedThroughput: ThroughputResult(
+                bytesPerSecond: throughput, totalBytes: 10, durationSeconds: 1
+            ),
+            jitterMeasurement: JitterResult(averageJitter: 1, maxJitter: 2, sampleCount: jitterSamples),
+            packetLossStress: PacketLossResult(
+                sent: lossSent, received: lossSent, lostPercent: 1, durationSeconds: 1
+            ),
+            latencyUnderLoad: LatencyUnderLoadResult(
+                baselineAvg: baseline, underLoadAvg: 5,
+                degradationPercent: 10, sampleCount: loadSamples
+            ),
+            systemMetrics: SystemMetricsResult(
+                batteryStart: 1, batteryEnd: 1, batteryDrainPercent: 0,
+                peakCpuUsage: 1, avgCpuUsage: 1, peakMemoryMB: 1,
+                thermalStateDuringTest: "Nominal"
+            ),
+            overallGrade: "Good"
+        )
+    }
+
+    /// Every phase flag must be independent — one measured phase must not make the
+    /// others look measured, which is what a single report-level flag would do.
+    func testPhaseValidityFlagsAreIndependent() {
+        let onlyLatency = results(latencySamples: 100, throughput: 0,
+                                  jitterSamples: 0, lossSent: 0,
+                                  loadSamples: 0, baseline: 0)
+        XCTAssertTrue(onlyLatency.hasLatency)
+        XCTAssertFalse(onlyLatency.hasThroughput)
+        XCTAssertFalse(onlyLatency.hasJitter)
+        XCTAssertFalse(onlyLatency.hasPacketLoss)
+        XCTAssertFalse(onlyLatency.hasLoadDegradation)
+
+        let onlyThroughput = results(latencySamples: 0, throughput: 1_000,
+                                     jitterSamples: 0, lossSent: 0,
+                                     loadSamples: 0, baseline: 0)
+        XCTAssertFalse(onlyThroughput.hasLatency)
+        XCTAssertTrue(onlyThroughput.hasThroughput)
+    }
+
+    func testFullyMeasuredRunHasEveryFlag() {
+        let all = results(latencySamples: 100, throughput: 1_000,
+                          jitterSamples: 150, lossSent: 500,
+                          loadSamples: 50, baseline: 10)
+        XCTAssertTrue(all.hasLatency)
+        XCTAssertTrue(all.hasThroughput)
+        XCTAssertTrue(all.hasJitter)
+        XCTAssertTrue(all.hasPacketLoss)
+        XCTAssertTrue(all.hasLoadDegradation)
+    }
+
+    func testCancelledRunHasNoFlags() {
+        let none = results(latencySamples: 0, throughput: 0,
+                           jitterSamples: 0, lossSent: 0,
+                           loadSamples: 0, baseline: 0)
+        XCTAssertFalse(none.hasLatency)
+        XCTAssertFalse(none.hasThroughput)
+        XCTAssertFalse(none.hasJitter)
+        XCTAssertFalse(none.hasPacketLoss)
+        XCTAssertFalse(none.hasLoadDegradation)
+    }
+}
