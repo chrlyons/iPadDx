@@ -503,24 +503,29 @@ struct ReportAnalyticsView: View {
     private func computeTrends(from summaries: [ReportSummary]) -> [TrendResult] {
         guard summaries.count >= 3 else { return [] }
 
-        let metrics: [(name: String, keyPath: KeyPath<ReportSummary, Double>, lowerIsBetter: Bool)] = [
-            ("Latency Avg", \.latencyAvg, true),
-            ("Latency P95", \.latencyP95, true),
-            ("Throughput", \.throughputBps, false),
-            ("Jitter", \.jitterAvg, true),
-            ("Packet Loss", \.packetLossPercent, true),
+        // Each metric yields an OPTIONAL value. Regressing over the raw column would
+        // fit a line through the zero placeholders that cancelled and skipped runs
+        // store — one real 10ms report plus two cancelled rows becomes a confident
+        // "improving" latency trend that never happened.
+        let metrics: [(name: String, value: (ReportSummary) -> Double?, lowerIsBetter: Bool)] = [
+            ("Latency Avg", { $0.measuredLatencyAvg }, true),
+            ("Latency P95", { $0.measuredLatencyP95 }, true),
+            ("Throughput", { $0.measuredThroughput }, false),
+            ("Jitter", { $0.measuredJitter }, true),
+            ("Packet Loss", { $0.measuredPacketLoss }, true),
         ]
 
-        // Real window the regression was fitted over — shown on each badge.
-        let period = TrendAnalyzer.describePeriod(dates: summaries.map(\.date))
-
         return metrics.compactMap { metric in
-            let samples = summaries.map { (date: $0.date, value: $0[keyPath: metric.keyPath]) }
+            let samples = summaries.compactMap { summary in
+                metric.value(summary).map { (date: summary.date, value: $0) }
+            }
+            // The period must describe the window these samples span, not the full
+            // report range — otherwise a trend over 3 of 30 reports claims 30 reports.
             return TrendAnalyzer.analyzeTrend(
                 samples: samples,
                 metric: metric.name,
                 lowerIsBetter: metric.lowerIsBetter,
-                period: period
+                period: TrendAnalyzer.describePeriod(dates: samples.map(\.date))
             )
         }
     }
@@ -536,19 +541,21 @@ struct ReportAnalyticsView: View {
         }
         return grouped.map { pair, items in
             let sorted = items.sorted { $0.date < $1.date }
-            let period = TrendAnalyzer.describePeriod(dates: sorted.map(\.date))
-            // nil when the pair has fewer than 3 reports — no trend is invented.
+            // Trends regress over measured points only; a zero placeholder would
+            // fabricate a downward trend.
+            let samples = sorted.compactMap { summary in
+                metricValue(for: summary).map { (date: summary.date, value: $0) }
+            }
+            let period = TrendAnalyzer.describePeriod(dates: samples.map(\.date))
+            // nil when the pair has fewer than 3 MEASURED reports — no trend is invented.
             let trend = TrendAnalyzer.analyzeTrend(
-                // Trends must regress over measured points only; a zero placeholder
-                // would fabricate a downward trend.
-                samples: sorted.compactMap { summary in
-                    metricValue(for: summary).map { (date: summary.date, value: $0) }
-                },
+                samples: samples,
                 metric: selectedMetric.rawValue,
                 lowerIsBetter: selectedMetric.lowerIsBetter,
                 period: period
             )
-            return PairTrend(pair: pair, count: sorted.count, trend: trend, period: period)
+            // Count the points the regression was actually fitted over.
+            return PairTrend(pair: pair, count: samples.count, trend: trend, period: period)
         }
         .sorted { lhs, rhs in
             let lhsRank = trendRank(lhs.trend?.direction)
@@ -836,12 +843,12 @@ struct ReportAnalyticsView: View {
             return OSAggregate(
                 version: version,
                 count: items.count,
-                avgLatency: measuredMean(items.compactMap(\.measuredLatencyAvg)) ?? 0,
-                avgLatencyP95: measuredMean(items.compactMap(\.measuredLatencyP95)) ?? 0,
-                avgThroughputMBps: (measuredMean(items.compactMap(\.measuredThroughput)) ?? 0) / 1_000_000,
-                avgJitter: measuredMean(items.compactMap(\.measuredJitter)) ?? 0,
-                avgPacketLoss: measuredMean(items.compactMap(\.measuredPacketLoss)) ?? 0,
-                avgLoadDegradation: measuredMean(items.compactMap(\.measuredLoadDegradation)) ?? 0,
+                avgLatency: measuredMean(items.compactMap(\.measuredLatencyAvg)),
+                avgLatencyP95: measuredMean(items.compactMap(\.measuredLatencyP95)),
+                avgThroughputMBps: measuredMean(items.compactMap(\.measuredThroughput)).map { $0 / 1_000_000 },
+                avgJitter: measuredMean(items.compactMap(\.measuredJitter)),
+                avgPacketLoss: measuredMean(items.compactMap(\.measuredPacketLoss)),
+                avgLoadDegradation: measuredMean(items.compactMap(\.measuredLoadDegradation)),
                 failRate: Double(failCount) / n * 100
             )
         }
@@ -856,16 +863,18 @@ struct ReportAnalyticsView: View {
                 Spacer()
             }
 
-            let aggregates = osVersionAggregates
+            // Only OS buckets that measured the selected metric are plotted; the rest
+            // would otherwise appear as a zero-length bar labelled "0.0ms".
+            let aggregates = osVersionAggregates.filter { osMetricValue(for: $0) != nil }
             if !aggregates.isEmpty {
                 Chart(aggregates) { item in
                     BarMark(
-                        x: .value(selectedMetric.rawValue, osMetricValue(for: item)),
+                        x: .value(selectedMetric.rawValue, osMetricValue(for: item) ?? 0),
                         y: .value("OS", item.version)
                     )
                     .foregroundStyle(by: .value("OS", item.version))
                     .annotation(position: .trailing, spacing: 4) {
-                        Text(formatMetricValue(osMetricValue(for: item)))
+                        Text(osMetricValue(for: item).map(formatMetricValue) ?? "—")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -892,14 +901,10 @@ struct ReportAnalyticsView: View {
                         HStack {
                             Text(item.version).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
                             Text("\(item.count)").font(.caption).frame(width: 50, alignment: .trailing)
-                            Text(String(format: "%.1fms", item.avgLatency)).font(.caption).frame(
-                                width: 60,
-                                alignment: .trailing
-                            )
-                            Text(String(format: "%.1f%%", item.avgPacketLoss)).font(.caption).frame(
-                                width: 50,
-                                alignment: .trailing
-                            )
+                            Text(item.avgLatency.map { String(format: "%.1fms", $0) } ?? "—")
+                                .font(.caption).frame(width: 60, alignment: .trailing)
+                            Text(item.avgPacketLoss.map { String(format: "%.1f%%", $0) } ?? "—")
+                                .font(.caption).frame(width: 50, alignment: .trailing)
                             Text(String(format: "%.1f%%", item.failRate)).font(.caption)
                                 .foregroundStyle(item.failRate > 10 ? .red : .primary)
                                 .frame(width: 60, alignment: .trailing)
@@ -919,7 +924,7 @@ struct ReportAnalyticsView: View {
 
     /// Exhaustive on purpose — no `default`, so a new metric fails to compile rather
     /// than silently plotting latency under another metric's label.
-    private func osMetricValue(for item: OSAggregate) -> Double {
+    private func osMetricValue(for item: OSAggregate) -> Double? {
         switch selectedMetric {
         case .latencyAvg: item.avgLatency
         case .latencyP95: item.avgLatencyP95
@@ -1045,15 +1050,20 @@ private struct PairAggregate: Identifiable {
     }
 }
 
+/// Per-OS aggregates.
+///
+/// Every metric is optional: `?? 0` would render "no report measured this" as a real
+/// 0.0ms / 0.0% in the chart and table — the best possible value. nil means not
+/// measured, and those buckets are omitted from the chart entirely.
 private struct OSAggregate: Identifiable {
     let version: String
     let count: Int
-    let avgLatency: Double
-    let avgLatencyP95: Double
-    let avgThroughputMBps: Double
-    let avgJitter: Double
-    let avgPacketLoss: Double
-    let avgLoadDegradation: Double
+    let avgLatency: Double?
+    let avgLatencyP95: Double?
+    let avgThroughputMBps: Double?
+    let avgJitter: Double?
+    let avgPacketLoss: Double?
+    let avgLoadDegradation: Double?
     let failRate: Double
     var id: String {
         version

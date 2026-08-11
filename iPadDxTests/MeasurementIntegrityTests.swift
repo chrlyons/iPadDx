@@ -589,9 +589,9 @@ final class SummaryValidityTests: XCTestCase {
 /// never happened. TrendAnalyzer is fed date/value pairs, so the filtering has to
 /// happen at every call site that builds those samples.
 final class TrendSampleValidityTests: XCTestCase {
-
     private func dated(_ values: [Double], from start: Date = Date(timeIntervalSince1970: 1_700_000_000))
-        -> [(date: Date, value: Double)] {
+        -> [(date: Date, value: Double)]
+    {
         values.enumerated().map { (date: start.addingTimeInterval(Double($0.offset) * 86400), value: $0.element) }
     }
 
@@ -646,10 +646,14 @@ final class TrendSampleValidityTests: XCTestCase {
 /// the summary CSV, the side-by-side comparison and the post-run cards — where zero
 /// reads as the *best* result, not as missing data.
 final class PhaseGroupValidityTests: XCTestCase {
-
-    private func results(latencySamples: Int, throughput: Double,
-                         jitterSamples: Int, lossSent: Int,
-                         loadSamples: Int, baseline: Double) -> TestSuiteResults {
+    private func results(
+        latencySamples: Int,
+        throughput: Double,
+        jitterSamples: Int,
+        lossSent: Int,
+        loadSamples: Int,
+        baseline: Double
+    ) -> TestSuiteResults {
         TestSuiteResults(
             latencyBurst: LatencyBurstResult(
                 min: 1, max: 2, avg: 1.5, median: 1.5, p95: 2,
@@ -678,26 +682,41 @@ final class PhaseGroupValidityTests: XCTestCase {
     /// Every phase flag must be independent — one measured phase must not make the
     /// others look measured, which is what a single report-level flag would do.
     func testPhaseValidityFlagsAreIndependent() {
-        let onlyLatency = results(latencySamples: 100, throughput: 0,
-                                  jitterSamples: 0, lossSent: 0,
-                                  loadSamples: 0, baseline: 0)
+        let onlyLatency = results(
+            latencySamples: 100,
+            throughput: 0,
+            jitterSamples: 0,
+            lossSent: 0,
+            loadSamples: 0,
+            baseline: 0
+        )
         XCTAssertTrue(onlyLatency.hasLatency)
         XCTAssertFalse(onlyLatency.hasThroughput)
         XCTAssertFalse(onlyLatency.hasJitter)
         XCTAssertFalse(onlyLatency.hasPacketLoss)
         XCTAssertFalse(onlyLatency.hasLoadDegradation)
 
-        let onlyThroughput = results(latencySamples: 0, throughput: 1_000,
-                                     jitterSamples: 0, lossSent: 0,
-                                     loadSamples: 0, baseline: 0)
+        let onlyThroughput = results(
+            latencySamples: 0,
+            throughput: 1000,
+            jitterSamples: 0,
+            lossSent: 0,
+            loadSamples: 0,
+            baseline: 0
+        )
         XCTAssertFalse(onlyThroughput.hasLatency)
         XCTAssertTrue(onlyThroughput.hasThroughput)
     }
 
     func testFullyMeasuredRunHasEveryFlag() {
-        let all = results(latencySamples: 100, throughput: 1_000,
-                          jitterSamples: 150, lossSent: 500,
-                          loadSamples: 50, baseline: 10)
+        let all = results(
+            latencySamples: 100,
+            throughput: 1000,
+            jitterSamples: 150,
+            lossSent: 500,
+            loadSamples: 50,
+            baseline: 10
+        )
         XCTAssertTrue(all.hasLatency)
         XCTAssertTrue(all.hasThroughput)
         XCTAssertTrue(all.hasJitter)
@@ -706,13 +725,60 @@ final class PhaseGroupValidityTests: XCTestCase {
     }
 
     func testCancelledRunHasNoFlags() {
-        let none = results(latencySamples: 0, throughput: 0,
-                           jitterSamples: 0, lossSent: 0,
-                           loadSamples: 0, baseline: 0)
+        let none = results(
+            latencySamples: 0,
+            throughput: 0,
+            jitterSamples: 0,
+            lossSent: 0,
+            loadSamples: 0,
+            baseline: 0
+        )
         XCTAssertFalse(none.hasLatency)
         XCTAssertFalse(none.hasThroughput)
         XCTAssertFalse(none.hasJitter)
         XCTAssertFalse(none.hasPacketLoss)
         XCTAssertFalse(none.hasLoadDegradation)
+    }
+}
+
+/// Guards the analytics trend inputs.
+///
+/// `computeTrends` and the OS breakdown were the last two places regressing over — and
+/// rendering — raw summary columns. A cancelled run stores zeros, so one real 10ms
+/// report plus two cancelled rows fitted a confident "improving" latency trend, and an
+/// OS bucket with no measurements displayed a real-looking 0.0ms bar.
+final class AnalyticsTrendInputTests: XCTestCase {
+    private func sample(_ value: Double, day: Int) -> (date: Date, value: Double) {
+        (date: Date(timeIntervalSince1970: 1_700_000_000 + Double(day) * 86400), value: value)
+    }
+
+    func testPlaceholderZerosWouldFabricateAnImprovingTrend() {
+        // The exact reported scenario, showing why filtering is required.
+        let unfiltered = TrendAnalyzer.analyzeTrend(
+            samples: [sample(10, day: 0), sample(0, day: 1), sample(0, day: 2)],
+            metric: "Latency Avg", lowerIsBetter: true, period: "3 reports"
+        )
+        XCTAssertNotNil(unfiltered)
+        XCTAssertFalse(unfiltered?.isFlat ?? true, "regressing over placeholders invents a slope")
+    }
+
+    func testFilteringLeavesTooFewPointsToTrend() {
+        // After compact-mapping measured values only one real point survives.
+        XCTAssertNil(
+            TrendAnalyzer.analyzeTrend(
+                samples: [sample(10, day: 0)],
+                metric: "Latency Avg", lowerIsBetter: true, period: "1 report"
+            )
+        )
+    }
+
+    func testPeriodDescribesOnlyTheMeasuredWindow() {
+        // The badge must not claim a window wider than the points it was fitted over.
+        let measured = [sample(30, day: 10), sample(20, day: 11), sample(10, day: 12)]
+        let period = TrendAnalyzer.describePeriod(dates: measured.map(\.date))
+        let wider = TrendAnalyzer.describePeriod(
+            dates: [sample(0, day: 0).date] + measured.map(\.date)
+        )
+        XCTAssertNotEqual(period, wider, "period must reflect the measured samples, not all reports")
     }
 }

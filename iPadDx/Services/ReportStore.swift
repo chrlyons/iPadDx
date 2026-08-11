@@ -192,7 +192,10 @@ class ReportStore {
         guard let context = modelContext else { return nil }
         let descriptor = FetchDescriptor<ReportEntity>()
         guard let entities = try? context.fetch(descriptor) else { return nil }
-        let matching = entities.filter { $0.localChip == chip || $0.remoteChip == chip }
+        // Only reports that actually measured latency: a cancelled run stores 0, which
+        // would drag a chip's average toward zero and make it look faster.
+        let matching = entities
+            .filter { ($0.localChip == chip || $0.remoteChip == chip) && $0.latencySampleCount > 0 }
         guard !matching.isEmpty else { return nil }
         return matching.map(\.latencyAvg).reduce(0, +) / Double(matching.count)
     }
