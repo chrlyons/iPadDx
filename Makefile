@@ -238,8 +238,21 @@ open: ## Open the workspace in Xcode
 
 frameworks: ## Build embedded bridge frameworks from source
 	@echo "Building Flutter bridge..."
+	@# Flutter 3.44 added `--codesign` to `build ios-framework`, defaulting to ON: it
+	@# signs the produced XCFrameworks and aborts outright when the machine holds no
+	@# signing identity. Signing them here is pointless anyway — Xcode re-signs
+	@# embedded frameworks when it builds the host app. Flutter <3.44 has no such flag
+	@# and rejects it, so detect support instead of assuming a version.
+	@#
+	@# The help text is captured into a variable rather than piped into grep: `grep -q`
+	@# exits on first match and SIGPIPEs flutter, which under `set -o pipefail` makes
+	@# the pipeline exit 141 — read as "flag absent" precisely on the versions that
+	@# need it, leaving the build broken in the case this guard exists to fix.
 	@set -o pipefail; cd Bridges/flutter_bridge && \
-		flutter build ios-framework --no-debug --no-profile \
+		FRAMEWORK_HELP="$$(flutter build ios-framework --help 2>&1 || true)"; \
+		CODESIGN_FLAG=""; \
+		case "$$FRAMEWORK_HELP" in *codesign*) CODESIGN_FLAG="--no-codesign";; esac; \
+		flutter build ios-framework --no-debug --no-profile $$CODESIGN_FLAG \
 		--output=../../build/flutter_frameworks 2>&1 | tail -5
 	@# Verify the artifacts before destroying the existing ones. `rm -rf` ran
 	@# unconditionally, so a failed build left NO framework at all — the previous

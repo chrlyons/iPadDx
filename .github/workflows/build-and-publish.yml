@@ -126,6 +126,13 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned deliberately. `channel: stable` on its own floats, and it moved this
+          # job from 3.41.x to 3.44.9 on 2026-08-06 — which changed the behaviour of
+          # `build ios-framework` and broke CI with no commit to blame. Floating also
+          # re-resolved pubspec.lock on every run (meta and test_api are pinned by the
+          # SDK, not the pubspec), so CI silently tested a different dependency set
+          # than the developer machine. This version matches local development.
+          flutter-version: 3.41.6
 
       # -----------------------------------------------------------------------
       # 6. Build Flutter bridge frameworks
@@ -134,7 +141,22 @@ jobs:
         run: |
           cd Bridges/flutter_bridge
           flutter pub get
-          flutter build ios-framework --no-debug --no-profile \
+
+          # Flutter 3.44 added `--codesign` to `build ios-framework`, defaulting to ON:
+          # it signs the produced XCFrameworks and aborts when no signing identity
+          # exists, which is always the case on a runner. Signing them here is pointless
+          # anyway — Xcode re-signs embedded frameworks when it builds the host app, and
+          # every other build step in this job already passes CODE_SIGNING_ALLOWED=NO.
+          # Flutter <3.44 rejects the flag, so detect support rather than assume.
+          #
+          # Captured into a variable, not piped into grep: `grep -q` exits on first match
+          # and SIGPIPEs flutter, so under the job's pipefail the pipeline exits 141 and
+          # reads as "flag absent" on exactly the versions that need it.
+          FRAMEWORK_HELP="$(flutter build ios-framework --help 2>&1 || true)"
+          CODESIGN_FLAG=""
+          case "$FRAMEWORK_HELP" in *codesign*) CODESIGN_FLAG="--no-codesign";; esac
+
+          flutter build ios-framework --no-debug --no-profile $CODESIGN_FLAG \
             --output=../../build/flutter_frameworks
           mkdir -p ../../Frameworks
           cp -R ../../build/flutter_frameworks/Release/Flutter.xcframework ../../Frameworks/
