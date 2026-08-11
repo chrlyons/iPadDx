@@ -662,18 +662,19 @@ enum AnalyticsReportRenderer {
         struct PairTrend {
             let pair: String
             let count: Int
-            let latency: TrendResult
+            /// Either column may be absent; a pair is listed if EITHER has a trend.
+            let latency: TrendResult?
             let throughput: TrendResult?
         }
 
         var rows: [PairTrend] = []
         for (pair, pairReports) in grouped {
             let latencySamples = trendSamples(pairReports) { $0.results.measuredLatencyAvg }
-            guard let latency = TrendAnalyzer.analyzeTrend(
+            let latency = TrendAnalyzer.analyzeTrend(
                 samples: latencySamples,
                 metric: "Avg Latency", lowerIsBetter: true,
                 period: TrendAnalyzer.describePeriod(dates: latencySamples.map(\.date))
-            ) else { continue }
+            )
             let throughputSamples = trendSamples(pairReports) {
                 $0.results.measuredThroughput.map { $0 / 1_000_000 }
             }
@@ -682,9 +683,13 @@ enum AnalyticsReportRenderer {
                 metric: "Throughput", lowerIsBetter: false,
                 period: TrendAnalyzer.describePeriod(dates: throughputSamples.map(\.date))
             )
-            // Count the reports the latency regression was actually fitted over.
+            // Requiring a LATENCY trend dropped every pair whenever latency was
+            // disabled, so a throughput-only store showed the section header and then
+            // "No pair has the 3+ reports a trend needs" under it.
+            guard latency != nil || throughput != nil else { continue }
             rows.append(PairTrend(
-                pair: pair, count: latencySamples.count,
+                pair: pair,
+                count: max(latencySamples.count, throughputSamples.count),
                 latency: latency, throughput: throughput
             ))
         }
@@ -697,25 +702,39 @@ enum AnalyticsReportRenderer {
             return
         }
 
-        // Degrading first, then the largest movement.
-        let sorted = rows.sorted { lhs, rhs in
-            let lhsRank = trendRank(lhs.latency.direction)
-            let rhsRank = trendRank(rhs.latency.direction)
-            if lhsRank != rhsRank {
-                return lhsRank < rhsRank
-            }
-            return abs(lhs.latency.changePercent) > abs(rhs.latency.changePercent)
+        /// Degrading first, then the largest movement. Pairs are ranked on whichever
+        /// trend they have, so a throughput-only pair still sorts sensibly.
+        func rank(_ row: PairTrend) -> Int {
+            trendRank((row.latency ?? row.throughput)?.direction)
         }
+        func movement(_ row: PairTrend) -> Double {
+            abs((row.latency ?? row.throughput)?.changePercent ?? 0)
+        }
+        let sorted = rows.sorted { lhs, rhs in
+            rank(lhs) != rank(rhs) ? rank(lhs) < rank(rhs) : movement(lhs) > movement(rhs)
+        }
+
+        func direction(_ trend: TrendResult?) -> String {
+            guard let trend else { return "—" }
+            return trend.isFlat ? "Flat" : trend.direction.rawValue.capitalized
+        }
+        func change(_ trend: TrendResult?) -> String {
+            guard let trend, !trend.isFlat else { return "—" }
+            return String(format: "%+.1f%%", trend.changePercent)
+        }
+
         for row in sorted {
+            // Confidence reflects whichever trend the row is ranked on.
+            let primary = row.latency ?? row.throughput
             cursor.drawTableRow(
                 [
                     row.pair,
                     "\(row.count)",
-                    row.latency.isFlat ? "Flat" : row.latency.direction.rawValue.capitalized,
-                    row.latency.isFlat ? "—" : String(format: "%+.1f%%", row.latency.changePercent),
-                    row.throughput.map { $0.isFlat ? "Flat" : $0.direction.rawValue.capitalized } ?? "—",
-                    row.throughput.map { $0.isFlat ? "—" : String(format: "%+.1f%%", $0.changePercent) } ?? "—",
-                    row.latency.isFlat ? "—" : String(format: "%.0f%%", row.latency.confidence * 100),
+                    direction(row.latency),
+                    change(row.latency),
+                    direction(row.throughput),
+                    change(row.throughput),
+                    primary.map { $0.isFlat ? "—" : String(format: "%.0f%%", $0.confidence * 100) } ?? "—",
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
             )
@@ -723,7 +742,13 @@ enum AnalyticsReportRenderer {
     }
 
     /// Worsening pairs sort first.
-    private static func trendRank(_ direction: TrendDirection) -> Int {
+    /// Optional so a pair ranked on a missing trend sorts last rather than crashing.
+    private static func trendRank(_ direction: TrendDirection?) -> Int {
+        guard let direction else { return 99 }
+        return rankValue(direction)
+    }
+
+    private static func rankValue(_ direction: TrendDirection) -> Int {
         switch direction {
         case .degrading: 0
         case .stable: 1

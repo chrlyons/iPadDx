@@ -193,6 +193,9 @@ enum iPadCatalog {
 /// is a plausible-looking value for latency, jitter, loss and throughput, so any
 /// aggregate MUST filter on these rather than averaging raw fields.
 extension TestSuiteResults {
+    /// Shown when a run produced measurements but none in a scored dimension.
+    static let notGradedLabel = "Not graded"
+
     var hasLatency: Bool {
         latencyBurst.sampleCount > 0
     }
@@ -217,6 +220,17 @@ extension TestSuiteResults {
     /// report, not a failure.
     var measuredNothing: Bool {
         !hasLatency && !hasJitter && !hasPacketLoss && !hasThroughput
+            && !hasHeavyLoad && !hasDNSResolution
+    }
+
+    /// Phase 6 produced probes.
+    var hasHeavyLoad: Bool {
+        (heavyLoad?.sampleCount ?? 0) > 0
+    }
+
+    /// Phase 0 resolved the peer's Bonjour service.
+    var hasDNSResolution: Bool {
+        dnsResolution?.resolved == true
     }
 
     var hasLoadDegradation: Bool {

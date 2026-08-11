@@ -494,6 +494,9 @@ class TestSuiteRunner {
                 .map(\.rawValue)
         )
         let grade = computeGrade(latency: latency, jitter: jitter, loss: packetLoss, underLoad: underLoad)
+        // A run that measured something but has no scored dimension (throughput-only,
+        // say) is honestly ungraded rather than Poor.
+        let gradeLabel = grade?.rawValue ?? TestSuiteResults.notGradedLabel
 
         let report = TestReport(
             id: UUID(),
@@ -507,7 +510,7 @@ class TestSuiteRunner {
                 packetLossStress: packetLoss,
                 latencyUnderLoad: underLoad,
                 systemMetrics: systemResult,
-                overallGrade: grade.rawValue,
+                overallGrade: gradeLabel,
                 responderMetrics: responderMetrics,
                 dnsResolution: dnsResult,
                 heavyLoad: heavyLoad,
@@ -1140,19 +1143,20 @@ class TestSuiteRunner {
         DeviceIdentifier.localDeviceInfo()
     }
 
+    /// The overall grade, or nil when no scored dimension produced samples.
     private func computeGrade(
         latency: LatencyBurstResult,
         jitter: JitterResult,
         loss: PacketLossResult,
         underLoad: LatencyUnderLoadResult
-    ) -> SignalQuality {
-        // Grade Poor only when the run measured NOTHING. Keying this off latency and
-        // jitter alone short-circuited to Poor whenever those two phases were disabled,
-        // even if packet loss and throughput were measured cleanly — the same
-        // latency-is-the-only-real-metric assumption fixed in the exports.
-        let measuredAnything = latency.sampleCount > 0 || jitter.sampleCount > 0
+    ) -> SignalQuality? {
+        // Poor means measured-and-bad. A run with no SCORED dimension is not gradeable
+        // at all — the 12-point scale covers latency, jitter, packet loss and load
+        // degradation, so a throughput-only run has nothing to score and must not be
+        // branded Poor for it. Returning nil lets the report say "Not graded".
+        let hasScorableDimension = latency.sampleCount > 0 || jitter.sampleCount > 0
             || loss.sent > 0 || underLoad.sampleCount > 0
-        guard measuredAnything else { return .poor }
+        guard hasScorableDimension else { return nil }
 
         // Only dimensions that actually produced measurements may contribute.
         // Zero sits in the best-scoring band of every dimension, so scoring a
@@ -1204,7 +1208,7 @@ class TestSuiteRunner {
             }
         }
 
-        guard possible > 0 else { return .poor }
+        guard possible > 0 else { return nil }
 
         // Normalise back onto the documented 12-point scale so the published bands
         // stay meaningful however many phases ran.

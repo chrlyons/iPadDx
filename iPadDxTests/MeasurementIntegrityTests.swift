@@ -971,3 +971,80 @@ final class LatencyIsNotTheOnlyMetricTests: XCTestCase {
         XCTAssertFalse(results(latency: 0, jitter: 0, lossSent: 0, throughput: 1).measuredNothing)
     }
 }
+
+/// Every independently-toggleable phase counts as a measurement, and a run with no
+/// SCORED dimension is ungraded rather than Poor.
+///
+/// The 12-point scale covers latency, jitter, packet loss and load degradation only.
+/// Throughput, Heavy Load and DNS are real measurements but score nothing, so a run
+/// consisting solely of them is neither "failed" nor "Poor" — it is not gradeable.
+final class UngradedRunTests: XCTestCase {
+    private func results(
+        latency: Int = 0, jitter: Int = 0, lossSent: Int = 0, throughput: Double = 0,
+        heavyLoadSamples: Int? = nil, dnsResolved: Bool? = nil
+    ) -> TestSuiteResults {
+        TestSuiteResults(
+            latencyBurst: LatencyBurstResult(
+                min: 1, max: 2, avg: 1.5, median: 1.5, p95: 2, sampleCount: latency, samples: []
+            ),
+            sustainedThroughput: ThroughputResult(
+                bytesPerSecond: throughput, totalBytes: 10, durationSeconds: 1
+            ),
+            jitterMeasurement: JitterResult(averageJitter: 1, maxJitter: 2, sampleCount: jitter),
+            packetLossStress: PacketLossResult(
+                sent: lossSent, received: lossSent, lostPercent: 0, durationSeconds: 1
+            ),
+            latencyUnderLoad: LatencyUnderLoadResult(
+                baselineAvg: 0, underLoadAvg: 0, degradationPercent: 0, sampleCount: 0
+            ),
+            systemMetrics: SystemMetricsResult(
+                batteryStart: 1, batteryEnd: 1, batteryDrainPercent: 0,
+                peakCpuUsage: 1, avgCpuUsage: 1, peakMemoryMB: 1, thermalStateDuringTest: "Nominal"
+            ),
+            overallGrade: "Good",
+            dnsResolution: dnsResolved.map {
+                DNSResolutionResult(resolutionTimeMs: 25, resolved: $0, serviceName: "Pink")
+            },
+            heavyLoad: heavyLoadSamples.map {
+                HeavyLoadResult(
+                    avgLatency: 20, maxLatency: 40, throughputBps: 1000,
+                    packetLoss: 1, sampleCount: $0
+                )
+            }
+        )
+    }
+
+    func testHeavyLoadOnlyRunIsNotAFailure() {
+        let r = results(heavyLoadSamples: 75)
+        XCTAssertTrue(r.hasHeavyLoad)
+        XCTAssertFalse(r.measuredNothing, "a Heavy Load-only run measured something")
+    }
+
+    func testDNSOnlyRunIsNotAFailure() {
+        let r = results(dnsResolved: true)
+        XCTAssertTrue(r.hasDNSResolution)
+        XCTAssertFalse(r.measuredNothing)
+    }
+
+    func testUnresolvedDNSAloneIsNotAMeasurement() {
+        let r = results(dnsResolved: false)
+        XCTAssertFalse(r.hasDNSResolution)
+        XCTAssertTrue(r.measuredNothing, "a failed resolution is not a measurement")
+    }
+
+    func testThroughputOnlyRunIsNotAFailure() {
+        XCTAssertFalse(results(throughput: 5_000_000).measuredNothing)
+    }
+
+    func testTrulyEmptyRunMeasuredNothing() {
+        XCTAssertTrue(results().measuredNothing)
+    }
+
+    func testNotGradedLabelIsNotOneOfTheGradeBands() {
+        // It must not be mistaken for a band by grade filters or distributions.
+        let bands = SignalQuality.allCases.map(\.rawValue)
+        XCTAssertFalse(bands.contains(TestSuiteResults.notGradedLabel))
+        // And it must score 0 rather than colliding with a real band's score.
+        XCTAssertEqual(BridgeComparisonRow.gradeScore(TestSuiteResults.notGradedLabel), 0)
+    }
+}
