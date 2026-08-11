@@ -22,6 +22,14 @@ extension ReportSummary {
         throughputBps > 0
     }
 
+    /// Mirrors `TestSuiteResults.hasLoadDegradation`: degradation is only meaningful
+    /// when the phase collected samples AND had a real baseline to compare against.
+    /// Derived from stored columns, so reports written before this check still resolve
+    /// correctly rather than defaulting to "unmeasured".
+    var hasLoadDegradation: Bool {
+        loadSampleCount > 0 && loadBaselineAvg > 0
+    }
+
     var measuredLatencyAvg: Double? {
         hasLatency ? latencyAvg : nil
     }
@@ -40,6 +48,10 @@ extension ReportSummary {
 
     var measuredThroughput: Double? {
         hasThroughput ? throughputBps : nil
+    }
+
+    var measuredLoadDegradation: Double? {
+        hasLoadDegradation ? loadDegradation : nil
     }
 }
 

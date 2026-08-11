@@ -122,12 +122,15 @@ struct ReportAnalyticsView: View {
             "\($0.localChip) vs \($0.remoteChip)|\($0.bridgeTransport)"
         }
         let hasBridges = Set(filteredSummaries.map(\.bridgeTransport)).count > 1
-        return grouped.map { _, summaries in
+        // Pairs with no measurement of the selected metric are omitted rather than
+        // charted as zero.
+        return grouped.compactMap { _, summaries -> PairAggregate? in
             let pair = "\(summaries[0].localChip) vs \(summaries[0].remoteChip)"
             let bridge = summaries[0].bridgeTransport
             let label = hasBridges ? "\(pair) [\(bridge)]" : pair
-            let avg = summaries.map { metricValue(for: $0) }.reduce(0, +) / Double(summaries.count)
-            return PairAggregate(pair: label, average: avg, count: summaries.count, bridge: bridge)
+            let measured = summaries.compactMap { metricValue(for: $0) }
+            guard let avg = measuredMean(measured) else { return nil }
+            return PairAggregate(pair: label, average: avg, count: measured.count, bridge: bridge)
         }
         .sorted { $0.pair < $1.pair }
     }
@@ -136,10 +139,10 @@ struct ReportAnalyticsView: View {
         let grouped: [String: [ReportSummary]] = Dictionary(grouping: filteredSummaries) {
             "\($0.localOS) \u{2192} \($0.remoteOS)"
         }
-        return grouped.map { entry -> OSPairAggregate in
-            let summaries = entry.value
-            let avg = summaries.map { metricValue(for: $0) }.reduce(0, +) / Double(summaries.count)
-            return OSPairAggregate(pair: entry.key, average: avg, count: summaries.count)
+        return grouped.compactMap { entry -> OSPairAggregate? in
+            let measured = entry.value.compactMap { metricValue(for: $0) }
+            guard let avg = measuredMean(measured) else { return nil }
+            return OSPairAggregate(pair: entry.key, average: avg, count: measured.count)
         }
         .sorted { $0.pair < $1.pair }
     }
@@ -536,7 +539,11 @@ struct ReportAnalyticsView: View {
             let period = TrendAnalyzer.describePeriod(dates: sorted.map(\.date))
             // nil when the pair has fewer than 3 reports — no trend is invented.
             let trend = TrendAnalyzer.analyzeTrend(
-                samples: sorted.map { (date: $0.date, value: metricValue(for: $0)) },
+                // Trends must regress over measured points only; a zero placeholder
+                // would fabricate a downward trend.
+                samples: sorted.compactMap { summary in
+                    metricValue(for: summary).map { (date: summary.date, value: $0) }
+                },
                 metric: selectedMetric.rawValue,
                 lowerIsBetter: selectedMetric.lowerIsBetter,
                 period: period
@@ -633,14 +640,18 @@ struct ReportAnalyticsView: View {
                 Text("\(filteredSummaries.count) reports").font(.caption).foregroundStyle(.secondary)
             }
 
-            if filteredSummaries.count >= 2 {
-                let hasBridges = Set(filteredSummaries.map(\.bridgeTransport)).count > 1
+            // Only reports that measured the selected metric can be plotted — a zero
+            // placeholder from a cancelled run would draw a fake dip to the axis.
+            let plottable = filteredSummaries.filter { metricValue(for: $0) != nil }
+            if plottable.count >= 2 {
+                let hasBridges = Set(plottable.map(\.bridgeTransport)).count > 1
                 Chart {
-                    ForEach(filteredSummaries) { summary in
+                    ForEach(plottable) { summary in
                         let pair = "\(summary.localChip) vs \(summary.remoteChip)"
+                        let value = metricValue(for: summary) ?? 0
                         LineMark(
                             x: .value("Date", summary.date),
-                            y: .value(selectedMetric.rawValue, metricValue(for: summary))
+                            y: .value(selectedMetric.rawValue, value)
                         )
                         .foregroundStyle(by: .value(
                             hasBridges ? "Bridge" : "Pair",
@@ -651,7 +662,7 @@ struct ReportAnalyticsView: View {
 
                         PointMark(
                             x: .value("Date", summary.date),
-                            y: .value(selectedMetric.rawValue, metricValue(for: summary))
+                            y: .value(selectedMetric.rawValue, value)
                         )
                         .foregroundStyle(by: .value(
                             hasBridges ? "Bridge" : "Pair",
@@ -721,9 +732,9 @@ struct ReportAnalyticsView: View {
             let bridges = store.availableBridgeTransports()
             let bridgeAverages: [(bridge: String, avg: Double, count: Int)] = bridges.compactMap { bridge in
                 let items = filteredSummaries.filter { $0.bridgeTransport == bridge }
-                guard !items.isEmpty else { return nil }
-                let avg = items.map { metricValue(for: $0) }.reduce(0, +) / Double(items.count)
-                return (bridge: bridge, avg: avg, count: items.count)
+                let measured = items.compactMap { metricValue(for: $0) }
+                guard let avg = measuredMean(measured) else { return nil }
+                return (bridge: bridge, avg: avg, count: measured.count)
             }
 
             if bridgeAverages.count >= 2 {
@@ -830,7 +841,7 @@ struct ReportAnalyticsView: View {
                 avgThroughputMBps: (measuredMean(items.compactMap(\.measuredThroughput)) ?? 0) / 1_000_000,
                 avgJitter: measuredMean(items.compactMap(\.measuredJitter)) ?? 0,
                 avgPacketLoss: measuredMean(items.compactMap(\.measuredPacketLoss)) ?? 0,
-                avgLoadDegradation: measuredMean(items.map(\.loadDegradation)) ?? 0,
+                avgLoadDegradation: measuredMean(items.compactMap(\.measuredLoadDegradation)) ?? 0,
                 failRate: Double(failCount) / n * 100
             )
         }
@@ -966,15 +977,25 @@ struct ReportAnalyticsView: View {
 
     // MARK: - Helpers
 
-    private func metricValue(for summary: ReportSummary) -> Double {
+    /// The selected metric for a report, or nil when that report never measured it.
+    ///
+    /// Returning a non-optional Double here was the root of the placeholder bug: a
+    /// cancelled or partial run stores zeros, zero looks like a real reading, and every
+    /// caller then averaged it. Optional forces each consumer to decide explicitly.
+    private func metricValue(for summary: ReportSummary) -> Double? {
         switch selectedMetric {
-        case .latencyAvg: summary.latencyAvg
-        case .latencyP95: summary.latencyP95
-        case .throughput: summary.throughputBps / 1_000_000
-        case .jitterAvg: summary.jitterAvg
-        case .packetLoss: summary.packetLossPercent
-        case .loadDegradation: summary.loadDegradation
+        case .latencyAvg: summary.measuredLatencyAvg
+        case .latencyP95: summary.measuredLatencyP95
+        case .throughput: summary.measuredThroughput.map { $0 / 1_000_000 }
+        case .jitterAvg: summary.measuredJitter
+        case .packetLoss: summary.measuredPacketLoss
+        case .loadDegradation: summary.measuredLoadDegradation
         }
+    }
+
+    /// Mean of the reports that actually measured the selected metric, or nil.
+    private func metricAverage(for summaries: [ReportSummary]) -> Double? {
+        measuredMean(summaries.compactMap { metricValue(for: $0) })
     }
 
     private func formatMetricValue(_ value: Double) -> String {

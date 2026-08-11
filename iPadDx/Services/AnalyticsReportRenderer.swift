@@ -142,6 +142,23 @@ enum AnalyticsReportRenderer {
 
     // MARK: - Summary
 
+    /// Formats the mean of the reports that ACTUALLY MEASURED a metric, or "N/A".
+    /// Cancelled and partial runs persist zero placeholders; averaging the raw field
+    /// would drag every per-pair, per-chip and per-OS figure toward zero.
+    private static func mean(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private static func measuredAvg(
+        _ reports: [TestReport],
+        _ metric: (TestSuiteResults) -> Double?
+    ) -> String {
+        let values = reports.compactMap { metric($0.results) }
+        guard !values.isEmpty else { return "N/A" }
+        return f(values.reduce(0, +) / Double(values.count))
+    }
+
     private static func drawSummaryTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
         let cols: [CGFloat] = [0.28, 0.15, 0.15, 0.15, 0.15, 0.12]
         let headers = ["Metric", "Average", "Min", "Max", "Median", "n"]
@@ -220,12 +237,12 @@ enum AnalyticsReportRenderer {
                 [
                     pair,
                     "\(pairReports.count)",
-                    f(pairReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
-                    f(pairReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
-                    f(pairReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
-                    f(pairReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
-                    f(pairReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
-                    f(pairReports.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                    measuredAvg(pairReports) { $0.measuredLatencyAvg },
+                    measuredAvg(pairReports) { $0.measuredLatencyP95 },
+                    measuredAvg(pairReports) { $0.measuredThroughput.map { $0 / 1_000_000 } },
+                    measuredAvg(pairReports) { $0.measuredJitter },
+                    measuredAvg(pairReports) { $0.measuredPacketLoss },
+                    measuredAvg(pairReports) { $0.measuredLoadDegradation },
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
             )
@@ -245,14 +262,21 @@ enum AnalyticsReportRenderer {
         for chip in chips {
             let asSender = reports.filter { $0.localDevice.chipFamily == chip }
             let asReceiver = reports.filter { $0.remoteDevice.chipFamily == chip }
-            let sAvg = asSender.isEmpty ? 0 : asSender.map(\.results.latencyBurst.avg)
-                .reduce(0, +) / Double(asSender.count)
-            let rAvg = asReceiver.isEmpty ? 0 : asReceiver.map(\.results.latencyBurst.avg)
-                .reduce(0, +) / Double(asReceiver.count)
             let all = asSender + asReceiver
-            let overall = all.isEmpty ? 0 : all.map(\.results.latencyBurst.avg).reduce(0, +) / Double(all.count)
+            // Counts reflect reports that actually measured latency, so the "n" beside
+            // each figure matches what produced it. This is the per-chip comparison the
+            // whole tool exists for — a cancelled run's zero must never enter it.
+            let sMeasured = asSender.filter(\.results.hasLatency).count
+            let rMeasured = asReceiver.filter(\.results.hasLatency).count
             cursor.drawTableRow(
-                [chip, "\(asSender.count)", f(sAvg), "\(asReceiver.count)", f(rAvg), f(overall)],
+                [
+                    chip,
+                    "\(sMeasured)",
+                    measuredAvg(asSender) { $0.measuredLatencyAvg },
+                    "\(rMeasured)",
+                    measuredAvg(asReceiver) { $0.measuredLatencyAvg },
+                    measuredAvg(all) { $0.measuredLatencyAvg },
+                ],
                 columnWidths: cols, totalWidth: width, isHeader: false
             )
         }
@@ -332,11 +356,11 @@ enum AnalyticsReportRenderer {
                 [
                     version,
                     "\(vReports.count)",
-                    f(vReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
-                    f(vReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
-                    f(vReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
-                    f(vReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
-                    f(vReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
+                    measuredAvg(vReports) { $0.measuredLatencyAvg },
+                    measuredAvg(vReports) { $0.measuredLatencyP95 },
+                    measuredAvg(vReports) { $0.measuredThroughput.map { $0 / 1_000_000 } },
+                    measuredAvg(vReports) { $0.measuredJitter },
+                    measuredAvg(vReports) { $0.measuredPacketLoss },
                     f(Double(failCount) / n * 100),
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
@@ -365,11 +389,11 @@ enum AnalyticsReportRenderer {
                 [
                     pair,
                     "\(pairReports.count)",
-                    f(pairReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
-                    f(pairReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
-                    f(pairReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
-                    f(pairReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
-                    f(pairReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
+                    measuredAvg(pairReports) { $0.measuredLatencyAvg },
+                    measuredAvg(pairReports) { $0.measuredLatencyP95 },
+                    measuredAvg(pairReports) { $0.measuredThroughput.map { $0 / 1_000_000 } },
+                    measuredAvg(pairReports) { $0.measuredJitter },
+                    measuredAvg(pairReports) { $0.measuredPacketLoss },
                     f(Double(failCount) / n * 100),
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
@@ -475,24 +499,31 @@ enum AnalyticsReportRenderer {
         )
 
         let nativeReports = reports.filter { ($0.bridgeTransport ?? "native") == "native" }
-        let nativeAvgLat = nativeReports.isEmpty ? 0
-            : nativeReports.map(\.results.latencyBurst.avg).reduce(0, +) / Double(nativeReports.count)
+        // The native baseline every delta is measured against must itself come from
+        // real measurements, or every bridge's overhead figure is wrong.
+        let nativeAvgLat = mean(nativeReports.compactMap(\.results.measuredLatencyAvg))
 
         for bridge in bridges {
             let br = reports.filter { ($0.bridgeTransport ?? "native") == bridge }
             guard !br.isEmpty else { continue }
-            let n = Double(br.count)
-            let avgLat = br.map(\.results.latencyBurst.avg).reduce(0, +) / n
-            let delta = bridge == "native" ? "—" : String(format: "%+.1fms", avgLat - nativeAvgLat)
+            let measuredLat = br.compactMap(\.results.measuredLatencyAvg)
+            let avgLat = mean(measuredLat)
+            let delta = if bridge == "native" {
+                "—"
+            } else if measuredLat.isEmpty || nativeAvgLat == nil {
+                "N/A"
+            } else {
+                String(format: "%+.1fms", (avgLat ?? 0) - (nativeAvgLat ?? 0))
+            }
             cursor.drawTableRow(
                 [
-                    bridge, "\(br.count)",
-                    f(avgLat),
-                    f(br.map(\.results.latencyBurst.p95).reduce(0, +) / n),
-                    f(br.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
-                    f(br.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
-                    f(br.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
-                    f(br.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                    bridge, "\(measuredLat.count)",
+                    avgLat.map { f($0) } ?? "N/A",
+                    measuredAvg(br) { $0.measuredLatencyP95 },
+                    measuredAvg(br) { $0.measuredThroughput.map { $0 / 1_000_000 } },
+                    measuredAvg(br) { $0.measuredJitter },
+                    measuredAvg(br) { $0.measuredPacketLoss },
+                    measuredAvg(br) { $0.measuredLoadDegradation },
                     delta,
                 ],
                 columnWidths: cols, totalWidth: width, isHeader: false
@@ -526,10 +557,10 @@ enum AnalyticsReportRenderer {
                 cursor.drawTableRow(
                     [
                         pair, bridge, "\(br.count)",
-                        f(br.map(\.results.latencyBurst.avg).reduce(0, +) / n),
-                        f(br.map(\.results.latencyBurst.p95).reduce(0, +) / n),
-                        f(br.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
-                        f(br.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
+                        measuredAvg(br) { $0.measuredLatencyAvg },
+                        measuredAvg(br) { $0.measuredLatencyP95 },
+                        measuredAvg(br) { $0.measuredThroughput.map { $0 / 1_000_000 } },
+                        measuredAvg(br) { $0.measuredJitter },
                         gradeMode,
                     ],
                     columnWidths: cols, totalWidth: width, isHeader: false

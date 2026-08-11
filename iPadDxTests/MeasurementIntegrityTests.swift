@@ -293,7 +293,6 @@ final class LinkConditionsTests: XCTestCase {
 /// History is now retained for an hour and downsampled for rendering — and the
 /// downsampling MUST keep peaks, or the spikes the chart exists to show disappear.
 final class LatencyWindowTests: XCTestCase {
-
     private func samples(_ values: [Double], start: Date = Date()) -> [LatencySample] {
         values.enumerated().map { index, value in
             LatencySample(
@@ -356,17 +355,22 @@ final class LatencyWindowTests: XCTestCase {
 /// jitter, loss and throughput, so any aggregate that averages raw fields is dragged
 /// toward zero by runs that measured nothing.
 final class MeasurementValidityTests: XCTestCase {
-
     /// `latencyAvg` etc. are passed explicitly so the "unmeasured" fixture is exactly
     /// what TestSuiteRunner persists for a skipped or cancelled phase: zero counts AND
     /// zero values. Keeping non-zero values with zero counts would make the test pass
     /// for the wrong reason.
-    private func results(latencySamples: Int, latencyAvg: Double,
-                         jitterSamples: Int, jitterAvg: Double,
-                         lossSent: Int, lossPercent: Double,
-                         throughput: Double,
-                         underLoadSamples: Int, baseline: Double,
-                         degradation: Double) -> TestSuiteResults {
+    private func results(
+        latencySamples: Int,
+        latencyAvg: Double,
+        jitterSamples: Int,
+        jitterAvg: Double,
+        lossSent: Int,
+        lossPercent: Double,
+        throughput: Double,
+        underLoadSamples: Int,
+        baseline: Double,
+        degradation: Double
+    ) -> TestSuiteResults {
         TestSuiteResults(
             latencyBurst: LatencyBurstResult(
                 min: latencyAvg, max: latencyAvg, avg: latencyAvg,
@@ -396,20 +400,34 @@ final class MeasurementValidityTests: XCTestCase {
     }
 
     private var measured: TestSuiteResults {
-        results(latencySamples: 100, latencyAvg: 10,
-                jitterSamples: 150, jitterAvg: 3,
-                lossSent: 500, lossPercent: 2,
-                throughput: 5_000_000,
-                underLoadSamples: 50, baseline: 10, degradation: 50)
+        results(
+            latencySamples: 100,
+            latencyAvg: 10,
+            jitterSamples: 150,
+            jitterAvg: 3,
+            lossSent: 500,
+            lossPercent: 2,
+            throughput: 5_000_000,
+            underLoadSamples: 50,
+            baseline: 10,
+            degradation: 50
+        )
     }
 
     /// A cancelled run: exactly the all-zero placeholder TestSuiteRunner persists.
     private var unmeasured: TestSuiteResults {
-        results(latencySamples: 0, latencyAvg: 0,
-                jitterSamples: 0, jitterAvg: 0,
-                lossSent: 0, lossPercent: 0,
-                throughput: 0,
-                underLoadSamples: 0, baseline: 0, degradation: 0)
+        results(
+            latencySamples: 0,
+            latencyAvg: 0,
+            jitterSamples: 0,
+            jitterAvg: 0,
+            lossSent: 0,
+            lossPercent: 0,
+            throughput: 0,
+            underLoadSamples: 0,
+            baseline: 0,
+            degradation: 0
+        )
     }
 
     func testMeasuredResultsExposeTheirValues() {
@@ -432,11 +450,18 @@ final class MeasurementValidityTests: XCTestCase {
 
     func testLoadDegradationNeedsARealBaseline() {
         // Samples collected but no baseline: degradation is not comparable.
-        let r = results(latencySamples: 100, latencyAvg: 10,
-                        jitterSamples: 150, jitterAvg: 3,
-                        lossSent: 500, lossPercent: 2,
-                        throughput: 1,
-                        underLoadSamples: 50, baseline: 0, degradation: 50)
+        let r = results(
+            latencySamples: 100,
+            latencyAvg: 10,
+            jitterSamples: 150,
+            jitterAvg: 3,
+            lossSent: 500,
+            lossPercent: 2,
+            throughput: 1,
+            underLoadSamples: 50,
+            baseline: 0,
+            degradation: 50
+        )
         XCTAssertNil(r.measuredLoadDegradation)
     }
 
@@ -451,5 +476,108 @@ final class MeasurementValidityTests: XCTestCase {
         let naive = all.map(\.latencyBurst.avg).reduce(0, +) / Double(all.count)
         XCTAssertEqual(naive, 10.0 / 3.0, accuracy: 0.0001)
         XCTAssertLessThan(naive, 5, "the naive average really is dragged toward zero")
+    }
+}
+
+/// Guards the *breakdown* aggregations, not just the overview.
+///
+/// The first pass at this fix only filtered the overview rows; per-pair, per-chip,
+/// per-OS, per-bridge and trend paths still averaged raw fields, so one real 10ms run
+/// plus two cancelled placeholder reports still read as 3.3ms in those comparisons.
+final class SummaryValidityTests: XCTestCase {
+    private func summary(
+        id: UUID = UUID(),
+        latencySamples: Int, latencyAvg: Double,
+        jitterSamples: Int = 0, jitterAvg: Double = 0,
+        lossSent: Int = 0, lossPercent: Double = 0,
+        throughput: Double = 0,
+        loadSamples: Int = 0, loadBaseline: Double = 0, degradation: Double = 0
+    ) -> ReportSummary {
+        ReportSummary(
+            id: id, date: Date(), durationSeconds: 1, overallGrade: "Good", source: "local",
+            localName: "A", localModel: "iPad", localModelNumber: "iPad16,3",
+            localOS: "18.0", localChip: "M4",
+            remoteName: "B", remoteModel: "iPad", remoteModelNumber: "iPad15,7",
+            remoteOS: "18.0", remoteChip: "A16",
+            latencyMin: latencyAvg, latencyMax: latencyAvg, latencyAvg: latencyAvg,
+            latencyMedian: latencyAvg, latencyP95: latencyAvg, latencySampleCount: latencySamples,
+            throughputBps: throughput, throughputBytes: 0, throughputDuration: 0,
+            jitterAvg: jitterAvg, jitterMax: jitterAvg, jitterSampleCount: jitterSamples,
+            packetLossSent: lossSent, packetLossReceived: lossSent, packetLossPercent: lossPercent,
+            packetLossDuration: 1,
+            loadBaselineAvg: loadBaseline, loadUnderLoadAvg: 20,
+            loadDegradation: degradation, loadSampleCount: loadSamples,
+            bridgeTransport: "native",
+            usedPeerToPeer: false, linkChanges: 0, linkDisconnects: 0, discoveryFlaps: 0
+        )
+    }
+
+    func testMeasuredSummaryExposesValues() {
+        let s = summary(
+            latencySamples: 100, latencyAvg: 10,
+            jitterSamples: 150, jitterAvg: 3,
+            lossSent: 500, lossPercent: 2,
+            throughput: 5_000_000,
+            loadSamples: 50, loadBaseline: 10, degradation: 40
+        )
+        XCTAssertEqual(s.measuredLatencyAvg, 10)
+        XCTAssertEqual(s.measuredJitter, 3)
+        XCTAssertEqual(s.measuredPacketLoss, 2)
+        XCTAssertEqual(s.measuredThroughput, 5_000_000)
+        XCTAssertEqual(s.measuredLoadDegradation, 40)
+    }
+
+    func testCancelledSummaryExposesNil() {
+        let s = summary(latencySamples: 0, latencyAvg: 0)
+        XCTAssertNil(s.measuredLatencyAvg)
+        XCTAssertNil(s.measuredJitter)
+        XCTAssertNil(s.measuredPacketLoss)
+        XCTAssertNil(s.measuredThroughput)
+        XCTAssertNil(s.measuredLoadDegradation)
+    }
+
+    func testLoadDegradationRequiresSamplesAndABaseline() {
+        // Samples but no baseline: the percentage is not comparable to anything.
+        let noBaseline = summary(
+            latencySamples: 100,
+            latencyAvg: 10,
+            loadSamples: 50,
+            loadBaseline: 0,
+            degradation: 75
+        )
+        XCTAssertNil(noBaseline.measuredLoadDegradation)
+
+        // Baseline but no samples: nothing was measured under load.
+        let noSamples = summary(
+            latencySamples: 100,
+            latencyAvg: 10,
+            loadSamples: 0,
+            loadBaseline: 10,
+            degradation: 75
+        )
+        XCTAssertNil(noSamples.measuredLoadDegradation)
+    }
+
+    func testPerPairStyleAverageIgnoresPlaceholders() {
+        // Exactly the reviewer's scenario: one real 10ms run plus two cancelled runs.
+        let group = [
+            summary(latencySamples: 100, latencyAvg: 10),
+            summary(latencySamples: 0, latencyAvg: 0),
+            summary(latencySamples: 0, latencyAvg: 0),
+        ]
+        let measured = group.compactMap(\.measuredLatencyAvg)
+        XCTAssertEqual(measured.count, 1)
+        XCTAssertEqual(measuredMean(measured) ?? 0, 10, accuracy: 0.0001)
+
+        let naive = group.map(\.latencyAvg).reduce(0, +) / Double(group.count)
+        XCTAssertEqual(naive, 10.0 / 3.0, accuracy: 0.0001, "the old behaviour, for contrast")
+    }
+
+    func testGroupWithNoMeasurementsYieldsNilNotZero() {
+        let group = [
+            summary(latencySamples: 0, latencyAvg: 0),
+            summary(latencySamples: 0, latencyAvg: 0),
+        ]
+        XCTAssertNil(measuredMean(group.compactMap(\.measuredLatencyAvg)))
     }
 }

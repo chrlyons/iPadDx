@@ -497,12 +497,12 @@ class ReportStore {
                 let row = [
                     csvEscape(bridge),
                     "\(br.count)",
-                    f(br.map(\.results.latencyBurst.avg).reduce(0, +) / bn),
-                    f(br.map(\.results.latencyBurst.p95).reduce(0, +) / bn),
-                    f(br.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / bn / 1_000_000),
-                    f(br.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / bn),
-                    f(br.map(\.results.packetLossStress.lostPercent).reduce(0, +) / bn),
-                    f(br.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / bn),
+                    measuredAvg(br) { $0.measuredLatencyAvg },
+                    measuredAvg(br) { $0.measuredLatencyP95 },
+                    measuredAvg(br) { $0.measuredThroughput.map { $0 / 1_000_000 } },
+                    measuredAvg(br) { $0.measuredJitter },
+                    measuredAvg(br) { $0.measuredPacketLoss },
+                    measuredAvg(br) { $0.measuredLoadDegradation },
                     "\(br.filter { $0.results.overallGrade == "Excellent" }.count)",
                     "\(br.filter { $0.results.overallGrade == "Good" }.count)",
                     "\(br.filter { $0.results.overallGrade == "Fair" }.count)",
@@ -529,12 +529,12 @@ class ReportStore {
                     let n = Double(br.count)
                     let row = [
                         csvEscape(pair), csvEscape(bridge), "\(br.count)",
-                        f(br.map(\.results.latencyBurst.avg).reduce(0, +) / n),
-                        f(br.map(\.results.latencyBurst.p95).reduce(0, +) / n),
-                        f(br.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
-                        f(br.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
-                        f(br.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
-                        f(br.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                        measuredAvg(br) { $0.measuredLatencyAvg },
+                        measuredAvg(br) { $0.measuredLatencyP95 },
+                        measuredAvg(br) { $0.measuredThroughput.map { $0 / 1_000_000 } },
+                        measuredAvg(br) { $0.measuredJitter },
+                        measuredAvg(br) { $0.measuredPacketLoss },
+                        measuredAvg(br) { $0.measuredLoadDegradation },
                         "\(br.filter { $0.results.overallGrade == "Excellent" }.count)",
                         "\(br.filter { $0.results.overallGrade == "Good" }.count)",
                         "\(br.filter { $0.results.overallGrade == "Fair" }.count)",
@@ -551,12 +551,12 @@ class ReportStore {
                 let n = Double(pairReports.count)
                 let row = [
                     csvEscape(pair), "\(pairReports.count)",
-                    f(pairReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
-                    f(pairReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
-                    f(pairReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
-                    f(pairReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
-                    f(pairReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
-                    f(pairReports.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                    measuredAvg(pairReports) { $0.measuredLatencyAvg },
+                    measuredAvg(pairReports) { $0.measuredLatencyP95 },
+                    measuredAvg(pairReports) { $0.measuredThroughput.map { $0 / 1_000_000 } },
+                    measuredAvg(pairReports) { $0.measuredJitter },
+                    measuredAvg(pairReports) { $0.measuredPacketLoss },
+                    measuredAvg(pairReports) { $0.measuredLoadDegradation },
                     "\(pairReports.filter { $0.results.overallGrade == "Excellent" }.count)",
                     "\(pairReports.filter { $0.results.overallGrade == "Good" }.count)",
                     "\(pairReports.filter { $0.results.overallGrade == "Fair" }.count)",
@@ -578,14 +578,13 @@ class ReportStore {
                         .filter { $0.localDevice.chipFamily == chip && ($0.bridgeTransport ?? "native") == bridge }
                     let asReceiver = reports
                         .filter { $0.remoteDevice.chipFamily == chip && ($0.bridgeTransport ?? "native") == bridge }
-                    let senderAvg = asSender.isEmpty ? 0 : asSender.map(\.results.latencyBurst.avg)
-                        .reduce(0, +) / Double(asSender.count)
-                    let receiverAvg = asReceiver.isEmpty ? 0 : asReceiver.map(\.results.latencyBurst.avg)
-                        .reduce(0, +) / Double(asReceiver.count)
+                    // Counts are of reports that measured latency, matching the figure.
                     let row = [
                         csvEscape(chip), csvEscape(bridge),
-                        "\(asSender.count)", f(senderAvg),
-                        "\(asReceiver.count)", f(receiverAvg),
+                        "\(asSender.filter(\.results.hasLatency).count)",
+                        measuredAvg(asSender) { $0.measuredLatencyAvg },
+                        "\(asReceiver.filter(\.results.hasLatency).count)",
+                        measuredAvg(asReceiver) { $0.measuredLatencyAvg },
                     ]
                     chipRows.append(row.joined(separator: ","))
                 }
@@ -597,14 +596,12 @@ class ReportStore {
             for chip in chips {
                 let asSender = reports.filter { $0.localDevice.chipFamily == chip }
                 let asReceiver = reports.filter { $0.remoteDevice.chipFamily == chip }
-                let senderAvg = asSender.isEmpty ? 0 : asSender.map(\.results.latencyBurst.avg)
-                    .reduce(0, +) / Double(asSender.count)
-                let receiverAvg = asReceiver.isEmpty ? 0 : asReceiver.map(\.results.latencyBurst.avg)
-                    .reduce(0, +) / Double(asReceiver.count)
                 let row = [
                     csvEscape(chip),
-                    "\(asSender.count)", f(senderAvg),
-                    "\(asReceiver.count)", f(receiverAvg),
+                    "\(asSender.filter(\.results.hasLatency).count)",
+                    measuredAvg(asSender) { $0.measuredLatencyAvg },
+                    "\(asReceiver.filter(\.results.hasLatency).count)",
+                    measuredAvg(asReceiver) { $0.measuredLatencyAvg },
                 ]
                 chipRows.append(row.joined(separator: ","))
             }
@@ -624,12 +621,12 @@ class ReportStore {
                 .filter { $0.results.overallGrade == "Poor" || $0.results.overallGrade == "Fair" }.count
             let row = [
                 csvEscape(pair), "\(pairReports.count)",
-                f(pairReports.map(\.results.latencyBurst.avg).reduce(0, +) / n),
-                f(pairReports.map(\.results.latencyBurst.p95).reduce(0, +) / n),
-                f(pairReports.map(\.results.sustainedThroughput.bytesPerSecond).reduce(0, +) / n / 1_000_000),
-                f(pairReports.map(\.results.jitterMeasurement.averageJitter).reduce(0, +) / n),
-                f(pairReports.map(\.results.packetLossStress.lostPercent).reduce(0, +) / n),
-                f(pairReports.map(\.results.latencyUnderLoad.degradationPercent).reduce(0, +) / n),
+                measuredAvg(pairReports) { $0.measuredLatencyAvg },
+                measuredAvg(pairReports) { $0.measuredLatencyP95 },
+                measuredAvg(pairReports) { $0.measuredThroughput.map { $0 / 1_000_000 } },
+                measuredAvg(pairReports) { $0.measuredJitter },
+                measuredAvg(pairReports) { $0.measuredPacketLoss },
+                measuredAvg(pairReports) { $0.measuredLoadDegradation },
                 f(Double(failCount) / n * 100),
             ]
             osPairRows.append(row.joined(separator: ","))
@@ -663,6 +660,20 @@ class ReportStore {
     }
 
     // swiftlint:enable function_body_length
+
+    /// Formats the mean of the reports that ACTUALLY MEASURED a metric, or "N/A".
+    ///
+    /// Cancelled and partial runs persist zero placeholders, and zero reads as a real
+    /// latency/jitter/loss/throughput, so every per-pair, per-chip, per-OS and
+    /// per-bridge breakdown must filter rather than average the raw field.
+    nonisolated private func measuredAvg(
+        _ reports: [TestReport],
+        _ metric: (TestSuiteResults) -> Double?
+    ) -> String {
+        let values = reports.compactMap { metric($0.results) }
+        guard !values.isEmpty else { return "N/A" }
+        return f(values.reduce(0, +) / Double(values.count))
+    }
 
     nonisolated private func f(_ value: Double) -> String {
         String(format: "%.2f", value)
