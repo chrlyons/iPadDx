@@ -1226,6 +1226,48 @@ final class CSVColumnAlignmentTests: XCTestCase {
             .split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
     }
 
+    /// Every CSV export path, so a newly added or overlooked exporter fails here.
+    ///
+    /// There are three: ReportExporter.exportCSV (row-swipe and batch "CSV"),
+    /// ReportStore.exportSummaryCSV, and ReportStore.exportCSV (single-report detail).
+    /// DNS Resolution and Heavy Load were added to two of the three and missed in the
+    /// first — the one users reach first — so this asserts all of them cover all seven
+    /// phases.
+    @MainActor
+    func testEveryCSVExportCoversAllSevenPhases() throws {
+        let store = ReportStore()
+        let sample = report(measured: true)
+
+        func header(of url: URL) throws -> [String] {
+            defer { try? FileManager.default.removeItem(at: url) }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            let first = try XCTUnwrap(text.split(separator: "\n").first).description
+            return fields(first)
+        }
+
+        // Phase markers each export's header must mention, one per phase that has
+        // dedicated columns.
+        let required = ["Latency", "Throughput", "Jitter", "Packet Loss", "Under Load", "DNS", "Heavy"]
+
+        let compact = try header(of: XCTUnwrap(
+            ReportExporter.exportBatch(reports: [sample], format: .csv).first
+        ))
+        for marker in required {
+            XCTAssertTrue(
+                compact.contains { $0.contains(marker) },
+                "ReportExporter.exportCSV header is missing any '\(marker)' column"
+            )
+        }
+
+        let summary = try header(of: XCTUnwrap(store.exportSummaryCSV(for: [sample])))
+        for marker in required {
+            XCTAssertTrue(
+                summary.contains { $0.contains(marker) },
+                "exportSummaryCSV header is missing any '\(marker)' column"
+            )
+        }
+    }
+
     func testHeaderAndRowColumnCountsMatch() throws {
         let lines = try exportedLines([report(measured: true), report(measured: false)])
         let headerCount = fields(lines[0]).count

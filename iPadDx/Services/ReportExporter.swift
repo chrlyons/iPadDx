@@ -130,6 +130,9 @@ enum ReportExporter {
             "Latency Avg (ms)", "Latency P95 (ms)", "Throughput (B/s)", "Jitter (ms)",
             "Packet Loss (%)",
             "Under Load Baseline (ms)", "Under Load Avg (ms)", "Load Degradation (%)",
+            "DNS Resolved", "DNS Time (ms)",
+            "Heavy Avg Latency (ms)", "Heavy Max Latency (ms)", "Heavy Throughput (B/s)",
+            "Heavy Packet Loss (%)", "Heavy Samples",
             "Duration (s)",
             "Link", "Interface", "Direct P2P", "Link Changes", "Disconnects", "Discovery Flaps", "SSID",
         ]
@@ -165,6 +168,17 @@ enum ReportExporter {
                 r.results.hasLoadDegradation ? f(r.results.latencyUnderLoad.baselineAvg) : "",
                 r.results.hasLatencyUnderLoad ? f(r.results.latencyUnderLoad.underLoadAvg) : "",
                 r.results.measuredLoadDegradation.map(f) ?? "",
+                // DNS Resolution and Heavy Load: this exporter backs the row-swipe and
+                // batch "CSV" actions, so omitting them dropped two of the seven phase
+                // results from the export most users reach first.
+                r.results.dnsResolution.map { $0.resolved ? "yes" : "no" } ?? "",
+                r.results.hasDNSResolution
+                    ? f(r.results.dnsResolution?.resolutionTimeMs ?? 0) : "",
+                r.results.hasHeavyLoad ? f(r.results.heavyLoad?.avgLatency ?? 0) : "",
+                r.results.hasHeavyLoad ? f(r.results.heavyLoad?.maxLatency ?? 0) : "",
+                r.results.hasHeavyLoad ? f(r.results.heavyLoad?.throughputBps ?? 0) : "",
+                r.results.hasHeavyLoad ? f(r.results.heavyLoad?.packetLoss ?? 0) : "",
+                "\(r.results.heavyLoad?.sampleCount ?? 0)",
                 f(r.durationSeconds),
             ]
             let link: [String] = [
