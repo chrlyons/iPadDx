@@ -286,3 +286,65 @@ final class LinkConditionsTests: XCTestCase {
         XCTAssertNil(decoded.linkConditions)
     }
 }
+
+/// Tests for latency chart windowing and downsampling.
+///
+/// The chart previously showed only ~60s because history was capped at 120 samples.
+/// History is now retained for an hour and downsampled for rendering — and the
+/// downsampling MUST keep peaks, or the spikes the chart exists to show disappear.
+final class LatencyWindowTests: XCTestCase {
+
+    private func samples(_ values: [Double], start: Date = Date()) -> [LatencySample] {
+        values.enumerated().map { index, value in
+            LatencySample(
+                id: index,
+                value: value,
+                timestamp: start.addingTimeInterval(Double(index) * 0.5)
+            )
+        }
+    }
+
+    func testDownsamplePreservesPeaks() {
+        // One large spike buried among low values must survive reduction.
+        var values = Array(repeating: 10.0, count: 999)
+        values[500] = 950.0
+        let reduced = LatencyWindow.downsample(samples(values), to: 100)
+
+        XCTAssertLessThanOrEqual(reduced.count, 101)
+        XCTAssertTrue(
+            reduced.contains { $0.value == 950.0 },
+            "downsampling dropped the spike — the chart would hide the anomaly"
+        )
+    }
+
+    func testDownsampleLeavesSmallSeriesUntouched() {
+        let input = samples([1, 2, 3, 4])
+        let reduced = LatencyWindow.downsample(input, to: 400)
+        XCTAssertEqual(reduced.count, 4)
+        XCTAssertEqual(reduced.map(\.value), [1, 2, 3, 4])
+    }
+
+    func testDownsampleKeepsChronologicalOrder() {
+        let reduced = LatencyWindow.downsample(samples((0 ..< 1000).map(Double.init)), to: 50)
+        XCTAssertEqual(reduced.map(\.id), reduced.map(\.id).sorted())
+    }
+
+    func testAllWindowKeepsEverything() {
+        let input = samples(Array(repeating: 5.0, count: 300))
+        XCTAssertEqual(LatencyWindow.all.filter(input).count, 300)
+    }
+
+    func testOneMinuteWindowKeepsOnlyRecentSamples() {
+        // 0.5s cadence: 600 samples spans 300s. The last minute is ~120 samples.
+        let input = samples(Array(repeating: 5.0, count: 600))
+        let windowed = LatencyWindow.oneMinute.filter(input)
+        XCTAssertGreaterThan(windowed.count, 100)
+        XCTAssertLessThanOrEqual(windowed.count, 125)
+        XCTAssertEqual(windowed.last?.id, input.last?.id, "must keep the most recent sample")
+    }
+
+    func testHistoryRetentionCoversALongSoak() {
+        // An hour at the 500ms heartbeat. The old 120-sample cap held ~60 seconds.
+        XCTAssertGreaterThanOrEqual(DiagnosticMetrics.defaultLatencyHistory, 7200)
+    }
+}

@@ -103,10 +103,21 @@ final class DiagnosticMetricsTests: XCTestCase {
     @MainActor
     func testAppendLatencyTrimsToMaxHistory() {
         let metrics = DiagnosticMetrics()
-        for i in 0 ..< 200 {
+        let cap = DiagnosticMetrics.defaultLatencyHistory
+        for i in 0 ..< (cap + 80) {
             metrics.appendLatency(Double(i))
         }
-        XCTAssertEqual(metrics.latencyHistory.count, 120, "Should trim to maxHistory")
+        XCTAssertEqual(metrics.latencyHistory.count, cap, "Should trim to the default cap")
+        // Trimming must drop the OLDEST samples, keeping the most recent window.
+        XCTAssertEqual(metrics.latencyHistory.last?.value, Double(cap + 79))
+        XCTAssertEqual(metrics.latencyHistory.first?.value, Double(80))
+    }
+
+    @MainActor
+    func testDefaultHistoryHoldsAtLeastAnHourOfHeartbeats() {
+        // 500ms ping cadence — the old 120-sample cap held only ~60 seconds, so a long
+        // soak silently lost the earlier history the latency chart needs.
+        XCTAssertGreaterThanOrEqual(DiagnosticMetrics.defaultLatencyHistory, 7200)
     }
 
     @MainActor

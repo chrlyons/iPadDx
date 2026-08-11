@@ -8,6 +8,7 @@ struct DiagnosticDashboardView: View {
     @State private var uptimeTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var uptimeDisplay: String = "0m 00s"
     @State private var showAnomalies = false
+    @State private var latencyWindow: LatencyWindow = .all
 
     private var metrics: DiagnosticMetrics {
         peer.metrics
@@ -252,10 +253,21 @@ struct DiagnosticDashboardView: View {
                 Text("\(metrics.latencyHistory.count) samples").font(.caption).foregroundStyle(.secondary)
             }
 
+            Picker("Window", selection: $latencyWindow) {
+                ForEach(LatencyWindow.allCases, id: \.self) { window in
+                    Text(window.label).tag(window)
+                }
+            }
+            .pickerStyle(.segmented)
+
             if metrics.latencyHistory.count >= 2 {
-                let samples = metrics.latencyHistory
-                let maxID = samples.last!.id
-                let windowSize = max(maxID - samples.first!.id, 60)
+                let windowed = latencyWindow.filter(metrics.latencyHistory)
+                // Downsample for rendering, keeping the PEAK of each bucket. Plain
+                // decimation would drop the spikes this chart exists to show.
+                let samples = LatencyWindow.downsample(windowed, to: 400)
+                let firstID = samples.first?.id ?? 0
+                let maxID = samples.last?.id ?? firstID
+                let domainEnd = max(maxID, firstID + 1)
 
                 let lineColor = Color.adaptive(.blue, scheme: colorScheme)
 
@@ -268,17 +280,31 @@ struct DiagnosticDashboardView: View {
                             .foregroundStyle(lineColor.opacity(0.1).gradient)
                             .interpolationMethod(.catmullRom)
                     }
-                    // Anomaly markers
-                    ForEach(metrics.anomalies.filter { $0.id >= (maxID - windowSize) }) { anomaly in
+                    // Anomaly markers — drawn from the full anomaly list so a spike is
+                    // never lost to downsampling.
+                    ForEach(metrics.anomalies.filter { $0.id >= firstID && $0.id <= domainEnd }) { anomaly in
                         PointMark(x: .value("Sample", anomaly.id), y: .value("ms", anomaly.value))
                             .foregroundStyle(Color.anomalyColor(anomaly.severity, scheme: colorScheme))
                             .symbolSize(anomaly.severity == .critical ? 80 : 50)
                     }
                 }
-                .chartXScale(domain: (maxID - windowSize) ... maxID)
+                .chartXScale(domain: firstID ... domainEnd)
                 .chartYAxisLabel("ms")
                 .chartXAxis(.hidden)
                 .frame(height: 200)
+
+                if let first = windowed.first?.timestamp, let last = windowed.last?.timestamp {
+                    HStack {
+                        Text(first, style: .time)
+                        Spacer()
+                        Text("\(windowed.count) samples shown")
+                        Spacer()
+                        Text(last, style: .time)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                }
 
                 // Anomaly count badge — tap to drill into the individual spikes
                 if !metrics.anomalies.isEmpty {
@@ -788,5 +814,64 @@ struct AnomalyDetailSheet: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: - Latency Chart Windowing
+
+/// Time window for the latency chart.
+///
+/// The chart used to show whatever the sample buffer happened to hold, which was
+/// ~60 seconds — so on a long soak the earlier history simply vanished. History is
+/// now retained for an hour and this selects how much of it to display.
+enum LatencyWindow: CaseIterable, Hashable {
+    case oneMinute
+    case fiveMinutes
+    case fifteenMinutes
+    case all
+
+    var label: String {
+        switch self {
+        case .oneMinute: "1m"
+        case .fiveMinutes: "5m"
+        case .fifteenMinutes: "15m"
+        case .all: "All"
+        }
+    }
+
+    var seconds: TimeInterval? {
+        switch self {
+        case .oneMinute: 60
+        case .fiveMinutes: 300
+        case .fifteenMinutes: 900
+        case .all: nil
+        }
+    }
+
+    func filter(_ samples: [LatencySample]) -> [LatencySample] {
+        guard let seconds, let last = samples.last?.timestamp else { return samples }
+        let cutoff = last.addingTimeInterval(-seconds)
+        return samples.filter { $0.timestamp >= cutoff }
+    }
+
+    /// Reduces `samples` to at most `limit` points, keeping the highest value in each
+    /// bucket. Preserving peaks matters: a mean or a plain stride would smooth away
+    /// the latency spikes the chart is there to reveal.
+    static func downsample(_ samples: [LatencySample], to limit: Int) -> [LatencySample] {
+        guard limit > 0, samples.count > limit else { return samples }
+        let bucketSize = Int((Double(samples.count) / Double(limit)).rounded(.up))
+        guard bucketSize > 1 else { return samples }
+
+        var result: [LatencySample] = []
+        result.reserveCapacity(limit + 1)
+        var index = 0
+        while index < samples.count {
+            let end = Swift.min(index + bucketSize, samples.count)
+            if let peak = samples[index ..< end].max(by: { $0.value < $1.value }) {
+                result.append(peak)
+            }
+            index = end
+        }
+        return result
     }
 }

@@ -27,7 +27,7 @@ class DiagnosticEngine {
     /// Fails an inbound transfer that stalls, so a dropped sender can't leave the
     /// receiver waiting forever for bytes that will never arrive.
     private var incomingThroughputTimeout: Task<Void, Never>?
-    private let maxLatencyHistory = 120
+    private let maxLatencyHistory = DiagnosticMetrics.defaultLatencyHistory
     private var lastPathUpdate: TimeInterval = 0
     private var systemTimer: Timer?
     // Responder-side metric collection during remote test

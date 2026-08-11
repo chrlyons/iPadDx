@@ -616,57 +616,113 @@ class TestSuiteRunner {
 
     /// Measures mDNS resolution time using NWBrowser to discover the service name,
     /// without opening a TCP connection to the peer's listener (which would disrupt it).
+    /// Measures how long the peer's Bonjour service takes to appear in a fresh browse.
+    ///
+    /// The browser MUST be configured exactly like the app's main browser
+    /// (`BonjourService.startBrowsing`): `includePeerToPeer = true` and a nil domain.
+    /// Without peer-to-peer the browser cannot see a peer reachable only over AWDL —
+    /// i.e. a direct device-to-device link with no access point — and the phase reports
+    /// "could not resolve" for a peer that is plainly connected.
     private func runDNSResolutionTest(serviceName: String) async -> DNSResolutionResult {
         let serviceType = "_ipadconn._tcp"
         let start = CFAbsoluteTimeGetCurrent()
+        let seen = DiscoveredNames()
 
         let resolved = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            var resumed = false
+            let once = ResumeOnce(cont)
+            let params = NWParameters()
+            params.includePeerToPeer = true
             let browser = NWBrowser(
-                for: .bonjour(type: serviceType, domain: "local."),
-                using: .tcp
+                for: .bonjour(type: serviceType, domain: nil),
+                using: params
             )
 
             browser.browseResultsChangedHandler = { results, _ in
-                guard !resumed else { return }
-                // Look for our target service name in the results
                 for result in results {
-                    if case let .service(name, _, _, _) = result.endpoint, name == serviceName {
-                        resumed = true
+                    guard case let .service(name, _, _, _) = result.endpoint else { continue }
+                    seen.insert(name)
+                    // mDNS renames on collision ("Pink" -> "Pink (2)"), and the peer's
+                    // display name may not be its advertised service name, so accept an
+                    // exact match or a conflict-renamed variant of it.
+                    if name == serviceName || name.hasPrefix("\(serviceName) (") {
                         browser.cancel()
-                        cont.resume(returning: true)
+                        once.resume(true)
                         return
                     }
                 }
             }
 
             browser.stateUpdateHandler = { state in
-                guard !resumed else { return }
                 if case .failed = state {
-                    resumed = true
                     browser.cancel()
-                    cont.resume(returning: false)
+                    once.resume(false)
                 }
             }
 
             browser.start(queue: .global(qos: .userInitiated))
 
-            // Timeout after 10 seconds
             DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
-                guard !resumed else { return }
-                resumed = true
                 browser.cancel()
-                cont.resume(returning: false)
+                once.resume(false)
             }
         }
 
         let elapsed = CFAbsoluteTimeGetCurrent() - start
+        let names = seen.all()
+
+        if !resolved {
+            // Say what WAS visible. "Could not resolve X" on its own gives nothing to
+            // act on; the list of advertised names usually identifies the problem
+            // immediately (renamed service, wrong name source, nothing advertising).
+            let found = names.isEmpty
+                ? "no _ipadconn._tcp services were advertising"
+                : "saw: \(names.sorted().joined(separator: ", "))"
+            errorLog.append("DNS Resolution: '\(serviceName)' not found — \(found)")
+        }
 
         return DNSResolutionResult(
             resolutionTimeMs: elapsed * 1000,
             resolved: resolved,
-            serviceName: serviceName
+            serviceName: serviceName,
+            discoveredNames: names.isEmpty ? nil : names.sorted()
         )
+    }
+
+    /// Thread-safe one-shot continuation resume. The browse handler, the state handler
+    /// and the timeout all run on different queues; resuming twice traps.
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cont: CheckedContinuation<Bool, Never>?
+
+        init(_ cont: CheckedContinuation<Bool, Never>) {
+            self.cont = cont
+        }
+
+        func resume(_ value: Bool) {
+            lock.lock()
+            let pending = cont
+            cont = nil
+            lock.unlock()
+            pending?.resume(returning: value)
+        }
+    }
+
+    /// Collects service names seen during the browse, from the browser's queue.
+    private final class DiscoveredNames: @unchecked Sendable {
+        private let lock = NSLock()
+        private var names: Set<String> = []
+
+        func insert(_ name: String) {
+            lock.lock()
+            names.insert(name)
+            lock.unlock()
+        }
+
+        func all() -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return Array(names)
+        }
     }
 
     // MARK: - Test Phases

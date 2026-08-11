@@ -328,6 +328,29 @@ struct DNSResolutionResult: Codable {
     let resolutionTimeMs: Double
     let resolved: Bool
     let serviceName: String
+    /// Every service name visible during the browse. Recorded so a failure to find the
+    /// expected name can be diagnosed after the fact rather than only reproduced.
+    let discoveredNames: [String]?
+
+    init(
+        resolutionTimeMs: Double,
+        resolved: Bool,
+        serviceName: String,
+        discoveredNames: [String]? = nil
+    ) {
+        self.resolutionTimeMs = resolutionTimeMs
+        self.resolved = resolved
+        self.serviceName = serviceName
+        self.discoveredNames = discoveredNames
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        resolutionTimeMs = try c.decode(Double.self, forKey: .resolutionTimeMs)
+        resolved = try c.decode(Bool.self, forKey: .resolved)
+        serviceName = try c.decode(String.self, forKey: .serviceName)
+        discoveredNames = try c.decodeIfPresent([String].self, forKey: .discoveredNames)
+    }
 }
 
 struct SystemMetricsResult: Codable {

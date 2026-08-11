@@ -20,6 +20,15 @@ enum SignalQuality: String, CaseIterable {
 struct LatencySample: Identifiable {
     let id: Int
     let value: Double
+    /// When the sample was taken, so the chart can show a real time window rather
+    /// than an opaque sample index.
+    let timestamp: Date
+
+    init(id: Int, value: Double, timestamp: Date = Date()) {
+        self.id = id
+        self.value = value
+        self.timestamp = timestamp
+    }
 }
 
 struct ConnectionEvent: Identifiable {
@@ -174,7 +183,14 @@ class DiagnosticMetrics {
     var memoryTotalMB: Double = 0
     var batteryAtConnectionStart: Float = -1
 
-    func appendLatency(_ rtt: Double, maxHistory: Int = 120) {
+    /// Retains an hour of pings at the 500ms heartbeat.
+    ///
+    /// The old 120-sample cap held only ~60 seconds, so on a long soak the chart
+    /// silently discarded everything older — which is exactly the history you need
+    /// when chasing an intermittent radio fault. ~7200 samples is a few hundred KB.
+    static let defaultLatencyHistory = 7200
+
+    func appendLatency(_ rtt: Double, maxHistory: Int = defaultLatencyHistory) {
         sampleCounter += 1
         latencyHistory.append(LatencySample(id: sampleCounter, value: rtt))
         checkForAnomaly(rtt)
@@ -248,7 +264,8 @@ class DiagnosticMetrics {
                 category: "Anomaly"
             )
             logEvent(String(format: "%@ latency spike: %.1fms", severity.rawValue.capitalized, sample))
-            if anomalies.count > 50 {
+            // Retain enough to cover a long soak; the drill-down lists them all.
+            if anomalies.count > 500 {
                 anomalies.removeFirst()
             }
         }
