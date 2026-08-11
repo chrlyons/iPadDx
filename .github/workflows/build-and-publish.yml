@@ -221,6 +221,37 @@ jobs:
             echo "::warning::libReactNative.a not found in build output"
           fi
 
+          # --- Public headers for the app's bridging header ---
+          # iPadDx-Bridging-Header.h imports <React/RCTBridgeModule.h> and five more,
+          # and the app target's HEADER_SEARCH_PATHS points at
+          # Frameworks/ReactNative/include. Nothing created that directory, so the
+          # device build failed with "'React/RCTBridgeModule.h' file not found". Only
+          # device builds hit it — the imports sit behind #if !TARGET_OS_SIMULATOR.
+          #
+          # Three pod directories supply the transitive closure those imports need:
+          # React-Core's public headers, its private ones (RCTMessageThread,
+          # RCTCxxBridgeDelegate, RCTObjcExecutor, NSDataBigString) and ReactCommon's
+          # react/bridging, all flattened under React/ because that is the prefix the
+          # imports use. Derived from the pods rather than checked in, so the headers
+          # always match the react-native version package-lock.json pins.
+          PODS_HEADERS=Pods/Headers
+          INC=../../../Frameworks/ReactNative/include
+          mkdir -p "$INC/React" "$INC/RCTDeprecation"
+          cp -RL "$PODS_HEADERS/Public/React-Core/React/." "$INC/React/"
+          cp -RL "$PODS_HEADERS/Private/React-Core/React/." "$INC/React/"
+          cp -L  "$PODS_HEADERS/Public/ReactCommon/react/bridging/"*.h "$INC/React/"
+          cp -L  "$PODS_HEADERS/Public/RCTDeprecation/RCTDeprecation.h" "$INC/RCTDeprecation/"
+
+          # Fail here rather than 200 lines later in a compiler error, and name the
+          # header that is actually missing.
+          for h in RCTBridgeModule RCTBridge RCTBridgeDelegate RCTBundleURLProvider RCTRootView RCTLog; do
+            if [ ! -f "$INC/React/$h.h" ]; then
+              echo "::error::React/$h.h missing from $INC — the app's bridging header cannot compile."
+              exit 1
+            fi
+          done
+          echo "React headers staged ($(find "$INC" -name '*.h' | wc -l | tr -d ' ') files)"
+
           # --- Copy hermes.xcframework ---
           # `|| true` — see the XCODE_PATH note: "not found" is handled by the else below.
           HERMES_SRC=$(find Pods -name "hermes.xcframework" -type d | head -1 || true)
