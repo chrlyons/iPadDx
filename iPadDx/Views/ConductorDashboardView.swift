@@ -367,7 +367,8 @@ struct ConductorDashboardView: View {
                                 .font(.subheadline)
                                 .fontWeight(.bold)
                                 .foregroundStyle(gradeColor(report.results.overallGrade))
-                            Text(String(format: "%.1fms avg", report.results.latencyBurst.avg))
+                            Text(report.results.measuredLatencyAvg
+                                .map { String(format: "%.1fms avg", $0) } ?? "no latency measured")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

@@ -581,3 +581,61 @@ final class SummaryValidityTests: XCTestCase {
         XCTAssertNil(measuredMean(group.compactMap(\.measuredLatencyAvg)))
     }
 }
+
+/// Trends must be fitted over measured points only.
+///
+/// A regression across a placeholder invents a slope: one measured 10ms report plus
+/// two cancelled ones regressed over (10, 0, 0) reports a dramatic improvement that
+/// never happened. TrendAnalyzer is fed date/value pairs, so the filtering has to
+/// happen at every call site that builds those samples.
+final class TrendSampleValidityTests: XCTestCase {
+
+    private func dated(_ values: [Double], from start: Date = Date(timeIntervalSince1970: 1_700_000_000))
+        -> [(date: Date, value: Double)] {
+        values.enumerated().map { (date: start.addingTimeInterval(Double($0.offset) * 86400), value: $0.element) }
+    }
+
+    func testRegressionOverPlaceholdersFabricatesATrend() {
+        // Demonstrates the bug being guarded against: 10, 0, 0 looks like a steep
+        // improvement in a lower-is-better metric.
+        let fabricated = TrendAnalyzer.analyzeTrend(
+            samples: dated([10, 0, 0]),
+            metric: "Avg Latency", lowerIsBetter: true, period: "3 reports"
+        )
+        XCTAssertNotNil(fabricated, "sanity: a regression over placeholders does produce a result")
+        XCTAssertFalse(fabricated?.isFlat ?? true, "and it is not flat — it is a fake trend")
+    }
+
+    func testFilteringToMeasuredPointsRefusesToTrendASingleReport() {
+        // After filtering, only one real point remains — not enough to regress, so no
+        // trend is reported at all.
+        let measuredOnly = dated([10])
+        XCTAssertNil(
+            TrendAnalyzer.analyzeTrend(
+                samples: measuredOnly,
+                metric: "Avg Latency", lowerIsBetter: true, period: "1 report"
+            ),
+            "a single measured point must not yield a trend"
+        )
+    }
+
+    func testGenuineTrendStillReported() {
+        let trend = TrendAnalyzer.analyzeTrend(
+            samples: dated([30, 20, 10]),
+            metric: "Avg Latency", lowerIsBetter: true, period: "3 reports"
+        )
+        XCTAssertNotNil(trend)
+        XCTAssertFalse(trend?.isFlat ?? true)
+    }
+
+    func testFlatDataIsNotReportedAsAConfidentTrend() {
+        let trend = TrendAnalyzer.analyzeTrend(
+            samples: dated([10, 10, 10]),
+            metric: "Avg Latency", lowerIsBetter: true, period: "3 reports"
+        )
+        // Identical samples have undefined R-squared; confidence must not be maxed.
+        if let trend, !trend.isFlat {
+            XCTAssertLessThan(trend.confidence, 1.0)
+        }
+    }
+}

@@ -49,10 +49,10 @@ struct ReportComparisonView: View {
                 )
                 comparisonRow(
                     "Avg",
-                    fmt(reportA.results.latencyBurst.avg),
-                    fmt(reportB.results.latencyBurst.avg),
-                    valueA: reportA.results.latencyBurst.avg,
-                    valueB: reportB.results.latencyBurst.avg,
+                    fmtOpt(reportA.results.measuredLatencyAvg),
+                    fmtOpt(reportB.results.measuredLatencyAvg),
+                    valueA: reportA.results.measuredLatencyAvg,
+                    valueB: reportB.results.measuredLatencyAvg,
                     lowerIsBetter: true
                 )
                 comparisonRow(
@@ -65,10 +65,10 @@ struct ReportComparisonView: View {
                 )
                 comparisonRow(
                     "P95",
-                    fmt(reportA.results.latencyBurst.p95),
-                    fmt(reportB.results.latencyBurst.p95),
-                    valueA: reportA.results.latencyBurst.p95,
-                    valueB: reportB.results.latencyBurst.p95,
+                    fmtOpt(reportA.results.measuredLatencyP95),
+                    fmtOpt(reportB.results.measuredLatencyP95),
+                    valueA: reportA.results.measuredLatencyP95,
+                    valueB: reportB.results.measuredLatencyP95,
                     lowerIsBetter: true
                 )
 
@@ -78,8 +78,8 @@ struct ReportComparisonView: View {
                     "Speed",
                     reportA.results.sustainedThroughput.formattedSpeed,
                     reportB.results.sustainedThroughput.formattedSpeed,
-                    valueA: reportA.results.sustainedThroughput.bytesPerSecond,
-                    valueB: reportB.results.sustainedThroughput.bytesPerSecond,
+                    valueA: reportA.results.measuredThroughput,
+                    valueB: reportB.results.measuredThroughput,
                     lowerIsBetter: false
                 )
 
@@ -87,10 +87,10 @@ struct ReportComparisonView: View {
                 sectionTitle("Jitter", icon: "waveform.path", color: .orange)
                 comparisonRow(
                     "Average",
-                    fmt(reportA.results.jitterMeasurement.averageJitter),
-                    fmt(reportB.results.jitterMeasurement.averageJitter),
-                    valueA: reportA.results.jitterMeasurement.averageJitter,
-                    valueB: reportB.results.jitterMeasurement.averageJitter,
+                    fmtOpt(reportA.results.measuredJitter),
+                    fmtOpt(reportB.results.measuredJitter),
+                    valueA: reportA.results.measuredJitter,
+                    valueB: reportB.results.measuredJitter,
                     lowerIsBetter: true
                 )
                 comparisonRow(
@@ -106,10 +106,10 @@ struct ReportComparisonView: View {
                 sectionTitle("Packet Loss", icon: "exclamationmark.triangle.fill", color: .red)
                 comparisonRow(
                     "Loss %",
-                    String(format: "%.1f%%", reportA.results.packetLossStress.lostPercent),
-                    String(format: "%.1f%%", reportB.results.packetLossStress.lostPercent),
-                    valueA: reportA.results.packetLossStress.lostPercent,
-                    valueB: reportB.results.packetLossStress.lostPercent,
+                    fmtOpt(reportA.results.measuredPacketLoss, "%.1f%%"),
+                    fmtOpt(reportB.results.measuredPacketLoss, "%.1f%%"),
+                    valueA: reportA.results.measuredPacketLoss,
+                    valueB: reportB.results.measuredPacketLoss,
                     lowerIsBetter: true
                 )
                 // Latency Under Load
@@ -134,8 +134,8 @@ struct ReportComparisonView: View {
                     "Impact",
                     reportA.results.latencyUnderLoad.formattedDegradation,
                     reportB.results.latencyUnderLoad.formattedDegradation,
-                    valueA: reportA.results.latencyUnderLoad.degradationPercent,
-                    valueB: reportB.results.latencyUnderLoad.degradationPercent,
+                    valueA: reportA.results.measuredLoadDegradation,
+                    valueB: reportB.results.measuredLoadDegradation,
                     lowerIsBetter: true
                 )
 
@@ -241,5 +241,14 @@ struct ReportComparisonView: View {
 
     private func fmt(_ value: Double) -> String {
         String(format: "%.2fms", value)
+    }
+
+    /// Renders a metric that a report may never have measured.
+    ///
+    /// A cancelled or partial run stores zero, and "0.00ms" in a side-by-side reads as
+    /// the *better* result. Show it as not measured instead.
+    private func fmtOpt(_ value: Double?, _ format: String = "%.2fms") -> String {
+        guard let value else { return "—" }
+        return String(format: format, value)
     }
 }

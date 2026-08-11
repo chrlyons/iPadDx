@@ -113,11 +113,13 @@ enum ReportExporter {
                 csvEscape(r.remoteDevice.chipFamily),
                 csvEscape(r.bridgeTransport ?? "native"),
                 csvEscape(r.results.overallGrade),
-                f(r.results.latencyBurst.avg),
-                f(r.results.latencyBurst.p95),
-                f(r.results.sustainedThroughput.bytesPerSecond),
-                f(r.results.jitterMeasurement.averageJitter),
-                f(r.results.packetLossStress.lostPercent),
+                // Blank, not zero, when a phase never measured: a spreadsheet treats
+                // an empty cell as missing but would average a 0 as a real reading.
+                r.results.measuredLatencyAvg.map(f) ?? "",
+                r.results.measuredLatencyP95.map(f) ?? "",
+                r.results.measuredThroughput.map(f) ?? "",
+                r.results.measuredJitter.map(f) ?? "",
+                r.results.measuredPacketLoss.map(f) ?? "",
                 f(r.durationSeconds),
                 csvEscape(r.results.linkConditions?.summary ?? "Unknown"),
                 csvEscape(r.results.linkConditions?.interfaceName ?? ""),

@@ -71,8 +71,8 @@ enum AnalyticsReportRenderer {
             drawGradeTable(reports: reports, cursor: &cursor, width: contentWidth)
             cursor.y += 20
 
-            // Trends (a regression needs at least 3 reports)
-            if reports.count >= 3 {
+            // Trends (a regression needs at least 3 reports that measured something)
+            if reports.filter(\.results.hasLatency).count >= 3 {
                 cursor.drawSectionHeader("Trends", width: contentWidth)
                 drawTrendTable(reports: reports, cursor: &cursor, width: contentWidth)
                 cursor.y += 10
@@ -571,23 +571,33 @@ enum AnalyticsReportRenderer {
 
     // MARK: - Trends
 
-    /// The real observation window the regressions were fitted over.
-    private static func trendPeriod(for reports: [TestReport]) -> String {
-        TrendAnalyzer.describePeriod(dates: reports.map(\.date))
-    }
-
-    private static func trendMetrics() -> [(name: String, value: (TestReport) -> Double, lowerIsBetter: Bool)] {
+    /// Trend metrics yield an OPTIONAL value: a regression fitted over zero
+    /// placeholders from cancelled runs would invent a slope. One measured 10ms report
+    /// plus two cancelled ones must not regress over 10, 0, 0.
+    private static func trendMetrics()
+        -> [(name: String, value: (TestReport) -> Double?, lowerIsBetter: Bool)]
+    {
         [
-            (name: "Avg Latency", value: { $0.results.latencyBurst.avg }, lowerIsBetter: true),
-            (name: "P95 Latency", value: { $0.results.latencyBurst.p95 }, lowerIsBetter: true),
+            (name: "Avg Latency", value: { $0.results.measuredLatencyAvg }, lowerIsBetter: true),
+            (name: "P95 Latency", value: { $0.results.measuredLatencyP95 }, lowerIsBetter: true),
             (
                 name: "Throughput",
-                value: { $0.results.sustainedThroughput.bytesPerSecond / 1_000_000 },
+                value: { $0.results.measuredThroughput.map { $0 / 1_000_000 } },
                 lowerIsBetter: false
             ),
-            (name: "Jitter", value: { $0.results.jitterMeasurement.averageJitter }, lowerIsBetter: true),
-            (name: "Packet Loss", value: { $0.results.packetLossStress.lostPercent }, lowerIsBetter: true),
+            (name: "Jitter", value: { $0.results.measuredJitter }, lowerIsBetter: true),
+            (name: "Packet Loss", value: { $0.results.measuredPacketLoss }, lowerIsBetter: true),
         ]
+    }
+
+    /// Date/value pairs for the reports that actually measured `metric`.
+    private static func trendSamples(
+        _ reports: [TestReport],
+        _ metric: (TestReport) -> Double?
+    ) -> [(date: Date, value: Double)] {
+        reports.compactMap { report in
+            metric(report).map { (date: report.date, value: $0) }
+        }
     }
 
     private static func drawTrendTable(reports: [TestReport], cursor: inout Cursor, width: CGFloat) {
@@ -597,15 +607,23 @@ enum AnalyticsReportRenderer {
             columnWidths: cols, totalWidth: width, isHeader: true
         )
 
-        let period = trendPeriod(for: reports)
         for metric in trendMetrics() {
-            let samples = reports.map { (date: $0.date, value: metric.value($0)) }
+            let samples = trendSamples(reports, metric.value)
+            // Period must describe the window the regression actually covers, not the
+            // full report range.
+            let period = TrendAnalyzer.describePeriod(dates: samples.map(\.date))
             guard let trend = TrendAnalyzer.analyzeTrend(
                 samples: samples,
                 metric: metric.name,
                 lowerIsBetter: metric.lowerIsBetter,
                 period: period
-            ) else { continue }
+            ) else {
+                cursor.drawTableRow(
+                    [metric.name, "N/A", "—", "—", "not enough measured reports"],
+                    columnWidths: cols, totalWidth: width, isHeader: false
+                )
+                continue
+            }
             cursor.drawTableRow(
                 [
                     trend.metric,
@@ -642,17 +660,25 @@ enum AnalyticsReportRenderer {
 
         var rows: [PairTrend] = []
         for (pair, pairReports) in grouped {
-            let period = trendPeriod(for: pairReports)
+            let latencySamples = trendSamples(pairReports) { $0.results.measuredLatencyAvg }
             guard let latency = TrendAnalyzer.analyzeTrend(
-                samples: pairReports.map { (date: $0.date, value: $0.results.latencyBurst.avg) },
-                metric: "Avg Latency", lowerIsBetter: true, period: period
+                samples: latencySamples,
+                metric: "Avg Latency", lowerIsBetter: true,
+                period: TrendAnalyzer.describePeriod(dates: latencySamples.map(\.date))
             ) else { continue }
+            let throughputSamples = trendSamples(pairReports) {
+                $0.results.measuredThroughput.map { $0 / 1_000_000 }
+            }
             let throughput = TrendAnalyzer.analyzeTrend(
-                samples: pairReports
-                    .map { (date: $0.date, value: $0.results.sustainedThroughput.bytesPerSecond / 1_000_000) },
-                metric: "Throughput", lowerIsBetter: false, period: period
+                samples: throughputSamples,
+                metric: "Throughput", lowerIsBetter: false,
+                period: TrendAnalyzer.describePeriod(dates: throughputSamples.map(\.date))
             )
-            rows.append(PairTrend(pair: pair, count: pairReports.count, latency: latency, throughput: throughput))
+            // Count the reports the latency regression was actually fitted over.
+            rows.append(PairTrend(
+                pair: pair, count: latencySamples.count,
+                latency: latency, throughput: throughput
+            ))
         }
 
         guard !rows.isEmpty else {
