@@ -39,6 +39,8 @@ SIM_DEST = id=$(if $(SIM_ID_IPAD),$(SIM_ID_IPAD),$(SIM_ID_ANY))
 SWIFT_FILES = $(shell find iPadDx -name "*.swift" -not -path "*/.*")
 
 help: ## Show this help
+	@# No pipefail here on purpose: grep exits 1 when it matches nothing, which would
+	@# make `make help` fail spuriously. This target only prints text — it gates nothing.
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
@@ -149,8 +151,18 @@ open: ## Open project in Xcode
 
 frameworks: ## Build embedded bridge frameworks from source
 	@echo "Building Flutter bridge..."
-	@cd Bridges/flutter_bridge && flutter build ios-framework --no-debug --no-profile \
+	@set -o pipefail; cd Bridges/flutter_bridge && \
+		flutter build ios-framework --no-debug --no-profile \
 		--output=../../build/flutter_frameworks 2>&1 | tail -5
+	@# Verify the artifacts before destroying the existing ones. `rm -rf` ran
+	@# unconditionally, so a failed build left NO framework at all — the previous
+	@# working copy was deleted before the replacement was known to exist.
+	@for fw in Flutter App; do \
+		if [ ! -d "build/flutter_frameworks/Release/$$fw.xcframework" ]; then \
+			echo "flutter build produced no $$fw.xcframework — leaving Frameworks/ untouched" >&2; \
+			exit 1; \
+		fi; \
+	done
 	@mkdir -p Frameworks
 	@rm -rf Frameworks/Flutter.xcframework Frameworks/App.xcframework
 	@cp -R build/flutter_frameworks/Release/Flutter.xcframework Frameworks/
@@ -158,11 +170,15 @@ frameworks: ## Build embedded bridge frameworks from source
 	@echo "✓ Flutter frameworks built and copied to Frameworks/"
 
 pods: ## Install CocoaPods dependencies (Capacitor + Cordova)
-	@cd Bridges/capacitor_bridge && npm install 2>&1 | tail -3
-	@pod install 2>&1 | tail -3
+	@set -o pipefail; cd Bridges/capacitor_bridge && npm install 2>&1 | tail -3
+	@set -o pipefail; pod install 2>&1 | tail -3
 	@echo "✓ Pods installed — use iPadDx.xcworkspace from now on"
 
 cordova-js: ## Copy real cordova.js into bundled resources
+	@# Fails if `make pods` has not run: the source lives under node_modules.
+	@if [ ! -f Bridges/capacitor_bridge/node_modules/@capacitor/core/cordova.js ]; then \
+		echo "cordova.js not found — run 'make pods' first." >&2; exit 1; \
+	fi
 	@mkdir -p Bridges/cordova_bridge/www iPadDx/Resources/cordova_www
 	@cp Bridges/capacitor_bridge/node_modules/@capacitor/core/cordova.js Bridges/cordova_bridge/www/cordova.js
 	@cp Bridges/cordova_bridge/www/cordova.js iPadDx/Resources/cordova_www/cordova.js
