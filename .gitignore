@@ -37,16 +37,19 @@ Bridges/flutter_bridge/.metadata
 Bridges/flutter_bridge/*.iml
 
 # Capacitor bridge npm artifacts
+# package-lock.json is committed, for the same reason Podfile.lock is (see below):
+# CI installs with `npm ci`, which REQUIRES a lockfile and fails outright without
+# one. Ignoring it also let every install re-resolve transitive dependencies, so
+# the bridge being measured was not the same bridge from one run to the next.
 Bridges/capacitor_bridge/node_modules/
-Bridges/capacitor_bridge/package-lock.json
 
 # Cordova bridge — cordova.js is copied from node_modules at build time
 Bridges/cordova_bridge/www/cordova.js
 iPadDx/Resources/cordova_www/cordova.js
 
 # React Native bridge build artifacts
+# package-lock.json is committed — see the Capacitor note above.
 Bridges/rn_bridge/node_modules/
-Bridges/rn_bridge/package-lock.json
 Bridges/rn_bridge/ios/Pods/
 Bridges/rn_bridge/ios/build/
 Bridges/rn_bridge/ios/*.xcworkspace
