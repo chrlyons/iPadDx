@@ -1,4 +1,18 @@
-.PHONY: build clean lint format check test open help
+.PHONY: build build-sim clean typecheck lint lint-fix format format-check \
+        check fix test test-ci coverage open help frameworks pods cordova-js \
+        bridges setup
+
+# Recipes run under bash, and every piped recipe starts with `set -o pipefail`.
+#
+# Without pipefail, `xcodebuild ... | tail -5` reports the exit status of `tail`, which
+# is always 0 — so a FAILED BUILD EXITS 0. That is worse than a broken target, because
+# it silently certifies broken code as good.
+#
+# `.SHELLFLAGS` is NOT used to do this: it requires GNU make >= 3.82 and macOS ships
+# 3.81, where it is silently ignored — the fix would look applied and do nothing. The
+# explicit `set -o pipefail` in each recipe works on every version.
+SHELL := /bin/bash
+.SHELLFLAGS := -o pipefail -c
 
 # Configuration
 #
@@ -10,7 +24,18 @@ WORKSPACE = iPadDx.xcworkspace
 TARGET = iPadDx
 SDK = iphoneos
 SCHEME = iPadDx
-SIM_DEST = platform=iOS Simulator,name=iPad Pro 13-inch (M4)
+# Resolve an available iPad simulator at run time rather than pinning a model name.
+#
+# A hardcoded `name=iPad Pro 13-inch (M4)` breaks the moment that model is absent from
+# the newest installed runtime: with no `OS=`, xcodebuild defaults to the LATEST runtime
+# and reports "Unable to find a device matching the provided destination specifier",
+# even though the device exists under an older runtime. Picking a UDID from whatever is
+# actually installed works on any machine and on CI runners.
+SIM_ID_IPAD := $(shell xcrun simctl list devices available 2>/dev/null | \
+	grep -E '^ +iPad' | grep -oE '[0-9A-F]{8}-[0-9A-F-]{27}' | head -1)
+SIM_ID_ANY := $(shell xcrun simctl list devices available 2>/dev/null | \
+	grep -oE '[0-9A-F]{8}-[0-9A-F-]{27}' | head -1)
+SIM_DEST = id=$(if $(SIM_ID_IPAD),$(SIM_ID_IPAD),$(SIM_ID_ANY))
 SWIFT_FILES = $(shell find iPadDx -name "*.swift" -not -path "*/.*")
 
 help: ## Show this help
@@ -18,23 +43,23 @@ help: ## Show this help
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build for device (no code signing)
-	xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) -sdk $(SDK) \
+	set -o pipefail; xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) -sdk $(SDK) \
 		-destination 'generic/platform=iOS' build \
 		CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
 		2>&1 | tail -5
 
 build-sim: ## Build for iPad simulator
-	xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) -sdk iphonesimulator \
+	set -o pipefail; xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) -sdk iphonesimulator \
 		-destination 'generic/platform=iOS Simulator' build \
 		CODE_SIGNING_ALLOWED=NO \
 		2>&1 | tail -5
 
 clean: ## Clean build artifacts
-	xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) clean 2>&1 | tail -3
+	set -o pipefail; xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) clean 2>&1 | tail -3
 	rm -rf build/ DerivedData/
 
 typecheck: ## Type-check via the workspace (bare swiftc cannot resolve the pods)
-	@xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) -sdk iphonesimulator \
+	@set -o pipefail; xcodebuild -workspace $(WORKSPACE) -scheme $(SCHEME) -sdk iphonesimulator \
 		-destination 'generic/platform=iOS Simulator' build \
 		CODE_SIGNING_ALLOWED=NO 2>&1 | grep -E "error:|BUILD" | tail -10
 
@@ -42,7 +67,8 @@ lint: ## Run SwiftLint
 	@if command -v swiftlint >/dev/null 2>&1; then \
 		swiftlint lint --config .swiftlint.yml iPadDx/; \
 	else \
-		echo "SwiftLint not installed. Run: brew install swiftlint"; \
+		echo "SwiftLint not installed. Run: brew install swiftlint" >&2; \
+		exit 1; \
 	fi
 
 lint-fix: ## Run SwiftLint with auto-fix
@@ -62,36 +88,52 @@ format: ## Format Swift files with SwiftFormat
 
 format-check: ## Check formatting without modifying files
 	@if command -v swiftformat >/dev/null 2>&1; then \
-		swiftformat iPadDx/ --config .swiftformat --lint && \
-		echo "✓ Formatting OK" || echo "✗ Formatting issues found"; \
+		swiftformat iPadDx/ --config .swiftformat --lint || \
+			{ echo "✗ Formatting issues found" >&2; exit 1; }; \
+		echo "✓ Formatting OK"; \
 	else \
-		echo "SwiftFormat not installed. Run: brew install swiftformat"; \
+		echo "SwiftFormat not installed. Run: brew install swiftformat" >&2; \
+		exit 1; \
 	fi
 
 test: ## Run unit tests on iPad simulator with coverage
+	@if [ -z "$(SIM_ID_IPAD)$(SIM_ID_ANY)" ]; then \
+		echo "No iOS Simulator available — install one via Xcode > Settings > Components." >&2; \
+		exit 1; \
+	fi
+	@# The exit status is captured and re-raised at the end: coverage is still printed
+	@# for a failing run, but `make test` MUST fail when a test fails.
+	@# xcodebuild refuses to overwrite an existing result bundle, so a stale bundle
+	@# makes every run after the first fail. The old `|| true` hid that entirely.
+	@rm -rf build/TestResults.xcresult
+	@set -o pipefail; status=0; \
 	xcodebuild test \
-		-workspace iPadDx.xcworkspace \
+		-workspace $(WORKSPACE) \
 		-scheme $(SCHEME) \
 		-destination '$(SIM_DEST)' \
 		-enableCodeCoverage YES \
 		-resultBundlePath build/TestResults.xcresult \
-		2>&1 | xcbeautify || true
-	@echo ""
-	@echo "=== Coverage Report ==="
-	@xcrun xccov view --report --only-targets build/TestResults.xcresult 2>/dev/null || \
-		echo "(Install xcbeautify: brew install xcbeautify)"
-	@echo ""
-	@echo "Test results saved to build/TestResults.xcresult"
-	@echo "Open in Xcode: open build/TestResults.xcresult"
+		2>&1 | { command -v xcbeautify >/dev/null 2>&1 && xcbeautify || cat; } || status=$$?; \
+	echo ""; \
+	echo "=== Coverage Report ==="; \
+	xcrun xccov view --report --only-targets build/TestResults.xcresult 2>/dev/null || \
+		echo "(no coverage data — the test run did not complete)"; \
+	echo ""; \
+	echo "Test results: build/TestResults.xcresult"; \
+	if [ $$status -ne 0 ]; then echo "✗ Tests FAILED"; else echo "✓ Tests passed"; fi; \
+	exit $$status
 
 test-ci: ## Run tests without xcbeautify (for CI)
+	@rm -rf build/TestResults.xcresult
+	@set -o pipefail; status=0; \
 	xcodebuild test \
-		-workspace iPadDx.xcworkspace \
+		-workspace $(WORKSPACE) \
 		-scheme $(SCHEME) \
 		-destination '$(SIM_DEST)' \
 		-enableCodeCoverage YES \
 		-resultBundlePath build/TestResults.xcresult \
-		2>&1 | tail -30
+		2>&1 | tail -30 || status=$$?; \
+	exit $$status
 	xcrun xccov view --report --only-targets build/TestResults.xcresult
 
 coverage: ## View coverage report from last test run

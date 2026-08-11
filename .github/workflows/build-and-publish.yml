@@ -57,6 +57,20 @@ jobs:
     runs-on: macos-15          # macOS Sequoia — Xcode 16 pre-installed
     timeout-minutes: 60
 
+    # Every `run:` block gets pipefail.
+    #
+    # GitHub Actions defaults to `bash -e {0}` — set -e is on but PIPEFAIL IS NOT, so
+    # `xcodebuild ... | xcbeautify` takes xcbeautify's status. xcbeautify is a log
+    # formatter that always exits 0, so failing builds, failing tests and failing
+    # archives all reported success. The test step is the only correctness gate in this
+    # workflow and it was completely inert.
+    defaults:
+      run:
+        # -e and pipefail only. `-u` (error on unset variable) is deliberately NOT
+        # set: it would change behaviour in steps this change cannot exercise locally,
+        # and the defect being fixed here is purely the lost pipeline status.
+        shell: bash -eo pipefail {0}
+
     steps:
       # -----------------------------------------------------------------------
       # 1. Checkout
@@ -269,10 +283,29 @@ jobs:
       - name: Run unit tests
         if: "!startsWith(github.ref, 'refs/tags/v') && github.event.inputs.upload_to_appstore != 'true'"
         run: |
+          # Resolve an available iPad simulator instead of pinning a model name: with
+          # no OS= the destination defaults to the LATEST installed runtime, and a
+          # pinned model that only exists under an older runtime fails with "Unable to
+          # find a device matching the provided destination specifier". Runner images
+          # change their device/runtime mix regularly.
+          SIM_ID=$(xcrun simctl list devices available \
+            | grep -E '^ +iPad' \
+            | grep -oE '[0-9A-F]{8}-[0-9A-F-]{27}' \
+            | head -1)
+          if [ -z "$SIM_ID" ]; then
+            echo "::error::No iPad simulator available on this runner."
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Testing on simulator $SIM_ID"
+
+          # Stale result bundles make xcodebuild refuse to run.
+          rm -rf build/TestResults.xcresult
+
           xcodebuild test \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
-            -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M4)' \
+            -destination "id=$SIM_ID" \
             -enableCodeCoverage YES \
             -resultBundlePath build/TestResults.xcresult \
             CODE_SIGN_IDENTITY="-" \
@@ -341,26 +374,32 @@ jobs:
             -authenticationKeyPath "$API_KEY_PATH" \
             -authenticationKeyID "$APPSTORE_CONNECT_API_KEY_ID" \
             -authenticationKeyIssuerID "$APPSTORE_CONNECT_ISSUER_ID" \
-            2>&1 || true
+            2>&1 && UPLOADED=1 || UPLOADED=0
 
-          # If xcodebuild upload didn't work, fall back to xcrun notarytool
-          # (notarytool works for iOS as of Xcode 16)
+          # Fall back to iTMSTransporter if the authenticated export did not upload.
+          # Every fallback records success/failure; the step fails if none worked, so a
+          # release run can no longer report green having uploaded nothing.
           IPA_PATH="$EXPORT_PATH/iPadDx.ipa"
-          if [ -f "$IPA_PATH" ]; then
-            xcrun xcapi upload \
-              --file "$IPA_PATH" \
-              --type ios \
-              --key "$API_KEY_PATH" \
-              --key-id "$APPSTORE_CONNECT_API_KEY_ID" \
-              --issuer "$APPSTORE_CONNECT_ISSUER_ID" \
-              2>&1 || \
-            # Last resort: iTMSTransporter
-            xcrun iTMSTransporter -m upload \
+          if [ "$UPLOADED" -ne 1 ]; then
+            if [ ! -f "$IPA_PATH" ]; then
+              echo "::error::No IPA at $IPA_PATH — export produced nothing to upload."
+              exit 1
+            fi
+            echo "Primary upload did not succeed; trying iTMSTransporter."
+            if xcrun iTMSTransporter -m upload \
               -f "$IPA_PATH" \
               -apiKey "$APPSTORE_CONNECT_API_KEY_ID" \
               -apiIssuer "$APPSTORE_CONNECT_ISSUER_ID" \
-              2>&1 || echo "::warning::Upload failed — download the IPA artifact and upload manually via Transporter.app"
+              2>&1; then
+              UPLOADED=1
+            fi
           fi
+
+          if [ "$UPLOADED" -ne 1 ]; then
+            echo "::error::Upload to App Store Connect failed. The IPA is attached as a build artifact; upload it manually via Transporter.app."
+            exit 1
+          fi
+          echo "✓ Uploaded to App Store Connect"
 
       # -----------------------------------------------------------------------
       # 15. Upload IPA as artifact (always available for download)
